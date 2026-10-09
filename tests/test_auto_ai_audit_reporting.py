@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -44,10 +45,268 @@ class PriorDirectiveIsolation(unittest.TestCase):
                     "prior_directives": directives, "events": [], "chart_proxies": {},
                     "fills": [], "macro_events": [], "bot_log_tail": "",
                     "rejected_signals": [],
+                    "day_lifecycle_evidence": {},
                 }
                 body = audit._format_meta_audit_body(context)
                 self.assertIn("Structured finding", body)
                 self.assertNotIn("2026-08-27", body)
+            finally:
+                audit._LOGS_DIR = prior_logs
+
+
+class DaySetupEvidence(unittest.TestCase):
+    def _context(self, event: dict, proof: dict) -> dict:
+        return {
+            "stats": {
+                "n_fills": 0, "n_entries": 1, "infrastructure_gaps": [],
+                "per_symbol": {}, "score_distribution": {}, "mri_distribution": {},
+            },
+            "prior_directives": [], "refuted_findings": [], "events": [event],
+            "day_lifecycle_evidence": proof, "chart_proxies": {}, "fills": [],
+            "macro_events": [], "bot_log_tail": "", "rejected_signals": [],
+        }
+
+    def test_exact_join_replaces_inapplicable_score(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior_logs = audit._LOGS_DIR
+            audit._LOGS_DIR = Path(directory)
+            try:
+                rows = [
+                    {"ts": "2020-10-09T08:00:00-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "NVDA", "decision": {
+                        "track": "A", "mode": "FADE", "conviction": 0.61}},
+                    {"ts": "2020-10-09T08:01:00-07:00", "event": "entry_fill",
+                     "trade_id": "DT-NVDA-b-1-x", "symbol": "NVDA",
+                     "decision_id": "D1", "track": "A",
+                     "mechanism_tags": {"family_id": "gex_wall_fade_v1"}},
+                ]
+                (audit._LOGS_DIR / "day_tier_events.jsonl").write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+                event = {"ts": "2020-10-09T08:02:00-07:00", "event": "entry",
+                         "symbol": "NVDA", "tier": "daytrade",
+                         "trade_id": "DT-NVDA-b-1-x", "score": 0}
+                body = audit._format_meta_audit_body(self._context(
+                    event, audit._load_day_lifecycle_evidence()))
+                self.assertIn("setup=gex_wall_fade_v1", body)
+                self.assertIn("conviction=0.61", body)
+                self.assertNotIn("score=0", body)
+            finally:
+                audit._LOGS_DIR = prior_logs
+
+    def test_missing_join_is_explicitly_unknown(self):
+        event = {"ts": "2020-10-09T08:02:00-07:00", "event": "entry",
+                 "symbol": "META", "tier": "daytrade",
+                 "trade_id": "DT-META-b-1-x", "score": 0}
+        body = audit._format_meta_audit_body(self._context(event, {}))
+        self.assertIn("setup=UNKNOWN", body)
+        self.assertIn("conviction=UNKNOWN", body)
+        self.assertNotIn("score=0", body)
+
+    def test_conflicting_or_future_evidence_is_withheld(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior_logs = audit._LOGS_DIR
+            audit._LOGS_DIR = Path(directory)
+            try:
+                rows = [
+                    {"ts": "2020-10-09T08:00:00-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "NVDA", "decision": {
+                         "track": "A", "mode": "FADE", "conviction": 0.6}},
+                    {"ts": "2020-10-09T08:00:01-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "NVDA", "decision": {
+                         "track": "B", "mode": "DRIVE", "conviction": 0.8}},
+                    {"ts": "2020-10-09T08:00:02-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "NVDA", "decision": {
+                         "track": "A", "mode": "FADE", "conviction": 0.6}},
+                    {"ts": "2999-10-09T08:01:00-07:00", "event": "entry_fill",
+                     "trade_id": "DT-FUTURE-b-1-x", "symbol": "NVDA",
+                     "decision_id": "D1"},
+                    {"ts": "2020-10-09T08:01:00-07:00", "event": "entry_fill",
+                     "trade_id": "DT-CONFLICT-b-1-x", "symbol": "NVDA",
+                     "decision_id": "D1",
+                     "track": "B"},
+                ]
+                (audit._LOGS_DIR / "day_tier_events.jsonl").write_text(
+                    "not-json\n" + "".join(json.dumps(row) + "\n" for row in rows),
+                    encoding="utf-8",
+                )
+                proof = audit._load_day_lifecycle_evidence()
+                self.assertNotIn("DT-FUTURE-b-1-x", proof)
+                self.assertNotIn("DT-CONFLICT-b-1-x", proof)
+            finally:
+                audit._LOGS_DIR = prior_logs
+
+    def test_score_distribution_excludes_day_and_keeps_swing(self):
+        events = [
+            {"event": "entry", "tier": "daytrade", "score": 0, "symbol": "NVDA"},
+            {"event": "entry", "tier": "swing", "score": 11, "symbol": "MSFT"},
+            {"event": "entry", "tier": "qhm", "score": 0, "symbol": "GE"},
+            {"event": "entry", "tier": "forever_6", "score": 0, "symbol": "AAPL"},
+        ]
+        stats = audit._compute_trade_stats(events, [])
+        self.assertEqual(stats["score_distribution"], {"11": 1})
+
+    def test_missing_or_conflicting_tier_never_enters_swing_scores(self):
+        events = [
+            {"event": "entry", "trade_id": "DT-NVDA-b-1-x", "score": 0},
+            {"event": "entry", "tier": "swing", "trade_id": "DT-X", "score": 0},
+            {"event": "entry", "tier": "qhm", "trade_id": "DT-Y", "score": 0},
+            {"event": "entry", "trade_id": "IN-MSFT-b-1-x", "score": 12},
+        ]
+        stats = audit._compute_trade_stats(events, [])
+        self.assertEqual(stats["score_distribution"], {"12": 1})
+        self.assertIsNone(audit._event_tier({"trade_id": "DT"}))
+        self.assertIsNone(audit._event_tier({"trade_id": "IN"}))
+        self.assertEqual(
+            audit._event_tier({
+                "trade_mode": "intraday", "trade_id": "INTRA-MSFT-20261009",
+            }),
+            "swing",
+        )
+
+        conflicted = {"ts": "2020-10-09T08:00:00-07:00", "event": "entry",
+                      "symbol": "NVDA", "tier": "swing", "trade_id": "DT-X",
+                      "score": 0}
+        body = audit._format_meta_audit_body(self._context(conflicted, {}))
+        self.assertIn("tier=UNKNOWN | tier_evidence=AMBIGUOUS", body)
+        self.assertNotIn("score=0", body)
+
+    def test_late_decision_cannot_label_entry_fill(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior_logs = audit._LOGS_DIR
+            audit._LOGS_DIR = Path(directory)
+            try:
+                rows = [
+                    {"ts": "2020-10-09T08:01:00-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "META", "decision": {
+                         "symbol": "META", "track": "A", "mode": "FADE",
+                         "conviction": 0.9}},
+                    {"ts": "2020-10-09T08:00:00-07:00", "event": "entry_fill",
+                     "trade_id": "DT-1", "decision_id": "D1", "symbol": "META",
+                     "track": "A"},
+                ]
+                (audit._LOGS_DIR / "day_tier_events.jsonl").write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+                self.assertNotIn("DT-1", audit._load_day_lifecycle_evidence())
+            finally:
+                audit._LOGS_DIR = prior_logs
+
+    def test_malformed_duplicate_decision_poison_is_permanent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior_logs = audit._LOGS_DIR
+            audit._LOGS_DIR = Path(directory)
+            try:
+                rows = [
+                    {"ts": "2020-10-09T08:00:00-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "META", "decision": {
+                         "symbol": "META", "track": "A", "mode": "FADE",
+                         "conviction": 0.7}},
+                    {"ts": "2020-10-09T08:00:01-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "META", "decision": []},
+                    {"ts": "2020-10-09T08:00:02-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "META", "decision": {
+                         "symbol": "META", "track": "A", "mode": "FADE",
+                         "conviction": 0.7}},
+                    {"ts": "2020-10-09T08:01:00-07:00", "event": "entry_fill",
+                     "trade_id": "DT-1", "decision_id": "D1", "symbol": "META",
+                     "track": "A"},
+                ]
+                (audit._LOGS_DIR / "day_tier_events.jsonl").write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+                self.assertNotIn("DT-1", audit._load_day_lifecycle_evidence())
+            finally:
+                audit._LOGS_DIR = prior_logs
+
+    def test_unrelated_row_cannot_replace_fill_timestamp(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior_logs = audit._LOGS_DIR
+            audit._LOGS_DIR = Path(directory)
+            try:
+                rows = [
+                    {"ts": "2020-10-09T08:00:00-07:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "META", "decision": {
+                         "symbol": "META", "track": "A", "mode": "FADE",
+                         "conviction": 0.7}},
+                    {"ts": "2020-10-09T10:00:00-07:00", "event": "entry_fill",
+                     "trade_id": "DT-1", "decision_id": "D1", "symbol": "META",
+                     "track": "A"},
+                    {"ts": "2020-10-09T09:00:00-07:00", "event": "price_sample"},
+                ]
+                (audit._LOGS_DIR / "day_tier_events.jsonl").write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+                proof = audit._load_day_lifecycle_evidence()
+                event = {"ts": "2020-10-09T09:30:00-07:00", "event": "entry",
+                         "symbol": "META", "tier": "daytrade", "trade_id": "DT-1"}
+                body = audit._format_meta_audit_body(self._context(event, proof))
+                self.assertIn("setup=UNKNOWN", body)
+            finally:
+                audit._LOGS_DIR = prior_logs
+
+    def test_one_second_future_decision_and_fill_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior_logs = audit._LOGS_DIR
+            audit._LOGS_DIR = Path(directory)
+            try:
+                rows = [
+                    {"ts": "2020-10-09T08:00:01+00:00", "event": "decision",
+                     "decision_id": "D1", "symbol": "META", "decision": {
+                         "symbol": "META", "track": "A", "mode": "FADE",
+                         "conviction": 0.7}},
+                    {"ts": "2020-10-09T08:00:01+00:00", "event": "entry_fill",
+                     "trade_id": "DT-1", "decision_id": "D1", "symbol": "META",
+                     "track": "A"},
+                ]
+                (audit._LOGS_DIR / "day_tier_events.jsonl").write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+                with mock.patch.object(
+                    audit, "_audit_now_utc",
+                    return_value=datetime(2020, 10, 9, 8, 0, tzinfo=timezone.utc),
+                ):
+                    self.assertEqual(audit._load_day_lifecycle_evidence(), {})
+            finally:
+                audit._LOGS_DIR = prior_logs
+
+    def test_missing_decision_and_whitespace_symbol_are_withheld(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior_logs = audit._LOGS_DIR
+            audit._LOGS_DIR = Path(directory)
+            try:
+                rows = [
+                    {"ts": "2020-10-09T08:00:00-07:00", "event": "entry_fill",
+                     "trade_id": "DT-1", "decision_id": "D-MISSING",
+                     "symbol": "NVDA", "track": "A",
+                     "mechanism_tags": {"family_id": "gex_wall_fade_v1"}},
+                    {"ts": "2020-10-09T08:00:00-07:00", "event": "decision",
+                     "decision_id": "D2", "symbol": "NVDA", "decision": {
+                         "symbol": "NVDA", "track": "A", "mode": "FADE",
+                         "conviction": 0.7}},
+                    {"ts": "2020-10-09T08:01:00-07:00", "event": "entry_fill",
+                     "trade_id": "DT-2", "decision_id": "D2",
+                     "symbol": " NVDA ", "track": "A"},
+                ]
+                (audit._LOGS_DIR / "day_tier_events.jsonl").write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+                self.assertEqual(audit._load_day_lifecycle_evidence(), {})
+            finally:
+                audit._LOGS_DIR = prior_logs
+
+    def test_late_evidence_cannot_label_earlier_entry(self):
+        event = {"ts": "2020-10-09T08:00:00-07:00", "event": "entry",
+                 "symbol": "META", "tier": "daytrade", "trade_id": "DT-1", "score": 0}
+        proof = {"DT-1": {"setup": "gex_wall_fade_v1", "conviction": 0.7,
+                           "symbol": "META", "as_of": "2020-10-09T15:00:01+00:00"}}
+        body = audit._format_meta_audit_body(self._context(event, proof))
+        self.assertIn("setup=UNKNOWN", body)
+
+    def test_naive_lifecycle_timestamp_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prior_logs = audit._LOGS_DIR
+            audit._LOGS_DIR = Path(directory)
+            try:
+                row = {"ts": "2020-10-09T08:00:00", "event": "entry_fill",
+                       "trade_id": "DT-NAIVE", "symbol": "META", "track": "A"}
+                (audit._LOGS_DIR / "day_tier_events.jsonl").write_text(
+                    json.dumps(row) + "\n", encoding="utf-8")
+                self.assertEqual(audit._load_day_lifecycle_evidence(), {})
             finally:
                 audit._LOGS_DIR = prior_logs
 

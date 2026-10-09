@@ -1,0 +1,6 @@
+{
+ "file": "tests/test_auto_ai_audit_reporting.py",
+ "sha256": "e893aba41b7b42295bab2118bdf0a1a304b8a3eaf4884ae1174f63f329858655",
+ "reason": "Regression-only test file; production evidence marker is bound to auto_ai_audit.py.",
+ "recorded_at": "2026-10-09T15:38:32.239542+02:00"
+}

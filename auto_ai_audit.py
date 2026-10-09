@@ -283,6 +283,228 @@ def _load_week_trade_events(days_back: int = _TRADE_EVENTS_DAYS_BACK) -> list[di
     return events
 
 
+def _load_day_lifecycle_evidence() -> dict[str, dict]:
+    """Exact-ID Day setup evidence for audit rendering only."""
+    def _strict_id(value: object) -> str | None:
+        return value if isinstance(value, str) and value and value == value.strip() else None
+
+    def _strict_symbol(value: object) -> str | None:
+        if (not isinstance(value, str) or not value or value != value.strip()
+                or value != value.upper()
+                or not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,14}", value)):
+            return None
+        return value
+
+    path = _LOGS_DIR / "day_tier_events.jsonl"
+    if not path.exists():
+        return {}
+    decisions: dict[str, dict | None] = {}
+    conflicted_decisions: set[str] = set()
+    fills: list[tuple[dict, datetime]] = []
+    now_utc = _audit_now_utc()
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                try:
+                    row = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    stamp = datetime.fromisoformat(str(row.get("ts") or ""))
+                    if stamp.tzinfo is None or stamp.astimezone(timezone.utc) > now_utc:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                if row.get("event") == "decision":
+                    key = _strict_id(row.get("decision_id"))
+                    decision = row.get("decision")
+                    if not key:
+                        continue
+                    if not isinstance(decision, dict):
+                        conflicted_decisions.add(key)
+                        decisions[key] = None
+                        continue
+                    row_symbol = _strict_symbol(row.get("symbol"))
+                    embedded_symbol = _strict_symbol(decision.get("symbol"))
+                    if (not row_symbol or (decision.get("symbol") is not None
+                                           and embedded_symbol != row_symbol)):
+                        conflicted_decisions.add(key)
+                        decisions[key] = None
+                        continue
+                    decision_symbol = row_symbol
+                    normalized = {
+                        "track": str(decision.get("track") or "").upper(),
+                        "mode": str(decision.get("mode") or "").upper(),
+                        "conviction": decision.get("conviction"),
+                        "as_of": stamp.astimezone(timezone.utc),
+                        "symbol": decision_symbol,
+                    }
+                    if key in conflicted_decisions:
+                        continue
+                    prior = decisions.get(key)
+                    prior_semantic = (
+                        {name: value for name, value in prior.items() if name != "as_of"}
+                        if isinstance(prior, dict) else prior
+                    )
+                    next_semantic = {
+                        name: value for name, value in normalized.items() if name != "as_of"
+                    }
+                    if key in decisions and prior_semantic != next_semantic:
+                        decisions[key] = None
+                        conflicted_decisions.add(key)
+                    else:
+                        decisions[key] = normalized
+                elif row.get("event") == "entry_fill":
+                    fills.append((row, stamp.astimezone(timezone.utc)))
+    except OSError:
+        return {}
+
+    evidence: dict[str, dict] = {}
+    conflicted: set[str] = set()
+    for row, fill_as_of in fills:
+        trade_id = _strict_id(row.get("trade_id"))
+        if not trade_id:
+            continue
+        symbol = _strict_symbol(row.get("symbol"))
+        if not symbol:
+            conflicted.add(trade_id)
+            continue
+        decision_id = _strict_id(row.get("decision_id"))
+        if not decision_id:
+            conflicted.add(trade_id)
+            continue
+        if decision_id in conflicted_decisions:
+            conflicted.add(trade_id)
+            continue
+        decision = decisions.get(decision_id)
+        if not isinstance(decision, dict):
+            conflicted.add(trade_id)
+            continue
+        if (decision.get("symbol") != symbol
+                or decision.get("as_of") > fill_as_of):
+            conflicted.add(trade_id)
+            continue
+        tags = row.get("mechanism_tags")
+        family = str(tags.get("family_id") or "").strip() if isinstance(tags, dict) else ""
+        row_track = str(row.get("track") or "").upper()
+        decision_track = str((decision or {}).get("track") or "").upper()
+        mode = str((decision or {}).get("mode") or "").upper()
+        if ((row_track and row_track not in {"A", "B", "M"})
+                or (decision_track and decision_track not in {"A", "B", "M"})
+                or (mode and not re.fullmatch(r"[A-Z][A-Z0-9_]{0,39}", mode))
+                or (family and not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", family))):
+            conflicted.add(trade_id)
+            continue
+        family_track = (
+            "A" if family.startswith("gex_") else
+            "B" if family.startswith("orb_") else
+            "M" if family.startswith("monday_") else ""
+        )
+        expected_mode = {
+            "gex_wall_fade_v1": "FADE",
+            "gex_wall_ride_v1": "RIDE",
+        }.get(family)
+        stated_tracks = {value for value in (row_track, decision_track, family_track) if value}
+        if len(stated_tracks) > 1 or (expected_mode and mode != expected_mode):
+            conflicted.add(trade_id)
+            continue
+        track = next(iter(stated_tracks), "")
+        setup = family or (f"TRACK_{track}_{mode}" if track and mode else f"TRACK_{track}" if track else "UNKNOWN")
+        conviction = (decision or {}).get("conviction")
+        if isinstance(conviction, bool):
+            conviction = None
+        try:
+            conviction = float(conviction) if conviction is not None else None
+        except (TypeError, ValueError):
+            conviction = None
+        if conviction is not None and not (0.0 <= conviction <= 1.0):
+            conviction = None
+        decision_as_of = (decision or {}).get("as_of")
+        as_of = max(
+            [fill_as_of]
+            + ([decision_as_of] if isinstance(decision_as_of, datetime) else [])
+        )
+        value = {
+            "symbol": symbol, "setup": setup, "conviction": conviction,
+            "as_of": as_of.isoformat(),
+        }
+        if trade_id in evidence and evidence[trade_id] != value:
+            conflicted.add(trade_id)
+        else:
+            evidence[trade_id] = value
+    for trade_id in conflicted:
+        evidence.pop(trade_id, None)
+    return evidence
+
+
+def _event_tier(event: dict) -> str | None:
+    aliases = {
+        "day": "day", "daytrade": "day",
+        "swing": "swing", "intraday": "swing",
+        "qhm": "qhm", "forever6": "forever_6", "forever_6": "forever_6",
+    }
+    explicit: list[str] = []
+    for field in ("tier", "trade_mode"):
+        raw = event.get(field)
+        if raw is None or raw == "":
+            continue
+        if not isinstance(raw, str) or raw != raw.strip() or raw.lower() not in aliases:
+            return None
+        explicit.append(aliases[raw.lower()])
+    trade_id = event.get("trade_id")
+    tagged = None
+    if trade_id is not None and trade_id != "":
+        if not isinstance(trade_id, str) or trade_id != trade_id.strip():
+            return None
+        if re.fullmatch(r"(?:DT|IN|QH|F6)-.+", trade_id):
+            tagged = {
+                "DT": "day", "IN": "swing", "QH": "qhm", "F6": "forever_6",
+            }.get(trade_id.split("-", 1)[0])
+    if explicit:
+        if len(set(explicit)) != 1 or (tagged and tagged != explicit[0]):
+            return None
+        return explicit[0]
+    return tagged
+
+
+def _is_day_event(event: dict) -> bool:
+    return _event_tier(event) == "day"
+
+
+def _audit_now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_swing_score_event(event: dict) -> bool:
+    return _event_tier(event) == "swing"
+
+
+def _evidence_precedes_event(proof: dict, event: dict) -> bool:
+    try:
+        event_symbol = event.get("symbol")
+        event_trade_id = event.get("trade_id")
+        if (not isinstance(event_symbol, str) or not event_symbol
+                or event_symbol != event_symbol.strip()
+                or event_symbol != event_symbol.upper()
+                or not re.fullmatch(r"[A-Z0-9][A-Z0-9.\-]{0,14}", event_symbol)
+                or not isinstance(event_trade_id, str) or not event_trade_id
+                or event_trade_id != event_trade_id.strip()):
+            return False
+        evidence_ts = datetime.fromisoformat(str(proof.get("as_of") or ""))
+        event_ts = datetime.fromisoformat(str(event.get("ts") or ""))
+        return bool(
+            str(proof.get("symbol") or "") == event_symbol
+            and
+            evidence_ts.tzinfo is not None
+            and event_ts.tzinfo is not None
+            and evidence_ts <= event_ts.astimezone(evidence_ts.tzinfo)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _load_week_rejected_signals(days_back: int = _TRADE_EVENTS_DAYS_BACK) -> list[dict]:
     """Load rejected entry signals from past N days. Returns [] if file not found.
     NOTE: rejected_signals.jsonl requires a bot-side build — infrastructure gap until then.
@@ -518,8 +740,9 @@ def _compute_trade_stats(events: list[dict], fills: list[dict]) -> dict:
     score_dist: dict = {}
     mri_dist: dict = {}
     for ev in entries:
-        s = str(ev.get("score", "?"))
-        score_dist[s] = score_dist.get(s, 0) + 1
+        if _is_swing_score_event(ev):
+            s = str(ev.get("score", "?"))
+            score_dist[s] = score_dist.get(s, 0) + 1
         m = str(ev.get("mri_level", "?"))
         mri_dist[m] = mri_dist.get(m, 0) + 1
     # ── Infrastructure gap detection ──────────────────────────────────────
@@ -821,6 +1044,7 @@ def _build_meta_audit_data_context() -> tuple[dict, dict]:
     bot_tail = _read_tail(_LOGS_DIR / "mtf_bot.log", _BOT_LOG_TAIL_LINES)
     sources["bot_log"] = "✅ loaded" if bot_tail else "⚠️  NOT FOUND"
     stats = _compute_trade_stats(events, fills)
+    day_lifecycle_evidence = _load_day_lifecycle_evidence()
     rejected_path = _LOGS_DIR / "rejected_signals.jsonl"
     if rejected_path.exists():
         rejected = _load_week_rejected_signals()
@@ -841,6 +1065,7 @@ def _build_meta_audit_data_context() -> tuple[dict, dict]:
         "refuted_findings": _load_refuted_findings(),
         "bot_log_tail": bot_tail,
         "stats": stats,
+        "day_lifecycle_evidence": day_lifecycle_evidence,
         "rejected_signals": rejected,
     }, sources
 
@@ -877,7 +1102,7 @@ def _format_meta_audit_body(
     # long "sign-flip", "opened during drift", PDT violations).
     parts += [
         "=== BOT CONTEXT (how the bot is DESIGNED to behave — judge trades against this) ===",
-        "alpaca-mtf-bot runs FOUR tiers on one small paper account (aggressive growth phase, ~$2.5K): Swing, Day, QHM, F6.",
+        "alpaca-mtf-bot runs FOUR tiers on one small paper account (aggressive growth phase, ~$2.5K): Day, Swing, QHM, Forever 6.",
         "  1) SWING (internal tag trade_mode='intraday' — the name is historical, NOT 'flat by close')",
         "     — 12-point confluence score; entry requires score >= MIN_SCORE (10/12); trades long AND short.",
         "     These positions are DESIGNED to CARRY OVERNIGHT (multi-day swing holds protected by GTC stops);",
@@ -885,8 +1110,8 @@ def _format_meta_audit_body(
         "     Since 2026-10-03 NEW 12-point entries are OFF; the C2 megacap-breakout swing tier (same tag,",
         "     setup='c2_breakout_55d') holds up to 30 sessions. Only the DAY tier force-flattens before the close.",
         "  2) DAY tier — Track A (GEX FADE/RIDE), Track B (movers; may trade the 2x bull ETF, e.g. TSLL for TSLA),",
-        "     Track M (QQQ Monday dip). NOT confluence-scored: entries log score=0 and tier='daytrade' by design —",
-        "     a valid day-tier entry, NOT a miss of the MIN_SCORE gate (that gate applies only to tier 1).",
+        "     Track M (QQQ Monday dip). NOT confluence-scored: reports show exact setup + conviction instead",
+        "     of a 12-point score. The MIN_SCORE gate applies only to Swing.",
         "     DAY-TIER STOPS ARE BROKER-SIDE: right after each fill the bot places an Alpaca OCO exit pair (stop +",
         "     take-profit), or a plain DAY stop if the OCO fails, else it flattens. The OCO child legs do NOT carry",
         "     the day-tier client_order_id, so they will not appear tagged 'daytrade' and there is NO 'stop' field on",
@@ -894,7 +1119,7 @@ def _format_meta_audit_body(
         "     trade id whose fills show the position open with no stop/exit order — otherwise it is false.",
         "     Day-tier stops stay live until 3:58 PM ET, then the lot exits at market (since 2026-10-08); a lot still",
         "     open after the close gets an extended-hours limit order at the bid/ask until filled. Not an overnight hold.",
-        "  3) QHM / F6 — multi-week / quarterly buy-and-hold; not intraday-scored.",
+        "  3) QHM / Forever 6 — multi-week / quarterly buy-and-hold; not Swing-scored.",
         "MRI (macro risk index) is BACKGROUND-ONLY (architecture invariant): it only nudges the size floor and",
         "  the MIN_SCORE floor; it does NOT hard-block entries. An entry during ELEVATED / STRESSED MRI is by",
         "  design, so 'MRI was STRESSED' alone is not evidence of a gate failure.",
@@ -966,6 +1191,7 @@ def _format_meta_audit_body(
 
     # ── Trade events with inline chart proxies ────────────────────────────
     events = ctx["events"]
+    day_evidence = ctx.get("day_lifecycle_evidence") or {}
     chart_proxies = ctx["chart_proxies"]
     # Filter high-volume telemetry (delta_shadow/mri_refresh/halt_eval/breadth_refresh)
     # so the body stays inside Groq's 131k-token window; keep trade-lifecycle events.
@@ -993,12 +1219,23 @@ def _format_meta_audit_body(
             # tier + direction disambiguate day-tier (GEX, score=0) from intraday
             # (confluence, score 10-12) and long from short — without these the
             # auditor misreads score=0 day-tier entries and inverse-ETF longs.
-            tier = ev.get("tier") or ev.get("trade_mode")
-            if tier:
-                line += f" | tier={tier}"
+            raw_tier = ev.get("tier") or ev.get("trade_mode")
+            resolved_tier = _event_tier(ev)
+            if raw_tier or ev.get("trade_id"):
+                line += f" | tier={resolved_tier or 'UNKNOWN'}"
+                if resolved_tier is None:
+                    line += " | tier_evidence=AMBIGUOUS"
             if ev.get("direction"):
                 line += f" | dir={ev['direction']}"
-            if ev.get("score") is not None:
+            if _is_day_event(ev):
+                proof = day_evidence.get(str(ev.get("trade_id") or ""), {})
+                if not _evidence_precedes_event(proof, ev):
+                    proof = {}
+                line += f" | setup={proof.get('setup', 'UNKNOWN')}"
+                conviction = proof.get("conviction")
+                line += (f" | conviction={conviction:.2f}"
+                         if isinstance(conviction, (int, float)) else " | conviction=UNKNOWN")
+            elif resolved_tier == "swing" and ev.get("score") is not None:
                 line += f" | score={ev['score']}"
             if ev.get("mri_level"):
                 line += f" | mri={ev['mri_level']}"
@@ -1072,8 +1309,8 @@ def _format_meta_audit_body(
         parts += [
             "=== SCORE DISTRIBUTION AT ENTRY ===",
             "  " + str(stats["score_distribution"]),
-            "  (score=0 entries are day-tier GEX trades — not confluence-scored; exclude them from any",
-            "   MIN_SCORE analysis. Real Swing-tier confluence scores are 10-12.)",
+            "  (Day entries are excluded: their exact setup/conviction evidence is shown on each row.",
+            "   This distribution is the 12-point Swing score only.)",
             "",
         ]
     if stats["mri_distribution"]:
@@ -1136,7 +1373,7 @@ def _format_meta_audit_body(
     parts += [
         "=== REQUESTED OUTPUT FORMAT ===",
         "1. TRADE-BY-TRADE VERDICT",
-        "   For each ENTRY event: [symbol direction score MRI] → outcome if visible →",
+        "   For each ENTRY event: [symbol direction; Swing score OR Day setup+conviction; MRI] → outcome if visible →",
         "   VERDICT: edge_confirmed | entry_error | regime_error | gtc_forced | unknown",
         "   Use chart_proxies for context: was trade with/against trend? before/after macro?",
         "",

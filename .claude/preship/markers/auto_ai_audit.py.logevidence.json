@@ -1,0 +1,10 @@
+{
+ "file": "auto_ai_audit.py",
+ "sha256": "5c0aa10fc5634dd24d0a53646c3fda5cc43d69fff28222209a86bcf696a7f0e9",
+ "log": "logs/meta_audit_latest.json",
+ "pattern": "ENTRY META.*tier=daytrade.*score=0",
+ "match_count": 1,
+ "min_required": 1,
+ "sample": "\"evidence_corpus\": \"NORTH STAR (the owner's standing order \u2014 every judgement you make starts here):\\n  This is a PAPER trading account. Goal: grow $2.5K to $25K. Until real money the #1 objective is DATA\\n  COLLECTION AND EDGE EVALUATION \u2014 the bot must TRADE EVERY DAY. Not trading is the failure mod",
+ "recorded_at": "2026-10-09T15:38:32.191816+02:00"
+}

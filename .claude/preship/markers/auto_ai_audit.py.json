@@ -1,0 +1,8 @@
+{
+  "sha256": "5c0aa10fc5634dd24d0a53646c3fda5cc43d69fff28222209a86bcf696a7f0e9",
+  "gro": "APPROVE",
+  "gai": "APPROVE",
+  "ts": 1791553327,
+  "file": "auto_ai_audit.py",
+  "gro_substituted": "NVIDIA_meta/llama-3.2-90b-vision-instruct"
+}
