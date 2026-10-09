@@ -236,6 +236,31 @@ def _adopt_untracked_stop(symbol: str, trade: dict, direction: str, max_qty: int
     return True
 
 
+def promoted_lot_keeps_swing_stop(symbol: str, trade: dict) -> bool:
+    """CEO 2026-10-09 (AAPL): a lot the Swing tier took over from the Day tier keeps its Swing stop measured from the
+    Day-tier entry (entry - ATR x stop multiple, set at adoption); neither break-even move (the 0.5R promotion in
+    exit_logic nor the MRI push here) pulls it up to the entry, where ordinary noise or an overnight gap stops it out.
+    Scope: `_promoted_from_day_tier` set at adoption (DT- tagged entry order AND an ATR-based stop — never the 5%
+    emergency floor). Kill flag SWING_PROMOTED_LOT_NO_BE (only an explicit False disables). Logs the skip once per
+    trade to trade_events.jsonl. Never raises."""
+    try:
+        if not trade.get("_promoted_from_day_tier") or getattr(config, "SWING_PROMOTED_LOT_NO_BE", True) is False:
+            return False
+        if not trade.get("_promoted_be_skip_logged"):
+            trade["_promoted_be_skip_logged"] = True
+            logger.info(f"[{symbol}] promoted Day-tier lot: break-even moves skipped — Swing stop "
+                        f"${trade.get('stop')} from the Day-tier entry ${trade.get('entry_price')} is kept")
+            try:
+                _log_trade_event("breakeven_skipped", symbol=symbol, price=float(trade.get("entry_price") or 0.0),
+                                 stop=trade.get("stop"), reason="promoted_from_day_tier")
+            except Exception as _le:  # noqa: BLE001
+                logger.warning(f"[{symbol}] breakeven_skipped event not logged: {_le}")
+        return True
+    except Exception as _e:  # noqa: BLE001
+        logger.warning(f"[{symbol}] promoted-lot check failed ({_e}) — normal break-even rules apply")
+        return False
+
+
 def apply_mri_breakeven_push(tracker, mri) -> None:
     """T3: Move profitable positions to breakeven when MRI ≥ STRESSED.
 
@@ -249,6 +274,8 @@ def apply_mri_breakeven_push(tracker, mri) -> None:
     for symbol, trade in list(tracker.open_trades.items()):
         try:
             if trade.get("be_pushed_by_mri"):
+                continue
+            if promoted_lot_keeps_swing_stop(symbol, trade):
                 continue
 
             entry_price  = trade.get("entry_price", 0)

@@ -533,3 +533,42 @@ class TestTargetConfirm(TestCheckExitsLivePrice):
         with self.assertRaises(_Acted):
             self._run(t)
         self.m["_quote_confirms"].assert_not_called()
+
+
+class TestPromotedLotBreakEven(TestCheckExitsLivePrice):
+    """CEO 2026-10-09 (AAPL): a lot the Swing tier took over from the Day tier keeps its Swing stop — the 0.5R
+    break-even promotion does not pull it up to the entry."""
+
+    def _bt(self, promoted):
+        t = self._trade()
+        t.update(be_stop_promoted=False, partial_exited=False, _promoted_from_day_tier=promoted)
+        return t
+
+    def _run_at(self, t, px):
+        self.m["live_price_or"].side_effect = lambda s, fb, w, *a: (px, "iex_1m")
+        with mock.patch.object(el, "_move_stops", return_value="moved") as mv, \
+                mock.patch("execution.lifecycle._log_trade_event"):
+            self._run(t)
+        return mv
+
+    def test_normal_lot_is_promoted_to_break_even(self):
+        t = self._bt(False)
+        mv = self._run_at(t, 103.5)                              # 0.7R above entry ($5 risk)
+        self.assertTrue(t.get("be_stop_promoted"))
+        self.assertEqual(t["stop"], 100.0)
+        mv.assert_called()
+
+    def test_promoted_day_tier_lot_keeps_its_swing_stop(self):
+        t = self._bt(True)
+        mv = self._run_at(t, 103.5)
+        self.assertFalse(t.get("be_stop_promoted"))
+        self.assertEqual(t["stop"], 95.0)
+        mv.assert_not_called()
+        self.assertTrue(t.get("_promoted_be_skip_logged"))
+
+    def test_kill_flag_restores_break_even(self):
+        t = self._bt(True)
+        with mock.patch.object(el.config, "SWING_PROMOTED_LOT_NO_BE", False, create=True):
+            self._run_at(t, 103.5)
+        self.assertTrue(t.get("be_stop_promoted"))
+        self.assertEqual(t["stop"], 100.0)
