@@ -8,16 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-09 PM, Claude signed) — Day->Swing promotion deployed (PR #562)
+## ⏩ LATEST (2026-10-10, Claude signed) — QHM buys restored (#564), no false crash pages (#565)
 
-PR #562 merged as `3c86e60` and deployed on OCI (all three services active). New `execution/day_promotion.py`:
-3:56 PM ET decision (long stock, position = lot, >= 0.5R profit, trend LONG, <= 2% lot / 6% aggregate risk to the
-Swing stop, Invariant #11 limbs, max 3/day) -> after-close hand-off in the Day runner -> adoption into the Swing
-tracker with a GTC stop. Kill flag `DAYTRADE_PROMOTION_ENABLED`. Status: deployed, unexercised.
+Friday 10/09: account +$18.70 (+0.74%), equity $2,546.78; realized (Alpaca fills) -$3.84, all Day tier. Week since
+10/02 close: +$107 (+4.4%). Day->Swing promotion (#562) ran at 3:56: one lot (SNDQ, inverse ETF) correctly not promoted.
+- PR #564 (8fdd753): main.py `_QHMBroker.submit_limit_order` now accepts `client_order_id` — since #442 (9/29) every QHM
+  buy raised TypeError (NVDA tranche 1 failed 49x on 10/09). Static contract test added. Deployed, unexercised.
+- PR #565 (895ac63): SIGTERM pages only on a state-save failure (13 deploy restarts paged the phone on 10/09).
+- Post-live audits #531-#554 recorded PASS. Deploy restarts: `touch /tmp/mtf_planned_restart` first.
 
-**⏩ EXACT NEXT ACTION:** post-live audit of PR #562 after its first close (`data/state/day_promotions.json`,
-`promotion_decision` events, Day runner log) plus the queued post-live audits (#548-#560). Ledger tier-transfer for
-promoted lots is owned by the ChatGPT/Codex session. Cleanup of 20 dead items awaits CEO yes.
+**⏩ EXACT NEXT ACTION:** Monday post-live audits of #562 (first stock promotion), #564 (first QHM NVDA buy fills
+and gets its GTC stop), #565. Then the META item 3 remainder (opposite-trigger exit). Cleanup of 20 dead items awaits CEO yes.
 
 ## ⏩ LATEST (2026-10-09, OpenAI Codex signed) — canonical ownership ledger v2 live
 
