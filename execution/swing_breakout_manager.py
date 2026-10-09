@@ -15,7 +15,7 @@ WHAT IT TRADES (long only, one lot per symbol):
               resting stop for min(lot qty, broker long qty)": a stop cancelled/expired/rejected by anyone, never
               placed, or lost to a restart is re-placed (paged, retried each cycle); a stop is never placed on
               shares the broker does not show (no accidental short); a lot missing at the broker is booked closed.
-  Exit      = in the last 10 minutes before the real close: live price below the lowest low of the prior 20 completed sessions, or the 30th
+  Exit      = in the last 10 minutes before the real close: last trade price below the lowest low of the prior 20 completed sessions, or the 30th
               session held (entry day = session 1). Exit = cancel the stop (confirmed) then close ONLY this tier's
               quantity (broker.partial_close_position(tier=TIER)) — never a whole-symbol close.
 
@@ -810,15 +810,34 @@ class SwingBreakoutManager:
             return False
 
     @staticmethod
-    def _price_through_stop(symbol: str, stop_px: float) -> bool:
+    def _last_trade(symbol: str) -> float:
+        """The last trade price (T1 Alpaca Data), or NaN when unavailable or older than SWING_LAST_TRADE_MAX_AGE_S.
+        Price-movement decisions (stop breached, trend break) use the last trade, never the IEX bid/ask, which swings
+        wildly (CEO 2026-10-09; 10/07-08 Day-tier logs: MU's IEX spread went $3.50 -> $37.86 two minutes apart). A
+        stale print (board Harris+Taleb: a thin name's last IEX print can be hours old) counts as unavailable, so the
+        caller retries next cycle instead of deciding — and latching the day — on an old price."""
         try:
-            from data.alpaca_data import get_latest_quote
-            q = get_latest_quote(symbol)
-            bid = float(q.get("bid") or 0) if isinstance(q, dict) else 0.0
-            return stop_px > 0 and 0 < bid <= stop_px
+            from datetime import timezone
+            from data.alpaca_data import get_latest_trade_with_time
+            r = get_latest_trade_with_time(symbol)
+            if r is None:
+                return float("nan")
+            px, ts = float(r[0]), r[1]
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            max_age = float(_cfg("SWING_LAST_TRADE_MAX_AGE_S", 180))  # PROV:swing-last-trade-2026-10-09
+            if not (-5.0 <= age <= max_age):
+                logger.warning("[%s] breakout last trade %.2f is %.0fs old (> %.0fs) — treated as unavailable",
+                               symbol, px, age, max_age)
+                return float("nan")
+            return px if math.isfinite(px) and px > 0 else float("nan")
         except Exception as e:
-            logger.warning("[%s] breakout quote read failed: %s", symbol, e)
-            return False
+            logger.warning("[%s] breakout last-trade read failed: %s", symbol, e)
+            return float("nan")
+
+    @classmethod
+    def _price_through_stop(cls, symbol: str, stop_px: float) -> bool:
+        last = cls._last_trade(symbol)
+        return stop_px > 0 and math.isfinite(last) and last <= stop_px
 
     # ── exits ─────────────────────────────────────────────────────────────────
     def run_exit_check(self, now: Optional[datetime] = None) -> list[str]:
@@ -838,15 +857,13 @@ class SwingBreakoutManager:
         if not self._near_close(now):
             return []
         today = now.strftime("%Y-%m-%d")
-        from data.alpaca_data import get_latest_quote
         closed: list[str] = []
         for s, rec in list(state["positions"].items()):
             if rec.get("status") != "open" or rec.get("exit_checked") == today:
                 continue
             try:
                 df = self._bars(s)
-                q = get_latest_quote(s)
-                live = (float(q["bid"]) + float(q["ask"])) / 2.0 if isinstance(q, dict) and q.get("bid") and q.get("ask") else float("nan")
+                live = self._last_trade(s)          # last trade, not the bid/ask midpoint (CEO 2026-10-09)
                 lo20 = prior_low(df, 20)
                 held = sessions_held(df, str(rec.get("entry_date")))
                 why = exit_reason(live, lo20, held, int(_cfg("SWING_BREAKOUT_MAX_HOLD", 30)))

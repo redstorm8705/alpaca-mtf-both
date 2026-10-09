@@ -40,6 +40,12 @@ def _mods(fakes):
         yield
 
 
+
+def _fresh(px):
+    """A (price, time) last-trade print stamped now — fresh for the age check; None stays None."""
+    from datetime import timezone
+    return None if px is None else (px, datetime.now(timezone.utc))
+
 class Decisions(unittest.TestCase):
     def test_events_carry_versioned_c2_family_identity(self):
         fake = mock.MagicMock()
@@ -232,7 +238,7 @@ class Lifecycle(unittest.TestCase):
 
     def _run_entries(self, broker, bars):
         fakes = {"execution.broker": broker,
-                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 124.9, "ask": 125.0}),
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 124.9, "ask": 125.0}, get_latest_trade_with_time=lambda s: _fresh(124.9)),
                  "execution.quarterly_hold_manager": SimpleNamespace(get_quarterly_hold_symbols=lambda: []),
                  "execution.tier_capital_allocator": self.alloc}
         m = sb.SwingBreakoutManager()
@@ -359,7 +365,7 @@ class Lifecycle(unittest.TestCase):
                                              "stop_order_id": "stop-AAA", "entry_date": "2026-09-20", "coid": "BO-x"}}})
         b = FakeBroker()
         df = _bars([130.0] * 30, start="2026-08-17")          # prior 20-day low = 128.7
-        fakes = {"execution.broker": b, "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 120.0, "ask": 120.2})}
+        fakes = {"execution.broker": b, "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 120.0, "ask": 120.2}, get_latest_trade_with_time=lambda s: _fresh(120.0))}
         with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: df)), \
                 mock.patch("time.sleep"):
             got = sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 15, 52, tzinfo=sb.ET))
@@ -499,7 +505,8 @@ class Lifecycle(unittest.TestCase):
 
     def _reconcile(self, b, quote=None):
         fakes = {"execution.broker": b,
-                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: quote or {"bid": 120.0, "ask": 120.2})}
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: quote or {"bid": 120.0, "ask": 120.2},
+                                                     get_latest_trade_with_time=lambda s: _fresh((quote or {"bid": 120.0})["bid"]))}
         with _mods(fakes), mock.patch("time.sleep"):
             sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 12, 0, tzinfo=sb.ET))
         return sb._load_state()["positions"]["AAA"]
@@ -537,6 +544,61 @@ class Lifecycle(unittest.TestCase):
         rec = self._reconcile(b, quote={"bid": 105.0, "ask": 105.2})
         self.assertEqual(b.closes, [("AAA", 2, "intraday")])
         self.assertEqual(rec["exit_reason"], "stop_breached_unprotected")
+
+    def test_wide_bid_alone_is_not_a_breach(self):            # CEO 2026-10-09: last trade, not the IEX bid/ask
+        self._lot(stop_order_id="")
+        b = FakeBroker(stop_ok=False)
+        b.market_open = True
+        fakes = {"execution.broker": b,
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 95.0, "ask": 130.0},
+                                                     get_latest_trade_with_time=lambda s: _fresh(121.0))}
+        with _mods(fakes), mock.patch("time.sleep"):
+            sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 12, 0, tzinfo=sb.ET))
+        rec = sb._load_state()["positions"]["AAA"]
+        self.assertEqual(b.closes, [])                          # bid $95 is below the $110 stop; the last trade is not
+        self.assertEqual((rec["status"], rec["unprotected"]), ("open", True))
+
+    def test_missing_last_trade_is_not_a_breach(self):
+        self._lot(stop_order_id="")
+        b = FakeBroker(stop_ok=False)
+        b.market_open = True
+        fakes = {"execution.broker": b,
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 105.0, "ask": 105.2},
+                                                     get_latest_trade_with_time=lambda s: _fresh(None))}
+        with _mods(fakes), mock.patch("time.sleep"):
+            sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 12, 0, tzinfo=sb.ET))
+        self.assertEqual(b.closes, [])
+
+    def test_stale_last_trade_is_not_a_breach_and_does_not_latch(self):   # board Harris+Taleb 2026-10-09
+        from datetime import timedelta, timezone
+        old = lambda s: (100.0, datetime.now(timezone.utc) - timedelta(hours=2))   # noqa: E731
+        sb._save_state({"positions": {"AAA": {"status": "open", "qty": 2, "entry_px": 125.0, "stop_px": 110.0,
+                                             "stop_order_id": "stop-AAA", "entry_date": "2026-09-20", "coid": "BO-x"}}})
+        b = FakeBroker()
+        df = _bars([130.0] * 30, start="2026-08-17")
+        fakes = {"execution.broker": b,
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 99.0, "ask": 99.2},
+                                                     get_latest_trade_with_time=old)}
+        with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: df)), \
+                mock.patch("time.sleep"):
+            got = sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 15, 52, tzinfo=sb.ET))
+            self.assertFalse(sb.SwingBreakoutManager._price_through_stop("AAA", 110.0))
+        self.assertEqual(got, [])
+        self.assertNotIn("exit_checked", sb._load_state()["positions"]["AAA"])   # retried next cycle
+
+    def test_trend_break_uses_last_trade_not_midpoint(self):
+        sb._save_state({"positions": {"AAA": {"status": "open", "qty": 2, "entry_px": 125.0, "stop_px": 110.0,
+                                             "stop_order_id": "stop-AAA", "entry_date": "2026-09-20", "coid": "BO-x"}}})
+        b = FakeBroker()
+        df = _bars([130.0] * 30, start="2026-08-17")          # prior 20-day low = 128.7
+        # midpoint (100+170)/2 = 135 would hold; the last trade 120 is below the 20-day low -> trend break
+        fakes = {"execution.broker": b,
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 100.0, "ask": 170.0},
+                                                     get_latest_trade_with_time=lambda s: _fresh(120.0))}
+        with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: df)), \
+                mock.patch("time.sleep"):
+            got = sb.SwingBreakoutManager().run_exit_check(datetime(2026, 9, 30, 15, 52, tzinfo=sb.ET))
+        self.assertEqual(got, ["AAA"])
 
     def test_after_hours_breach_does_not_close(self):
         self._lot(stop_order_id="")
@@ -625,7 +687,7 @@ class Lifecycle(unittest.TestCase):
         b = FakeBroker()
         b.cancel_stop_confirmed = lambda sym, oid: False       # 15:50: stop cancel not confirmed → deferred
         df = _bars([130.0] * 30, start="2026-08-17")
-        fakes = {"execution.broker": b, "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 120.0, "ask": 120.2})}
+        fakes = {"execution.broker": b, "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 120.0, "ask": 120.2}, get_latest_trade_with_time=lambda s: _fresh(120.0))}
         m = sb.SwingBreakoutManager()
         with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: df)), mock.patch("time.sleep"):
             self.assertEqual(m.run_exit_check(datetime(2026, 9, 30, 15, 51, tzinfo=sb.ET)), [])
@@ -665,7 +727,7 @@ class Lifecycle(unittest.TestCase):
         b.get_open_position = lambda sym: None if flat["v"] else orig_pos(sym)
         quotes = iter([{"bid": 124.9, "ask": 125.0}] + [{"bid": 99.0, "ask": 99.2}] * 20)
         fakes = {"execution.broker": b,
-                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: next(quotes)),
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: next(quotes), get_latest_trade_with_time=lambda s: _fresh(99.0)),
                  "execution.quarterly_hold_manager": SimpleNamespace(get_quarterly_hold_symbols=lambda: []),
                  "execution.tier_capital_allocator": self.alloc}
         m = sb.SwingBreakoutManager()
