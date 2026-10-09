@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-09 early PT]` **OpenAI Codex:** migrated the live ownership ledger to canonical schema v2 (`day`, `swing`, `qhm`, `forever_6`) behind strict dual-read compatibility, a shared/exclusive writer fence, hash-journaled apply, and compare-and-swap rollback. First live reconciliation preserved 43 symbols with zero drift; no Claude strategy or execution behavior was replaced. — PR #542 / `27a1dbc` — ownership guard/codec, migration tool, tests, design record
+
 - `[2026-10-08 late PT]` **OpenAI Codex:** extended Claude’s PR #526 tier-name foundation with canonical internal IDs and strict legacy-state adapters; ownership and reports now reject alias collisions and malformed attribution. Rebased over Claude PRs #522–#536, with no parallel registry or trading-logic replacement. — PR #535 / `cf0e190` — tier names, ownership snapshot, dashboard/monthly/shared HTML, tests, design record
 
 - `[2026-10-07 late PT]` **OpenAI Codex:** shipped a signed cross-tier ownership snapshot and wired the day-tier no-co-hold route to it; ambiguous or inconsistent broker/ledger/lifecycle state now fails closed to foreign-held. BGGN, CI, OCI compile/import, and live read-only reconciliation passed; no signal, sizing, stop, exit, or order behavior changed. — PR #520 / `bf81288` — ownership snapshot, day logger, day runner, tests, design record
