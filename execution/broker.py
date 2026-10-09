@@ -559,13 +559,21 @@ def submit_market_order(
                              f"opposite-side market/stop order rests on {symbol}); not cached as a short block: {e}")
                 return None
             elif "40310000" in err or "not allowed to short" in err:
-                # Cache the block — prevents retry on every subsequent scan cycle.
-                # 40310000 is issued both for account-level and per-symbol restrictions.
-                _short_blocked_symbols.add(symbol)
-                logger.warning(
-                    f"[{symbol}] Shorting blocked (40310000) — "
-                    f"added to session short-block cache. Will not retry this symbol."
-                )
+                # 40310000 also covers held_for_orders ("insufficient qty available": a resting stop
+                # reserves the shares). Only a SELL can be a short restriction — a BUY (e.g. covering a
+                # short, EWY 2026-10-08) or a held-qty reject must never poison the short-block cache.
+                _el = err.lower()
+                if side == "sell" and "insufficient qty" not in _el and "held_for_orders" not in _el:
+                    # Cache the block — prevents retry on every subsequent scan cycle.
+                    # 40310000 is issued both for account-level and per-symbol restrictions.
+                    _short_blocked_symbols.add(symbol)
+                    logger.warning(
+                        f"[{symbol}] Shorting blocked (40310000) — "
+                        f"added to session short-block cache. Will not retry this symbol. Alpaca: {e}"
+                    )
+                else:
+                    logger.error(f"[{symbol}] {side.upper()} market order rejected (40310000, not a short "
+                                 f"restriction — not cached as a short block). Alpaca: {e}")
                 return None
             elif not _is_retryable(err):
                 logger.error(f"[{symbol}] Order failed (non-retryable): {e}")
