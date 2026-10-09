@@ -636,15 +636,20 @@ def main():
             qhm.safe_stop(circuit_breaker=False)  # persist QHM state; SIGTERM may be restart
         except Exception as _qhm_sigterm_e:
             logger.warning("QHM safe_stop failed on SIGTERM: %s", _qhm_sigterm_e)
+            _state_save_failed = True     # QHM state not persisted -> page (below)
 
-        if _open_syms or _state_save_failed:
-            _reason = f"SIGTERM (signal {signum})"
-            if _state_save_failed:
-                _reason += " + STATE SAVE FAILED"
+        # A SIGTERM is a deliberate stop (systemctl restart/stop on deploy, the memory watchdog), not a crash: the
+        # process saved its state and systemd restarts it. Page only when a state save (tracker or QHM) FAILED. A
+        # bot that does not come back is reported on Slack by scripts/service_watchdog.sh (~10 min). 2026-10-09: 13
+        # deploy restarts each sent a "BOT SHUTDOWN — check Alpaca immediately" phone push.
+        if _state_save_failed:
+            _reason = f"SIGTERM (signal {signum}) + STATE SAVE FAILED"
             try:
                 alert_crash(reason=_reason, open_positions=_open_syms)
             except Exception as _se_alert:
                 logger.warning(f"SIGTERM crash alert failed: {_se_alert}")
+        elif _open_syms:
+            logger.info("SIGTERM: state saved — no page (planned stop; service_watchdog alerts on Slack if the bot stays down).")
 
         try:
             _lockfile.close()
