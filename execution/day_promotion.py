@@ -479,7 +479,7 @@ def complete_handoffs() -> dict:
                 if h.get("status") == "ready" and (now - datetime.fromisoformat(str(h.get("ready_ts")))).total_seconds() > 2700:
                     dtm._page_once_today(str(h.get("symbol")), "promotion_unadopted",
                                          f"[{h.get('symbol')}] promoted Day lot NOT adopted by the Swing tier after 45 min "
-                                         f"— no Swing stop yet. Check the main bot.")
+                                         f"— no Swing stop yet. Check the mtf-bot service (Swing tier).")
                 elif h.get("status") == "booking" and (now - datetime.fromisoformat(str(h.get("ts")))).total_seconds() > 600:
                     dtm._page_once_today(str(h.get("symbol")), "promotion_booking_stalled",
                                          f"[{h.get('symbol')}] Day->Swing promotion hand-off stalled in booking for 10+ min "
