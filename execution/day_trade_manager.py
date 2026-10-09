@@ -695,65 +695,58 @@ def _min_stop_room_ok(symbol: str, direction: str, entry_px: float, stop_px: flo
 
 def _room_stop(symbol: str, direction: str, limit_px: float, stop_px: float) -> "tuple[float | None, str]":
     """CEO order 2026-10-06 ("the day tier must trade"; replay of 10/05-06: 9 of 25 Track-A setups died in the
-    min-stop gate). Returns a protective stop with at least the volatility room max(k x ATR(5m), spread_mult x
-    spread), measured from BOTH the marketable limit and the live touch — WIDENING a too-tight structural stop
-    instead of skipping the trade (wire-time sizing then sizes to the wider stop). A broken/wide IEX quote (the IEX
-    BBO is often wide at the open: TSLA $8-$17) is not a skip: the live reference falls back to the latest trade
-    and the spread term to 0. An unavailable ATR falls back to DAYTRADE_ROOM_FALLBACK_PCT of price. Returns
-    (None, why) only when no usable price exists. Never raises."""
+    min-stop gate). Returns a protective stop with at least the volatility room k x ATR(5m), measured from BOTH the
+    marketable limit and the LAST TRADE price — WIDENING a too-tight structural stop instead of skipping the trade
+    (wire-time sizing then sizes to the wider stop). An unavailable ATR falls back to DAYTRADE_ROOM_FALLBACK_PCT of
+    price. Returns (None, why) only when no usable price exists. Never raises.
+
+    LAST PRICE, NOT BID/ASK (CEO 2026-10-09): the IEX bid/ask is not the national quote and swings wildly — across 29
+    room stops on 10/07-08 the old 2 x spread term jumped MU $3.50 -> $37.86 two minutes apart, TSLA $0 -> $11.44,
+    SNDK $3.60 -> $37.16, and on 10/08 09:38 ET a $6.47 META spread widened the stop 719.44 -> 709.67 (volatility
+    room $4.43). Stops trigger on trades, so the room is measured from the last trade and the stock's own volatility."""
     try:
         e = float(limit_px)
         s = float(stop_px)
         if not (math.isfinite(e) and math.isfinite(s) and e > 0 and s > 0) or direction not in ("long", "short"):
             return None, "room stop: invalid entry/stop/direction"
         k = float(_cfg("DAYTRADE_MIN_STOP_ATR_MULT", 1.5))
-        spread_mult = float(_cfg("DAYTRADE_MIN_STOP_SPREAD_MULT", 2.0))
-        sanity_pct = float(_cfg("DAYTRADE_STOP_SPREAD_SANITY_PCT", 0.02))
         fallback_pct = float(_cfg("DAYTRADE_ROOM_FALLBACK_PCT", 0.005))  # PROV:daytier-must-trade-2026-10-06
-        live_ref, spread, src = None, 0.0, ""
-        from data.alpaca_data import get_latest_quote, get_latest_trade
-        q = get_latest_quote(symbol)
-        try:
-            bid = float((q or {}).get("bid") or 0.0)
-            ask = float((q or {}).get("ask") or 0.0)
-        except (TypeError, ValueError):
-            bid = ask = 0.0
         band = float(_cfg("DAYTRADE_LIVE_PRICE_SANITY_PCT", 0.05))  # PROV:daytier-must-trade-2026-10-06
-        if (math.isfinite(bid) and math.isfinite(ask) and 0 < bid <= ask
-                and (ask - bid) <= sanity_pct * ((bid + ask) / 2.0)
-                and abs(((bid + ask) / 2.0) / e - 1.0) <= band):
-            live_ref, spread, src = (bid if direction == "short" else ask), ask - bid, "quote"
-        else:
-            try:
-                lt = get_latest_trade(symbol)
-                if (lt is not None and math.isfinite(float(lt)) and float(lt) > 0
-                        and abs(float(lt) / e - 1.0) <= band):
-                    live_ref, src = float(lt), "latest trade (quote unusable)"
-            except Exception:  # noqa: BLE001
-                live_ref = None
+        live_ref, src = None, ""
+        from data.alpaca_data import get_latest_trade
+        try:
+            lt = get_latest_trade(symbol)
+            if (lt is not None and math.isfinite(float(lt)) and float(lt) > 0
+                    and abs(float(lt) / e - 1.0) <= band):   # a print > band off the limit = a bad print
+                live_ref, src = float(lt), "last trade"
+        except Exception:  # noqa: BLE001
+            live_ref = None
         if live_ref is None:
-            live_ref, src = e, "limit price (no live quote/trade)"
-        # A live price already AT/THROUGH the structural stop means the setup is invalidated (cold-2nd 2026-10-06) —
+            live_ref, src = e, "limit price (no usable last trade)"
+        # A last trade already AT/THROUGH the structural stop means the setup is invalidated (cold-2nd 2026-10-06) —
         # that is not a "too tight" stop to widen; skip, exactly as a post-fill cross would flatten.
-        if src != "limit price (no live quote/trade)" and (
+        if src == "last trade" and (
                 (direction == "long" and live_ref <= s) or (direction == "short" and live_ref >= s)):
-            return None, (f"room stop: stop ${s:.2f} already reached by the live {src} ${live_ref:.2f} — "
+            return None, (f"room stop: stop ${s:.2f} already reached by the {src} ${live_ref:.2f} — "
                           f"setup invalidated, skip")
         atr = _robust_atr_5m(symbol)
-        vol_floor = k * atr if (atr is not None and math.isfinite(atr) and atr > 0) else fallback_pct * live_ref
-        min_stop = max(vol_floor, spread_mult * spread)
+        # Price floor for a tiny-but-positive ATR (board Thorp+Harris 2026-10-09: a near-flat tape must not size up
+        # into a sub-tick stop). 0.10% of price binds on none of the 29 logged 10/07-08 rooms (smallest 0.16%).
+        min_pct = float(_cfg("DAYTRADE_ROOM_MIN_PCT", 0.001))  # PROV:room-stop-last-price-2026-10-09
+        vol_floor = (max(k * atr, min_pct * live_ref) if (atr is not None and math.isfinite(atr) and atr > 0)
+                     else fallback_pct * live_ref)
         if direction == "long":
-            need = round(min(e, live_ref) - min_stop, 2)
+            need = round(min(e, live_ref) - vol_floor, 2)
             out = min(s, need)
         else:
-            need = round(max(e, live_ref) + min_stop, 2)
+            need = round(max(e, live_ref) + vol_floor, 2)
             out = max(s, need)
         out = round(out, 2)
         if not (math.isfinite(out) and out > 0):
             return None, "room stop: no positive protective stop"
         how = "kept" if out == round(s, 2) else f"WIDENED {s:.2f}->{out:.2f}"
-        return out, (f"room stop {how}: min room ${min_stop:.4f} (vol ${vol_floor:.4f}, {spread_mult}x spread "
-                     f"${spread_mult * spread:.4f}) from limit ${e:.2f} / live ${live_ref:.2f} [{src}]")
+        return out, (f"room stop {how}: min room ${vol_floor:.4f} (vol ${vol_floor:.4f}) from limit ${e:.2f} / "
+                     f"live ${live_ref:.2f} [{src}]")
     except Exception as ex:  # noqa: BLE001
         logger.warning("[%s] day-tier room-stop error: %s", symbol, ex)
         return None, f"room stop error: {ex!r}"
@@ -2011,7 +2004,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         limit_px = round(_px_base * (1.0 + slip) if direction == "long" else _px_base * (1.0 - slip), 2)
         # MARKETABLE AT THE TOUCH (2026-10-07; board Harris + Taleb, Gro, GAI): a limit priced off the last trade rests
         # when the trade sits off the bid/ask (EWY 10/07: sell limit $181.12, bid $180.44 -> 1 of 7 filled). With a
-        # usable IEX quote (same test as _room_stop), a long pays up to max(ask, trade) + slip and a short sells
+        # usable IEX quote (spread <= DAYTRADE_STOP_SPREAD_SANITY_PCT of mid, mid within the live band), a long pays up to max(ask, trade) + slip and a short sells
         # down to min(bid, trade) - slip, never more than DAYTRADE_ENTRY_TOUCH_CAP_PCT through the trade price.
         _touch_src = "trade"
         try:
