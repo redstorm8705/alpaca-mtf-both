@@ -312,6 +312,24 @@ class MarketOrderWashTrade(unittest.TestCase):
         self.assertIn("ZZZ", bk._short_blocked_symbols)
         bk._short_blocked_symbols.discard("ZZZ")
 
+    def test_buy_to_cover_reject_is_not_cached_as_short_block(self):
+        # EWY 2026-10-08: a BUY covering a short, rejected because a resting buy stop holds the share.
+        bk._short_blocked_symbols.discard("EWY")
+        held = ('{"available":"0","code":40310000,"existing_qty":"1","held_for_orders":"1",'
+                '"message":"insufficient qty available for order (requested: 1, available: 0)"}')
+        with _Env([Exception(held)]):
+            out = bk.submit_market_order("EWY", 1, "buy", tier="intraday")
+        self.assertIsNone(out)
+        self.assertNotIn("EWY", bk._short_blocked_symbols)
+
+    def test_sell_held_for_orders_is_not_cached_as_short_block(self):
+        bk._short_blocked_symbols.discard("YYY")
+        held = ('{"available":"0","code":40310000,"held_for_orders":"2",'
+                '"message":"insufficient qty available for order (requested: 2, available: 0)"}')
+        with _Env([Exception(held)]):
+            bk.submit_market_order("YYY", 2, "sell", tier="intraday")
+        self.assertNotIn("YYY", bk._short_blocked_symbols)
+
 
 if __name__ == "__main__":
     unittest.main()
