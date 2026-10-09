@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-10-08
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   FIFO orphan: closing fill for NVDA has no prior lot and no tracker record — NVDA (Log: 2026-10-08 17:19:08,802)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** The NVDA trade shows a profit of $1381.80 on a $0.00 exit price, which is mathematically impossible and indicates a failure in the `execution.portfolio_tracker` to reconcile the exit fill with an entry lot.
+*   **P&L:** The session P&L is reported as $1381.80, but the `portfolio_tracker` log explicitly states `pnl_today=$0.00` and `tracker=$0.00`. This discrepancy between the `SESSION P&L SUMMARY` and the `portfolio_tracker` ledger indicates a breakdown in the authoritative P&L reporting mechanism.
+*   **Correlation:** The NVDA trade was executed with a score of 0/12. Taking a trade with a score of 0 (well below `MIN_LONG_SCORE` / `MIN_SHORT_SCORE` of 8) is a severe failure of the entry logic gate.
+
+### ENTRY QUALITY
+*   **Failure:** The NVDA entry occurred with a score of 0/12. Per `config.py`, `MIN_LONG_SCORE` and `MIN_SHORT_SCORE` are 8. The entry logic failed to filter out a sub-threshold signal.
+
+### EXIT QUALITY
+*   **Failure:** The exit for NVDA is recorded with a price of $0.00. This suggests the bot failed to capture the actual exit price from the Alpaca fill, rendering the trade's performance metrics unreliable.
+
+### MRI ALIGNMENT
+*   The bot correctly identified the MRI as STRESSED (47/100) and applied a size floor of 0.70x. However, the entry logic failed to prevent the low-score (0/12) entry despite the stressed regime.
+
+### LOG ANOMALIES
+*   `WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for NVDA has no prior lot and no tracker record` — This indicates the bot is losing track of open positions, which is a critical risk for stop-loss management.
+*   `WARNING | execution.ownership_guard | reattributed impossible negative protected replay NVDA/qhm=-2 to intraday` — This indicates a state synchronization error between the `qhm` (Quarterly Hold Manager) and `intraday` tiers.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | P&L and Position Tracking Corruption |** The bot is generating "FIFO orphan" warnings and failing to match entry/exit lots for NVDA, leading to $0.00 exit price recording and P&L reporting drift.
+*   **ALPHA ISSUE | HIGH | Entry Logic Bypass |** The bot executed a trade with a score of 0/12, violating the `MIN_LONG_SCORE`/`MIN_SHORT_SCORE` (8) constraints.
+*   **INFRASTRUCTURE | MEDIUM | Ledger/Tracker Drift |** The `ownership_guard` is reporting "impossible negative protected replay" for NVDA, suggesting the internal state of the position tracker is inconsistent with the actual broker holdings.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Immediate investigation of `execution.portfolio_tracker` and `fifo_pnl` modules to resolve the "FIFO orphan" state and prevent the recording of $0.00 exit prices.
+2.  **ALPHA:** Audit the `strategy.signal_generator` and `entry_logic` to determine why a 0/12 score signal was permitted to trigger an order despite the `MIN_SCORE` constraints.
+3.  **INFRA:** Perform a full state-sync of the `ledger_sync` and `portfolio_tracker` to clear the "impossible negative" position counts before the next RTH session.

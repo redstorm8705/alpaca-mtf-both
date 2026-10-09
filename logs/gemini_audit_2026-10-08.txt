@@ -1,0 +1,60 @@
+Nightly Gemini Audit — 2026-10-08
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['run_ledger_sync.py', 'tier_names.py', 'config.py', 'auto_ai_audit.py', 'run_day_tier.py', 'monthly_review.py', 'scripts/pnl_snapshot.py', 'strategy/day_tier_logger.py', 'strategy/day_tier_sizing.py', 'reporting/html_ui.py', 'execution/broker.py', 'execution/ownership_snapshot.py', 'execution/day_trade_manager.py', 'execution/exit_logic.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there is a recurring ledger synchronization anomaly and a persistent anomaly in the `strategy.run_cycle` logic regarding position tracking.
+
+### LOG ANOMALIES
+*   **`execution.ownership_guard sync_ledger`**: Repeated warnings: `reattributed impossible negative protected replay NVDA/qhm=-2 to intraday`. This indicates a persistent mismatch between the QHM ledger and the intraday ledger for NVDA. While the ledger self-heals, the recurrence suggests a logic error in how QHM-tranche fills are being attributed or re-attributed during the sync process.
+*   **`strategy.run_cycle`**: Repeated `[ANOMALY-2] [MSFT] confirm_gate=4 scans but no entry — risk.open_positions=6 vs tracker=4`. This indicates the strategy is seeing a discrepancy between the `risk.open_positions` count and the internal `tracker` count. This is a medium-severity state-tracking issue that may be causing the bot to skip valid entries for MSFT.
+*   **`execution.broker`**: `[AAPL] Limit order rejected — shorting not enabled`. This occurred at 20:05:08. The bot attempted to submit a GTC stop (BUY) for a short position, but the broker rejected it. This suggests the bot is attempting to manage a short position for AAPL that the broker does not recognize as shortable or that the bot's internal state for AAPL is out of sync with the broker's short-eligibility list.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `trade_events` log shows a `stop_hit` for SOFI on 2026-10-01 with a P&L of 2.66. The `exit` for META on 2026-10-08 shows a realized P&L of -0.6. These values are consistent with the trade events.
+*   **Stop Rate**: The bot is currently in a "High Risk" regime (MRI=61). The `VOLSHADOW` logs show that most entries are being blocked by the `would_pass: false` condition, which is the intended behavior for the current macro regime.
+*   **R:R Analysis**: The bot is adhering to the `INTRADAY_TARGET_ATR_MULT` of 2.0. The performance is currently constrained by the macro-risk gating, which is functioning as designed.
+
+### TRADE INTEGRITY
+*   **No issues found**: P&L recording appears consistent with the provided trade events.
+
+### MODIFIED FILE FINDINGS
+*   **`run_ledger_sync.py`**: The logic for `_owner_exit_explained` is robust, but the `sync_once` function relies on `get_quarterly_hold_quantities()`. If this function returns an empty dict due to a transient API error, the ledger will treat all QHM holdings as "intraday," potentially triggering the "reattributed impossible negative" warnings seen in the logs.
+*   **`execution/day_trade_manager.py`**: The `_bounded_entry_qty` function correctly implements the "min-1-share floor" directive. However, the logic for `_current_daytrade_gross` relies on `getattr(pos, "current_price", 0.0)`. If the broker returns a null price, it falls back to the entry price. This is a safe fallback, but it should be monitored to ensure it doesn't lead to systematic under-counting of gross exposure.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: FIXED (Deleted)
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | `execution/broker.py`**: The `_hold_state` function uses `get_open_orders(symbol)`. If this returns `None` (API failure), it returns `_HOLD_UNKNOWN`. While this is safe, it prevents the bot from verifying protection, leading to potential "naked" position alerts.
+*   **ALPHA ISSUE | LOW | `strategy/day_tier_sizing.py`**: The `compute_day_tier_size` function uses `buying_power` from the runner. If `buying_power` is stale or zero, the function returns `size 0` (fail-closed). This is correct for safety but may be overly conservative during high-volatility periods where BP fluctuates rapidly.
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Investigate NVDA Ledger Mismatch**: The `reattributed impossible negative` warning for NVDA/qhm=-2 needs a manual audit of the `ownership_ledger.json` to ensure the QHM tranche is correctly defined.
+2.  **Resolve MSFT Tracker Discrepancy**: The `[ANOMALY-2]` for MSFT suggests the `tracker` is not being updated correctly during the `run_cycle`. Check `strategy/run_cycle.py` to ensure the `tracker` is updated before the `confirm_gate` check.
+3.  **Review AAPL Short Eligibility**: Verify why the broker rejected the AAPL GTC stop as "shorting not enabled." If AAPL is not shortable, it should be added to a global `SHORT_BANNED` list in `config.py` to prevent the bot from attempting to manage short positions for it.
+================================================================================
+BROKER GROUND TRUTH (2026-10-08, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
+  EWY    SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:35] rejected_stop_orders=1
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  META   COVERED                  owners=day exposed=380m no-broker-stop=0m [06:38-06:38, 12:58-12:58] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:35] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=2m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:35] rejected_stop_orders=0

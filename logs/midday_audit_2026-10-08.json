@@ -1,0 +1,276 @@
+{
+  "audit_date": "2026-10-08",
+  "run_ts": "2026-10-08T10:30:01.839080-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "META",
+      "NVDA"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "ELEVATED": 22,
+      "STRESSED": 6
+    },
+    "last_score": 47,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 78,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-08 16:11:27,455 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-08 16:11:27,458 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-08 16:11:52,529 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for NVDA has no prior lot and no tracker record \u2014 fill un",
+      "2026-10-08 16:17:15,244 | WARNING  | macro_risk_index | MRI VIX: FMP None + cache stale (age=16087s) \u2014 T4 yfinance ^VIX fallback=15.5. _vix_confirmed=",
+      "2026-10-08 16:17:15,860 | WARNING  | macro_risk_index | MRI JPY: FMP USDJPY failed \u2014 yfinance JPY=X=158.2260. No prior close available \u2014 JPY scoring 0"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 1381.8000000000002,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 1381.8000000000002,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "NVDA",
+      "pnl": 1381.8000000000002,
+      "entry_price": 230.3,
+      "exit_price": 0.0,
+      "size": 6.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 230.29,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "NVDA",
+      "pnl": 1381.8000000000002,
+      "entry_price": 230.3,
+      "exit_price": 0.0,
+      "size": 6.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 230.29,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "NVDA",
+        "pnl": 1381.8000000000002,
+        "entry_price": 230.3,
+        "exit_price": 0.0,
+        "size": 6.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 230.29,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:36"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:36"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "EWY": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:35"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:35"
+        ],
+        "rejected_stop_orders": 1
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "LLY": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "META": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 232,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:38-09:38"
+        ],
+        "uncovered_windows_pt": [
+          "06:38-06:38"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NFLX": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:35"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:35"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 2,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "PLTR": {
+        "class": "SOFTWARE-ONLY-BY-DESIGN",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:35"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:35"
+        ],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-08",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "high",
+        "title": "EWY: bot reported a stop/exit failure today \u2014 broker stop resting at the check",
+        "detail": "2026-10-08 14:43:26,258 | ERROR    | execution.entry_logic | [EWY] #12c exit order submission failed \u2014 skipping entry."
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "META",
+      "NVDA"
+    ],
+    "by_symbol": {
+      "META": {
+        "buy": 1,
+        "sell": 0
+      },
+      "NVDA": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}
