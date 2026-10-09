@@ -38,9 +38,9 @@ Validation: 154 focused/adjacent tests passed locally and in CI, including 29 ow
 
 Deployed commit on OCI; verify with `ssh mtf-bot 'cd /home/ubuntu/mtf-bot && git log --oneline -1'`.
 Plan of record: `logs/design_records/co_audit_and_anomaly_2026-10-09.md` (build order at the end of section 6).
-**⏩ EXACT NEXT ACTION:** build item 1 (ETF map: DAMD; SNXX/SNDG/SNDU; SNDQ) through the gate, then item 2 (DRAM
-coverage), then the META defects (replay first). After the 2026-10-09 close: post-live audit of PR #531 and #532
-(`python3 .claude/preship/post_live_due.py`).
+Item 1 (ETF map) is PR #544; verify with `gh pr view 544 --json state -q .state`; captured output: `MERGED`.
+**⏩ EXACT NEXT ACTION:** build item 2 (DRAM coverage) next, then the META
+defects (replay first). After the 2026-10-09 close: post-live audits listed by `python3 .claude/preship/post_live_due.py`.
 
 ## ⏩ LATEST (2026-10-08 15:00 PT, Claude) — pick-up pointer
 
