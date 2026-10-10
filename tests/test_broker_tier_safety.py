@@ -55,6 +55,7 @@ class _Env:
         self.client.submit_order.side_effect = submit_side_effect
         self.client.get_open_position.return_value = types.SimpleNamespace(side="long")
         self.alert = mock.Mock()
+        self.slack = mock.Mock()
 
     def __enter__(self):
         def _cancel(oid):
@@ -67,7 +68,8 @@ class _Env:
             mock.patch.object(bk, "cancel_order", side_effect=_cancel),
             mock.patch.object(bk, "_floor_bound_stop_qty", side_effect=lambda s, q, sd, t: q),
             mock.patch.object(bk.time, "sleep"),
-            mock.patch.dict(sys.modules, {"alerts": types.SimpleNamespace(alert_gtc_failed=self.alert)}),
+            mock.patch.dict(sys.modules, {"alerts": types.SimpleNamespace(alert_gtc_failed=self.alert,
+                                                                          send_slack=self.slack)}),
         ]
         for p in self._ps:
             p.start()
@@ -295,6 +297,63 @@ class PartialCloseRecovery(unittest.TestCase):
             out = bk.partial_close_position("EWY", 2, tier="intraday")
         self.assertFalse(out)
         self.assertEqual(env.cancelled, [])
+
+
+class FullCloseRecovery(unittest.TestCase):
+    """Co-hold board M1 (2026-10-10): close_position's 40310000 retry cancels only the closing tier's orders."""
+
+    def test_swing_close_retry_cancels_own_tier_only(self):
+        with _Env([]) as env:
+            env.client.close_position.side_effect = [Exception(HELD), None]
+            out = bk.close_position("EWY", tier="intraday")
+        self.assertTrue(out)
+        self.assertEqual(env.cancelled, [IN_ID])                 # the DT- and untagged stops stay
+
+    def test_own_stop_cancelled_and_close_still_blocked_pages(self):
+        book = {IN_ID: BOOK[IN_ID], UN_ID: BOOK[UN_ID]}             # our stop + an untagged blocker
+        with _Env([], book=book) as env:
+            env.client.close_position.side_effect = [Exception(HELD), Exception(HELD)]
+            out = bk.close_position("EWY", tier="intraday")
+        self.assertFalse(out)
+        self.assertEqual(env.cancelled, [IN_ID])
+        env.slack.assert_called_once()
+        self.assertIn("NO broker stop", env.slack.call_args.args[0])
+
+    def test_close_retry_without_own_orders_cancels_nothing(self):
+        book = {DT_ID: BOOK[DT_ID], UN_ID: BOOK[UN_ID]}
+        with _Env([], book=book) as env:
+            env.client.close_position.side_effect = [Exception(HELD), Exception(HELD)]
+            out = bk.close_position("EWY", tier="intraday")
+        self.assertFalse(out)
+        self.assertEqual(env.cancelled, [])
+
+
+class PartialCloseDirection(unittest.TestCase):
+    """Co-hold board T2 (2026-10-10): a partial close states its lot side; a flipped net is refused."""
+
+    def test_flipped_net_is_refused(self):
+        with _Env([types.SimpleNamespace(id="x")]) as env:
+            env.client.get_open_position.return_value = types.SimpleNamespace(side="short")
+            out = bk.partial_close_position("EWY", 2, tier="daytrade", position_side="long")
+        self.assertFalse(out)
+        env.client.submit_order.assert_not_called()
+
+    def test_matching_side_closes(self):
+        with _Env([types.SimpleNamespace(id="x")]):
+            out = bk.partial_close_position("EWY", 2, tier="daytrade", position_side="long")
+        self.assertTrue(out)
+
+    def test_enum_sides_are_understood(self):
+        long_enum = types.SimpleNamespace(value="long")
+        with _Env([types.SimpleNamespace(id="x")]) as env:
+            env.client.get_open_position.return_value = types.SimpleNamespace(side=types.SimpleNamespace(value="long"))
+            self.assertTrue(bk.partial_close_position("EWY", 2, tier="daytrade", position_side=long_enum))
+
+    def test_no_side_keeps_old_behaviour(self):
+        with _Env([types.SimpleNamespace(id="x")]) as env:
+            env.client.get_open_position.return_value = types.SimpleNamespace(side="short")
+            out = bk.partial_close_position("EWY", 2, tier="daytrade")
+        self.assertTrue(out)
 
 
 class MarketOrderWashTrade(unittest.TestCase):

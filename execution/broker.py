@@ -200,9 +200,10 @@ def cancel_open_orders_for_symbol(symbol: str, only_tier: str | None = None) -> 
     hard rule): an order whose coid does NOT parse to `only_tier` — including an untagged / legacy /
     manually-placed order (tier_of_coid → None) — is NEVER cancelled by the filtered path; an
     unattributable order is not ours to cancel, and cancelling it would be worse than today's
-    blanket clobber. `only_tier=None` (the DEFAULT) preserves the legacy BLANKET cancel EXACTLY —
-    every existing caller is byte-for-byte unchanged, and the circuit-breaker full-liquidation
-    (Architecture Invariant #7) MUST keep passing None so it closes everything unconditionally.
+    blanket clobber. `only_tier=None` (the DEFAULT) preserves the legacy BLANKET cancel. Since 2026-10-10
+    (co-hold board M1) close_position passes its tier for every close, including safe_close_all's
+    circuit-breaker close of the Swing book: Invariant #7 governs which Swing trades it closes (no Bucket A
+    exemption), not cancelling another tier's (Day/QHM/F6) protective stop, which would sell that tier's lot.
     """
     orders = get_open_orders(symbol)
     if orders is None:
@@ -1724,7 +1725,8 @@ def _floor_bound_partial_qty_impl(symbol: str, qty: int, tier: str) -> int:
 
 
 def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
-                           *, _bypass_floor: bool = False, _return_order: bool = False):
+                           *, _bypass_floor: bool = False, _return_order: bool = False,
+                           position_side: "str | None" = None):
     """
     Close a specific quantity of an open position (partial exit).
     Used for taking first-target profits while letting remainder run.
@@ -1740,6 +1742,11 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
     (tracked or not) so the retry succeeds when the blocker is this tier's own.
     TIER-SAFETY (2026-10-08): it NEVER cancels another tier's order or an untagged/manual one
     (only_tier=tier for every tier) — a blocker that is not ours fails the close loudly instead.
+
+    `position_side` ("long"/"short", optional — co-hold board T2, 2026-10-10): the side of the LOT being reduced.
+    The order side is derived from the live net position; when the caller states its lot's side and the net has
+    flipped (e.g. an untagged trade turned a long net short), a "close long 2" would become a BUY that grows the
+    position. Given and mismatched -> refuse (False) and log critical. None keeps the old behaviour.
     """
     if qty < 1:
         logger.warning(f"[{symbol}] partial_close_position called with qty={qty} < 1 — skipping to prevent zero-share order.")
@@ -1763,6 +1770,15 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
         pos = client.get_open_position(symbol)
         if pos is None:
             logger.warning(f"[{symbol}] No open position for partial close")  # type: ignore[unreachable]
+            return False
+        _net_side = str(getattr(getattr(pos, "side", ""), "value", getattr(pos, "side", ""))).lower()
+        _lot_side = (str(getattr(position_side, "value", position_side)).lower()
+                     if position_side is not None else None)
+        if _lot_side is not None and _lot_side != _net_side:
+            logger.critical(
+                f"[{symbol}] partial close REFUSED ({tier}): the lot is {position_side} but the net position is "
+                f"{_net_side or 'unknown'} — reducing it would trade the other way. Nothing submitted."
+            )
             return False
         side = OrderSide.SELL if pos.side == "long" else OrderSide.BUY  # type: ignore[union-attr]
         _side_str = "sell" if pos.side == "long" else "buy"  # type: ignore[union-attr]
@@ -1882,7 +1898,7 @@ def submit_f6_trim(symbol: str, qty: int) -> bool:
     return partial_close_position(symbol, _bq, tier="forever6", _bypass_floor=True)
 
 
-def _raw_close_position(symbol: str) -> bool:
+def _raw_close_position(symbol: str, only_tier: "str | None" = None) -> bool:
     """
     Raw full close of the ENTIRE Alpaca position — NO tier / never-sell-floor
     awareness. This is the unguarded primitive; all normal exits should call
@@ -1895,6 +1911,11 @@ def _raw_close_position(symbol: str) -> bool:
     close_position() success and record_exit() — the new process reloads the
     tracker entry as open, tries to close again, and hits 'not found'. Treating
     'not found' as True lets the caller reach record_exit() and clean up state.
+
+    `only_tier` scopes the 40310000 (held_for_orders) recovery cancel to that tier's own orders (co-hold board
+    M1, 2026-10-10): the old blanket cancel freed a Day/QHM/F6 protective stop resting on the same symbol so the
+    retry could close every share — another tier's lot sold and its record left open. None keeps the legacy
+    blanket cancel (no caller passes None since close_position passes its tier).
     """
     client = _get_trading_client()
     try:
@@ -1920,11 +1941,12 @@ def _raw_close_position(symbol: str) -> bool:
             return True
         # Bug 4 fix: auto-cancel blocking orders on 40310000 and retry once.
         if "40310000" in err:
+            _scope = f"the {only_tier} tier's own" if only_tier else "all"
             logger.warning(
-                f"[{symbol}] close_position blocked (40310000 held_for_orders) — "
-                f"cancelling all open orders and retrying once."
+                f"[{symbol}] close_position blocked (40310000 held_for_orders) — cancelling "
+                f"{_scope} open orders and retrying once."
             )
-            freed = cancel_open_orders_for_symbol(symbol)
+            freed = cancel_open_orders_for_symbol(symbol, only_tier=only_tier)
             logger.info(f"[{symbol}] Freed {freed} blocking order(s). Retrying close…")
             try:
                 client.close_position(symbol)
@@ -1934,6 +1956,20 @@ def _raw_close_position(symbol: str) -> bool:
                 logger.error(
                     f"[{symbol}] close_position retry FAILED after 40310000 clear: {retry_e}"
                 )
+                if only_tier and freed > 0:
+                    # Our own stop was cancelled to free the shares, but another tier's / an untagged order still
+                    # holds them: the position may now have NO broker stop (cold-2nd 2026-10-10). Page.
+                    logger.critical(
+                        f"[{symbol}] {only_tier} close blocked by another tier's or an untagged order AFTER its own "
+                        f"stop was cancelled — the position may have NO broker stop. Check Alpaca now."
+                    )
+                    try:
+                        from alerts import send_slack
+                        send_slack(f":rotating_light: [{symbol}] {only_tier} exit blocked: its own stop was cancelled to "
+                                   f"free the shares, but another tier's or an untagged order still holds them — the "
+                                   f"position may have NO broker stop. Check Alpaca now. ({retry_e})")
+                    except Exception as _ae:
+                        logger.error(f"[{symbol}] blocked-close page failed: {_ae}")
                 return False
         logger.error(f"[{symbol}] Failed to close position: {e}")
         return False
@@ -1955,7 +1991,7 @@ def close_position(symbol: str, *, tier: str = "intraday") -> bool:
     """
     import config
     if not getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
-        return _raw_close_position(symbol)   # DORMANT — exact pre-4a behavior
+        return _raw_close_position(symbol, only_tier=tier)   # DORMANT floor; tier-scoped recovery cancel
     # Function-boundary never-raises wrapper (Reliability seat 2026-07-18): any unexpected
     # raise in the floor-aware body (e.g. a type-corrupt ledger qty making protected_floor
     # raise) fails CLOSED for a cached-protected symbol (page it) and OPEN (raw close) for a
@@ -1983,7 +2019,7 @@ def close_position(symbol: str, *, tier: str = "intraday") -> bool:
             f"[{symbol}] close_position({tier}): body raised, symbol not protected — raw "
             f"close (fail open): {e}"
         )
-        return _raw_close_position(symbol)
+        return _raw_close_position(symbol, only_tier=tier)
 
 
 def _close_position_impl(symbol: str, tier: str) -> bool:
@@ -2004,10 +2040,10 @@ def _close_position_impl(symbol: str, tier: str) -> bool:
                 f"symbol — refusing close to preserve the never-sell floor: {e}"
             )
             return False
-        return _raw_close_position(symbol)   # not protected → full close (fail open)
+        return _raw_close_position(symbol, only_tier=tier)   # not protected → full close (fail open)
 
     if _og.protected_floor(_ledger, symbol) <= _og._QTY_EPS:
-        return _raw_close_position(symbol)   # nothing to protect → full close
+        return _raw_close_position(symbol, only_tier=tier)   # nothing to protect → full close
 
     # Protected symbol → the guard needs the live Alpaca net qty.
     try:
@@ -2031,7 +2067,7 @@ def _close_position_impl(symbol: str, tier: str) -> bool:
         return False
     _q = int(_res.qty)
     if _q >= int(_net):
-        return _raw_close_position(symbol)   # full close approved
+        return _raw_close_position(symbol, only_tier=tier)   # full close approved
     logger.warning(
         f"[{symbol}] close_position({tier}): never-sell floor bounded close "
         f"{int(_net)}→{_q} share(s) ({_res.reason}) — preserving qhm/forever6 floor."
