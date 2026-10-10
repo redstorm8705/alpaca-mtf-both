@@ -84,7 +84,8 @@ _HALT_KEY = "_tier_halted_date"   # data-blind fail-closed halt; protected posit
 # Terminal entry-record states pruned after _STATE_TTL_DAYS (reliability: unbounded-growth leak +
 # rising fsync cost on the hot path). Non-terminal states are NEVER pruned (they gate re-entry).
 _TERMINAL_STATES = frozenset({"protected", "flattened_no_stop", "flatten_failed",
-                              "flattened_invalid_geometry", "submit_failed", "unfilled_cancelled"})
+                              "flattened_invalid_geometry", "submit_failed", "unfilled_cancelled",
+                              "setup_invalidated"})
 _STATE_TTL_DAYS = 3
 # Why the LAST place_entry on a symbol stopped at wire-time sizing (this process only). The runner reads it to route an
 # unaffordable stock to its ETF (CEO 2026-10-07: ETFs only when the stock is unaffordable). Cleared at each call.
@@ -2099,6 +2100,21 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if stop_px is None or (direction == "long" and stop_px >= limit_px) or \
                 (direction == "short" and stop_px <= limit_px):
             logger.warning("[%s] day-tier entry aborted — %s", symbol, room_why)
+            if "setup invalidated" in str(room_why):
+                # The last trade is already through this signal's stop: the setup failed. Record it so the same
+                # signal bar is not retried every 2 minutes until a print lands back inside the stop (losers audit
+                # 2026-10-09: AMZN's 09:30 signal aborted at 09:36 and 09:38, then entered at 09:40 and was stopped
+                # at 09:43). A later bar's signal is a new setup. No order ids, no track tag -> nothing else reads
+                # it as a position or a Track-B entry.
+                try:
+                    _st = _load_state()
+                    if key not in _st:
+                        _st[key] = {"state": "setup_invalidated", "symbol": symbol, "bar_id": bar_id,
+                                    "side": direction, "reason": str(room_why)[:200],
+                                    "ts": datetime.now(PT).isoformat()}
+                        _save_state(_st)
+                except Exception as _ie:  # noqa: BLE001 — only the retry guard is lost
+                    logger.warning("[%s] day-tier invalidated-setup record not saved: %s", symbol, _ie)
             return False
         logger.info("[%s] day-tier %s", symbol, room_why)
 
