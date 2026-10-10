@@ -219,10 +219,17 @@ def sync_once() -> dict:
         # state file RAISES (fail-closed) — caught by sync_once's try/except, leaving
         # the ledger at last-good rather than dropping a hold's floor to 0.
         qhm_holdings = get_quarterly_hold_quantities()
+        # Day -> Swing hand-overs (promotion / adopted Day lots) — execution/tier_transfers.py. An unreadable journal
+        # raises here, so the pass is skipped and the ledger stays at its last-good state (never re-attributed blind).
+        from execution.tier_transfers import load_transfers
+        transfers = load_transfers()
+        if transfers is None:
+            raise RuntimeError("tier transfer journal unreadable")
 
         stage = "sync"
         led = sync_ledger(fills, positions, coid_by_order_id=coid_map,
-                          qhm_holdings=qhm_holdings, positions_settled=positions_settled)
+                          qhm_holdings=qhm_holdings, positions_settled=positions_settled,
+                          transfers=transfers)
 
         stage = "instrument"
         elapsed = round(time.monotonic() - t0, 2)
