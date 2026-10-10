@@ -397,14 +397,19 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         notional_qty = math.floor(max(0.0, notional_room) / order_price)
         safe_qty = max(0, min(int(risk_qty), int(notional_qty)))
         if max_size is True:
-            # 10/10 MAXIMUM SIZE (Rafael CEO directive 2026-10-06): size to the account/exposure caps (every room
-            # above: global gross, day gross, buying power after the main-bot reserve, maintenance cushion, thin-
-            # name and single-name caps) instead of the per-trade risk basis; the Track-B budget cap below is
-            # skipped. Still bounded afterwards by the daily day-tier dollar budget in place_entry, the protective
+            # 10/10 MAXIMUM SIZE (Rafael CEO directive 2026-10-06): the conviction earns the LARGEST per-trade risk
+            # budget — the retained ceiling DAYTRADE_PER_TRADE_RISK_EQUITY_PCT instead of the 1.5% basis — sized to
+            # the STOP DISTANCE, then clamped by every account room (global gross, day gross, buying power after the
+            # main-bot reserve, maintenance cushion, thin-name and single-name caps); the Track-B budget cap below is
+            # skipped. CEO 2026-10-10: "no caps if the conviction is high and the stops are being respected" — a
+            # wider stop buys fewer shares at the same dollar risk (it used to size to notional only, so a wide stop
+            # multiplied the dollar risk). Still bounded by the daily dollar budget in place_entry, the protective
             # stop, the EOD force-flat and the 7% account kill.
-            safe_qty = max(0, int(notional_qty))
-            why = (f"MAX-SIZE (10/10): requested {requested_qty} → notional cap {notional_qty}sh "
-                   f"(risk-basis {risk_qty}sh not applied); rooms="
+            max_risk_qty = math.floor((risk_basis * risk_pct_ceiling * _rm) / stop_distance)
+            safe_qty = max(0, min(int(notional_qty), int(max_risk_qty)))
+            why = (f"MAX-SIZE (10/10): requested {requested_qty} → stop-distance {max_risk_qty}sh "
+                   f"(risk {risk_pct_ceiling * _rm:.2%}×${risk_basis:.0f}/stop ${stop_distance:.4f}), notional cap "
+                   f"{notional_qty}sh → wired {safe_qty}; rooms="
                    + ",".join(f"{k}:${v:.2f}" for k, v in rooms.items()))
             return safe_qty, why
         # TRACK-B EXPOSURE CAP (Track B Inc 2 Part 2, 2026-09-23; flag DAYTRADE_TRACK_B_CASH_ONLY). Track B's
@@ -778,15 +783,11 @@ def _room_stop(symbol: str, direction: str, limit_px: float, stop_px: float) -> 
                      else fallback_pct * live_ref)
         rt_room = _realtime_vol_room(symbol, k)
         rt_note = ""
-        # Cap the real-time contribution (board Harris+Thorp 2026-10-10): one halt-reopen / news bar must not set a
-        # 5-8% stop — on a 10/10 max-size entry (sized to notional caps, not stop distance) that multiplies the dollar
-        # risk. The cap never narrows the existing room.
-        max_pct = float(_cfg("DAYTRADE_ROOM_MAX_PCT", 0.0125))  # PROV:room-open-realtime-2026-10-10
-        if rt_room is not None and math.isfinite(max_pct) and max_pct > 0 and rt_room > max_pct * live_ref:
-            rt_note = f"; real-time room ${rt_room:.4f} capped at {max_pct:.2%} of price"
-            rt_room = max_pct * live_ref
+        # No percentage cap (CEO 2026-10-10: "no caps if the conviction is high and the stops are being respected"):
+        # every entry — the 10/10 max-size path included — is sized to its stop distance, so a wider room buys
+        # fewer shares at the same dollar risk.
         if rt_room is not None and rt_room > vol_floor:
-            rt_note += f"; real-time/open volatility raised the room ${vol_floor:.4f}->${rt_room:.4f}"
+            rt_note = f"; real-time/open volatility raised the room ${vol_floor:.4f}->${rt_room:.4f}"
             vol_floor = rt_room
         if direction == "long":
             need = round(min(e, live_ref) - vol_floor, 2)
