@@ -99,11 +99,28 @@ class MaxSize(unittest.TestCase):
         q, _ = self._q(False)
         self.assertLessEqual(q, 13)                       # $130 budget / $10
 
-    def test_max_size_uses_the_rooms(self):
+    def test_max_size_sizes_to_the_stop_distance(self):
         q, why = self._q(True)
         self.assertIn("MAX-SIZE", why)
-        # TSLL is non-deep: thin-name cap $1300 and single-name 65% x $2500 = $1625 -> $1300 / $10 = 130 sh
-        self.assertEqual(q, 130)
+        # 2% ceiling x $2500 / $0.40 stop = 124.99.. sh (float; floored like the risk-basis path), under the
+        # $1300 thin-name room (130 sh)
+        self.assertEqual(q, 124)
+
+    def test_max_size_wide_stop_buys_fewer_shares(self):
+        from execution import day_trade_manager as dtm
+        q, _ = dtm._bounded_entry_qty(
+            requested_qty=12, order_price=10.0, stop_price=9.0, equity=2500.0, open_trades={},
+            positions_by_symbol={}, buying_power=9000.0, maintenance_margin=0.0, maintenance_rate=0.5,
+            open_orders=[], risk_equity=2500.0, symbol="TSLL", track="B", track_budget=130.0, max_size=True)
+        self.assertEqual(q, 50)                           # $50 risk / $1.00 stop; dollar risk stays at 2%
+
+    def test_max_size_tight_stop_still_bounded_by_the_rooms(self):
+        from execution import day_trade_manager as dtm
+        q, _ = dtm._bounded_entry_qty(
+            requested_qty=12, order_price=10.0, stop_price=9.95, equity=2500.0, open_trades={},
+            positions_by_symbol={}, buying_power=9000.0, maintenance_margin=0.0, maintenance_rate=0.5,
+            open_orders=[], risk_equity=2500.0, symbol="TSLL", track="B", track_budget=130.0, max_size=True)
+        self.assertEqual(q, 130)                          # 1000 sh by risk, 130 sh by the thin-name room
 
     def test_max_size_still_fails_closed_on_bad_input(self):
         from execution import day_trade_manager as dtm

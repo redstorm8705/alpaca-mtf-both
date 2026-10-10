@@ -110,14 +110,11 @@ class OpenVolatilityRoom(unittest.TestCase):
         self.assertEqual(out, round(258.57 - 2.02, 2))
         self.assertIn("real-time/open volatility", why)
 
-    def test_realtime_room_is_capped_at_pct_of_price(self):
-        out, why, _q = _run(trade=258.57, atr=0.2966 / 1.5, limit=259.52, stop=258.24, rt=20.0)   # an 8% halt bar
-        self.assertEqual(out, round(258.57 - 0.0125 * 258.57, 2))
-        self.assertIn("capped at 1.25%", why)
-
-    def test_cap_never_narrows_the_existing_room(self):
-        out, _why, _q = _run(trade=722.61, atr=12.0, rt=50.0)    # existing 1.5 x 12 = 18 > 1.25% x 722.61 = 9.03
-        self.assertEqual(out, round(722.61 - 18.0, 2))
+    def test_no_percentage_cap_on_the_room(self):
+        # CEO 2026-10-10: no cap — the entry is sized to the stop distance instead (fewer shares, same dollar risk).
+        out, why, _q = _run(trade=258.57, atr=0.2966 / 1.5, limit=259.52, stop=258.24, rt=20.0)
+        self.assertEqual(out, round(258.57 - 20.0, 2))
+        self.assertNotIn("capped", why)
 
     def test_smaller_realtime_room_never_narrows(self):
         out, why, _q = _run(trade=722.61, rt=1.0)
