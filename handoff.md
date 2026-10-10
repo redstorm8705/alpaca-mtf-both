@@ -8,13 +8,13 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-10 evening, Claude signed) — co-hold guards #577/#578/#579/#581 deployed (OCI at 0599915)
+## ⏩ LATEST (2026-10-10 evening, Claude signed) — co-hold guards #577-#585 deployed (OCI at 884f70d)
 
 Same-direction co-hold (CEO rule) build: design record logs/design_records/same_direction_cohold_2026-10-10.md;
 per-PR detail in logs/tb_audit_log.md (2026-10-10 lines).
 
-**⏩ EXACT NEXT ACTION:** co-hold remaining, in order, each through the full gate: P1-P3 (design record "Required
-before the guard lifts"); T3 (Swing stop qty = own shares, e.g.
+**⏩ EXACT NEXT ACTION:** co-hold remaining, in order, each through the full gate: P3 (design record "Required
+before the guard lifts"; P1, P2, P4 shipped); T3 (Swing stop qty = own shares, e.g.
 orphan_manager ~L1790); D3 (bracket entry for co-held same-direction, ETF fallback on a wash reject); M2 (defer other
 tiers' adds while a Day lot is open); F5 (re-read ownership at submit); then lift the guard. Also: Monday 10/12
 post-live audits (#562-#579); QHM stop-qty reconcile (Codex branch); nightly autonomous_review fix.
