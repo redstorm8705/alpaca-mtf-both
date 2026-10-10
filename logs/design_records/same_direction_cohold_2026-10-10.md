@@ -81,3 +81,14 @@ MSFT 5 opposite-direction).
   orders (DT- parents + their nested untagged OCO legs, verified on 10/09 prod orders) minus today's Day -> Swing
   hand-overs. Fallback: the Day log claim. Both unreadable -> previous full close + page (deviation from the fork-1
   ruling, because the broker has no tracker quantity; put to the board seat).
+- R1 (startup Swing reconcile net of the Day claim): built 2026-10-10, branch claude/cohold-r1-reconcile. Board
+  McKinney+Taleb 2-0 APPROVE-WITH-CHANGES; in-diff change applied (claim unreadable -> never GROW the Swing book,
+  still bank a shrink).
+
+## Required before the guard lifts (board McKinney+Taleb on R1, 2026-10-10)
+- P1: fill_helpers._recover_fill / fetch_actual_fill_price must exclude DT- orders and their child legs. Otherwise a
+  Swing exit can be priced at a Day stop fill (RC-4 class).
+- P2: confirm the Swing tranche partial path (partial_close_position from exit_logic) is bounded like D1, so a
+  phantom Swing lot cannot sell Day shares.
+- P3: an overnight Day lot (failed force-flat) reads as claim 0 next morning (the claim is today-only). On a mismatch
+  with a 0 broker claim, cross-check the Day tier's open lots and page if they disagree.

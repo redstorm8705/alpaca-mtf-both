@@ -72,5 +72,100 @@ class ReconcileSkipsDayTier(unittest.TestCase):
         self.assertNotIn("EWY", tracker.open_trades)
 
 
+class ReconcileCoholdR1(unittest.TestCase):
+    """Co-hold R1 (2026-10-10): the startup size reconcile compares the Swing book with net minus the Day tier's
+    same-day claim, so a co-held Day lot is never absorbed into (or banked out of) the Swing tracker."""
+
+    def _run(self, net, trk_qty, claim, direction="long"):
+        from types import SimpleNamespace
+        pos = SimpleNamespace(symbol="NVDA", qty=str(net), avg_entry_price="180.00")
+        trade = {"symbol": "NVDA", "direction": direction, "qty": trk_qty, "qty_remaining": trk_qty,
+                 "entry_price": 180.0, "partial_pnl": 0.0}
+        tracker = SimpleNamespace(open_trades={"NVDA": trade}, closed_trades=[], traded_today=set(),
+                                  _save_log=lambda: None)
+        slack = mock.Mock()
+        fill = mock.Mock(return_value=170.0)
+        with mock.patch.object(om, "get_open_positions", return_value=[pos]), \
+                mock.patch.object(om, "_get_qhm_syms", return_value=frozenset()), \
+                mock.patch.object(om, "_get_forever6_syms", return_value=set()), \
+                mock.patch.object(om, "_get_breakout_syms", return_value=set()), \
+                mock.patch.object(om, "_get_daytrade_syms", return_value=set()), \
+                mock.patch.object(om, "_reconcile_day_claim", return_value=claim), \
+                mock.patch.object(om, "fetch_actual_fill_price", fill), \
+                mock.patch.object(om, "submit_gtc_stop_order", side_effect=AssertionError("no stop")), \
+                mock.patch.object(om, "send_slack", slack):
+            om.reconcile_positions(tracker)
+        return trade, slack, fill
+
+    def test_day_lot_is_not_absorbed(self):
+        trade, slack, fill = self._run(net=10, trk_qty=7, claim=3.0)
+        self.assertEqual(trade["qty_remaining"], 7)
+        fill.assert_not_called()
+        slack.assert_not_called()
+
+    def test_real_swing_shrink_is_banked_net_of_day(self):
+        trade, slack, fill = self._run(net=8, trk_qty=7, claim=3.0)      # Swing lost 2 externally
+        self.assertEqual(trade["qty_remaining"], 5)
+        self.assertEqual(trade["partial_pnl"], -20.0)                    # (170-180) x 2
+
+    def test_short_cohold(self):
+        trade, slack, fill = self._run(net=-6, trk_qty=4, claim=-2.0, direction="short")
+        self.assertEqual(trade["qty_remaining"], 4)
+        self.assertEqual(trade["direction"], "short")
+
+    def test_no_day_lot_keeps_old_behaviour(self):
+        trade, slack, fill = self._run(net=10, trk_qty=7, claim=0.0)
+        self.assertEqual(trade["qty_remaining"], 10)
+
+    def test_unreadable_claim_never_grows_swing_and_pages(self):
+        trade, slack, fill = self._run(net=10, trk_qty=7, claim=None)
+        self.assertEqual(trade["qty_remaining"], 7)
+        slack.assert_called_once()
+
+    def test_unreadable_claim_still_banks_a_shrink(self):
+        trade, slack, fill = self._run(net=5, trk_qty=7, claim=None)
+        self.assertEqual(trade["qty_remaining"], 5)
+        self.assertEqual(trade["partial_pnl"], -20.0)
+        slack.assert_called_once()
+
+    def test_all_day_shares_leaves_swing_unchanged_and_pages(self):
+        trade, slack, fill = self._run(net=3, trk_qty=7, claim=3.0)
+        self.assertEqual(trade["qty_remaining"], 7)
+        fill.assert_not_called()
+        slack.assert_called_once()
+
+    def test_opposite_day_lot_never_flips_swing(self):
+        trade, slack, fill = self._run(net=-3, trk_qty=7, claim=-10.0)   # Swing long 7 + Day short 10
+        self.assertEqual(trade["direction"], "long")
+        self.assertEqual(trade["qty_remaining"], 7)
+        slack.assert_called_once()
+
+    def test_day_lot_masking_a_swing_loss_is_banked(self):
+        # cold-2nd round 2: tracker 7, Day +3, net 7 -> Swing really holds 4; the 3 lost shares are banked.
+        trade, slack, fill = self._run(net=7, trk_qty=7, claim=3.0)
+        self.assertEqual(trade["qty_remaining"], 4)
+        self.assertEqual(trade["partial_pnl"], -30.0)
+
+    def test_matching_book_with_unreadable_claim_is_quiet(self):
+        trade, slack, fill = self._run(net=7, trk_qty=7, claim=None)
+        self.assertEqual(trade["qty_remaining"], 7)
+        slack.assert_not_called()
+
+
+class ReconcileDayClaimSource(unittest.TestCase):
+    def test_broker_first_then_day_log(self):
+        from types import SimpleNamespace
+        with mock.patch("execution.broker._day_tier_claim", return_value=2.0):
+            self.assertEqual(om._reconcile_day_claim("NVDA"), 2.0)
+        snap = SimpleNamespace(errors=(), claimed_qty=lambda s, t: 4.0)
+        with mock.patch("execution.broker._day_tier_claim", return_value=None), \
+                mock.patch("execution.ownership_snapshot.build_ownership_snapshot", return_value=snap):
+            self.assertEqual(om._reconcile_day_claim("NVDA"), 4.0)
+        bad = SimpleNamespace(errors=("daytrade_log:ValueError",), claimed_qty=lambda s, t: 0.0)
+        with mock.patch("execution.broker._day_tier_claim", return_value=None), \
+                mock.patch("execution.ownership_snapshot.build_ownership_snapshot", return_value=bad):
+            self.assertIsNone(om._reconcile_day_claim("NVDA"))
+
+
 if __name__ == "__main__":
     unittest.main()
