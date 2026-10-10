@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-10-09
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `QuarterlyHoldManager: NVDA tranche 1 submit error: main.<locals>._QHMBroker.submit_limit_order() got an unexpected keyword argument 'client_order_id'` | NVDA
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** The closed trades (AAPL, AMZN, SNXX) show P&L signs consistent with the entry/exit prices.
+*   **Correlation:** All closed trades had a score of 0/12. The bot is currently taking entries with 0-score, which is a significant failure in signal quality control, as `MIN_LONG_SCORE` and `MIN_SHORT_SCORE` are set to 8.
+*   **Stop-hit rate:** 0% stops hit, but 3/3 closed trades were losses. This suggests the exits were triggered by non-stop logic (likely manual or time-based) while the positions were underwater.
+
+### ENTRY QUALITY
+*   **Systematic Failure:** The bot is executing trades with a score of 0/12. Per `BOT CONFIG CONSTANTS`, `MIN_LONG_SCORE` and `MIN_SHORT_SCORE` are 8. The entry logic is failing to gate against the `score` variable, leading to poor-quality entries that result in immediate losses.
+
+### EXIT QUALITY
+*   **No issues** (Exits appear to be manual/time-based given the lack of stop-hit events).
+
+### MRI ALIGNMENT
+*   **Regime Mismatch:** The `macro_risk_index` reported a stale cache/failure for VIX and JPY at 17:28:21 ET. While it recovered, the reliance on `yfinance` fallbacks during market hours introduces latency and potential inaccuracy in risk-off gating.
+
+### LOG ANOMALIES
+*   `WARNING | macro_risk_index | MRI VIX: FMP None + cache stale (age=infs)`: Indicates a failure in the primary data feed for risk assessment.
+*   `WARNING | execution.quarterly_hold_manager | QuarterlyHoldManager: NVDA tranche 1 submit error`: This is a code-level exception (TypeError) preventing order execution.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | `client_order_id` argument mismatch in `_QHMBroker` |** The `QuarterlyHoldManager` is passing an invalid keyword argument to the broker submission method, causing a hard failure in order execution for NVDA.
+*   **ALPHA ISSUE | HIGH | Entry logic ignoring `MIN_LONG/SHORT_SCORE` |** The bot is entering trades with a score of 0/12 despite the config requiring a minimum of 8. This indicates a bypass or failure in the `strategy.signal_generator` or `execution.entry_logic` gate.
+*   **INFRASTRUCTURE | MEDIUM | `macro_risk_index` stale cache |** The MRI module is failing to refresh data, relying on stale fallbacks which could lead to incorrect sizing or entry decisions during high-volatility events.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Fix `_QHMBroker.submit_limit_order` in `execution/quarterly_hold_manager.py` to remove the `client_order_id` argument or update the method signature to accept it.
+2.  **ALPHA:** Audit `execution.entry_logic` to determine why the `score` gate (MIN_SCORE=8) is being bypassed for 0-score signals.
+3.  **INFRASTRUCTURE:** Implement a more robust fallback for `macro_risk_index` data feeds to prevent stale cache errors during RTH.

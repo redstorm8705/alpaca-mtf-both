@@ -1,0 +1,2172 @@
+{
+  "date": "2026-10-09",
+  "generated": "2026-10-09 01:30 PM PT",
+  "gex": {
+    "snapshots_today": 26,
+    "label_distribution": {
+      "SPY": {
+        "NEAR-FLIP": 12,
+        "POSITIVE": 14
+      },
+      "QQQ": {
+        "POSITIVE": 10,
+        "NEAR-FLIP": 16
+      }
+    },
+    "timeline": [
+      {
+        "ts": "2026-10-09 06:34 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 904.9,
+          "flip": 790.0,
+          "valid": 609
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1316.4,
+          "flip": 760.0,
+          "valid": 843
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 375.9,
+          "flip": 340.0,
+          "valid": 123
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 227.0,
+          "flip": 257.5,
+          "valid": 89
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 208.1,
+          "flip": 350.0,
+          "valid": 107
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 349.3,
+          "flip": 700.0,
+          "valid": 310
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 655.4,
+          "flip": 510.0,
+          "valid": 141
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 369.0,
+          "flip": 230.0,
+          "valid": 143
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 201.1,
+          "flip": 372.5,
+          "valid": 58
+        },
+        "MU": {
+          "label": "POSITIVE",
+          "raw_gex_m": 104.9,
+          "flip": 1080.0,
+          "valid": 368
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -181.3,
+          "flip": null,
+          "valid": 132
+        },
+        "DRAM": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -3.4,
+          "flip": null,
+          "valid": 87
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -13.9,
+          "flip": null,
+          "valid": 81
+        }
+      },
+      {
+        "ts": "2026-10-09 06:50 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -310.9,
+          "flip": 795.0,
+          "valid": 627
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 409.5,
+          "flip": 765.0,
+          "valid": 824
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 376.3,
+          "flip": 340.0,
+          "valid": 138
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 236.2,
+          "flip": 257.5,
+          "valid": 115
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 282.6,
+          "flip": 350.0,
+          "valid": 146
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 301.3,
+          "flip": 700.0,
+          "valid": 311
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 671.0,
+          "flip": 510.0,
+          "valid": 150
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 339.6,
+          "flip": null,
+          "valid": 146
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 158.9,
+          "flip": 380.0,
+          "valid": 197
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 72.8,
+          "flip": 1082.5,
+          "valid": 399
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -28.9,
+          "flip": null,
+          "valid": 182
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -5.4,
+          "flip": null,
+          "valid": 85
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -12.9,
+          "flip": null,
+          "valid": 81
+        }
+      },
+      {
+        "ts": "2026-10-09 07:04 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -77.3,
+          "flip": 790.0,
+          "valid": 706
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 398.0,
+          "flip": 765.0,
+          "valid": 823
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 406.2,
+          "flip": 340.0,
+          "valid": 143
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 252.4,
+          "flip": 255.0,
+          "valid": 96
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 264.9,
+          "flip": 350.0,
+          "valid": 125
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 285.3,
+          "flip": 700.0,
+          "valid": 316
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 669.5,
+          "flip": 510.0,
+          "valid": 183
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 353.0,
+          "flip": null,
+          "valid": 155
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 143.8,
+          "flip": 380.0,
+          "valid": 251
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 82.0,
+          "flip": 1080.0,
+          "valid": 432
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -37.5,
+          "flip": null,
+          "valid": 185
+        },
+        "DRAM": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -4.1,
+          "flip": null,
+          "valid": 82
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -12.9,
+          "flip": null,
+          "valid": 81
+        }
+      },
+      {
+        "ts": "2026-10-09 07:18 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 685.8,
+          "flip": 790.0,
+          "valid": 666
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 437.7,
+          "flip": 765.0,
+          "valid": 790
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 417.1,
+          "flip": 340.0,
+          "valid": 119
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 238.5,
+          "flip": 257.5,
+          "valid": 92
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 291.7,
+          "flip": 350.0,
+          "valid": 113
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 302.8,
+          "flip": 700.0,
+          "valid": 300
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 660.4,
+          "flip": 510.0,
+          "valid": 148
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 336.7,
+          "flip": null,
+          "valid": 163
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 157.8,
+          "flip": 382.5,
+          "valid": 230
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 65.6,
+          "flip": 1080.0,
+          "valid": 438
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -36.9,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -6.7,
+          "flip": null,
+          "valid": 85
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -18.1,
+          "flip": null,
+          "valid": 89
+        }
+      },
+      {
+        "ts": "2026-10-09 07:34 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 733.4,
+          "flip": 790.0,
+          "valid": 676
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 612.1,
+          "flip": 760.0,
+          "valid": 800
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 442.0,
+          "flip": 340.0,
+          "valid": 131
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 229.6,
+          "flip": 255.0,
+          "valid": 117
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 247.4,
+          "flip": 350.0,
+          "valid": 159
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 337.9,
+          "flip": 700.0,
+          "valid": 303
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 731.1,
+          "flip": 510.0,
+          "valid": 196
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 367.1,
+          "flip": null,
+          "valid": 160
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 158.8,
+          "flip": 382.5,
+          "valid": 258
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 54.3,
+          "flip": null,
+          "valid": 425
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -36.9,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -7.3,
+          "flip": null,
+          "valid": 90
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -21.7,
+          "flip": null,
+          "valid": 77
+        }
+      },
+      {
+        "ts": "2026-10-09 07:48 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 520.4,
+          "flip": 790.0,
+          "valid": 662
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 485.9,
+          "flip": 765.0,
+          "valid": 841
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 443.7,
+          "flip": 340.0,
+          "valid": 131
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 251.1,
+          "flip": 257.5,
+          "valid": 94
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 238.8,
+          "flip": 350.0,
+          "valid": 151
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 329.2,
+          "flip": 700.0,
+          "valid": 289
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 706.9,
+          "flip": 510.0,
+          "valid": 155
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 339.7,
+          "flip": null,
+          "valid": 153
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 166.3,
+          "flip": 382.5,
+          "valid": 258
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 2.2,
+          "flip": null,
+          "valid": 443
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -36.9,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -7.1,
+          "flip": null,
+          "valid": 76
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -10.0,
+          "flip": null,
+          "valid": 98
+        }
+      },
+      {
+        "ts": "2026-10-09 08:03 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 1310.3,
+          "flip": 786.0,
+          "valid": 647
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 808.1,
+          "flip": 760.0,
+          "valid": 818
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 496.2,
+          "flip": 340.0,
+          "valid": 121
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 286.0,
+          "flip": 255.0,
+          "valid": 111
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 264.7,
+          "flip": 350.0,
+          "valid": 138
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 340.8,
+          "flip": 700.0,
+          "valid": 305
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 774.3,
+          "flip": 510.0,
+          "valid": 190
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 347.6,
+          "flip": null,
+          "valid": 162
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 168.5,
+          "flip": 380.0,
+          "valid": 271
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 2.2,
+          "flip": null,
+          "valid": 443
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -36.9,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -8.0,
+          "flip": null,
+          "valid": 82
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -11.7,
+          "flip": null,
+          "valid": 88
+        }
+      },
+      {
+        "ts": "2026-10-09 08:19 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1578.5,
+          "flip": 786.0,
+          "valid": 589
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 556.8,
+          "flip": 762.0,
+          "valid": 799
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 478.0,
+          "flip": 340.0,
+          "valid": 126
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 281.1,
+          "flip": 257.5,
+          "valid": 103
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 251.5,
+          "flip": 350.0,
+          "valid": 153
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 316.2,
+          "flip": 700.0,
+          "valid": 309
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 749.9,
+          "flip": 510.0,
+          "valid": 157
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 340.2,
+          "flip": null,
+          "valid": 155
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 156.3,
+          "flip": 380.0,
+          "valid": 254
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -3.7,
+          "flip": null,
+          "valid": 436
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -36.9,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -8.4,
+          "flip": null,
+          "valid": 81
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -14.8,
+          "flip": null,
+          "valid": 88
+        }
+      },
+      {
+        "ts": "2026-10-09 08:34 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 497.7,
+          "flip": 788.0,
+          "valid": 686
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 470.4,
+          "flip": 765.0,
+          "valid": 842
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 493.4,
+          "flip": 340.0,
+          "valid": 138
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 292.5,
+          "flip": 257.5,
+          "valid": 109
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 257.1,
+          "flip": 350.0,
+          "valid": 146
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 299.6,
+          "flip": 700.0,
+          "valid": 290
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 787.4,
+          "flip": 510.0,
+          "valid": 189
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 341.5,
+          "flip": null,
+          "valid": 146
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 124.2,
+          "flip": 382.5,
+          "valid": 274
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -16.4,
+          "flip": null,
+          "valid": 433
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -36.9,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -7.5,
+          "flip": null,
+          "valid": 87
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -10.5,
+          "flip": null,
+          "valid": 93
+        }
+      },
+      {
+        "ts": "2026-10-09 08:50 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 1073.7,
+          "flip": 787.0,
+          "valid": 576
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 649.4,
+          "flip": 760.0,
+          "valid": 821
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 509.5,
+          "flip": 340.0,
+          "valid": 121
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 301.5,
+          "flip": 255.0,
+          "valid": 102
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 301.9,
+          "flip": 350.0,
+          "valid": 133
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 332.5,
+          "flip": 700.0,
+          "valid": 291
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 736.9,
+          "flip": 510.0,
+          "valid": 160
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 340.5,
+          "flip": null,
+          "valid": 152
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 137.4,
+          "flip": 380.0,
+          "valid": 239
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 13.2,
+          "flip": null,
+          "valid": 444
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -35.4,
+          "flip": null,
+          "valid": 180
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -7.9,
+          "flip": null,
+          "valid": 82
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -10.5,
+          "flip": null,
+          "valid": 93
+        }
+      },
+      {
+        "ts": "2026-10-09 09:05 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 1174.8,
+          "flip": 786.0,
+          "valid": 575
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 816.6,
+          "flip": 760.0,
+          "valid": 749
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 499.9,
+          "flip": 340.0,
+          "valid": 123
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 313.6,
+          "flip": 255.0,
+          "valid": 107
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 311.3,
+          "flip": 350.0,
+          "valid": 124
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 337.5,
+          "flip": 700.0,
+          "valid": 292
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 746.7,
+          "flip": null,
+          "valid": 167
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 326.7,
+          "flip": null,
+          "valid": 154
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 144.6,
+          "flip": 380.0,
+          "valid": 217
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 14.6,
+          "flip": null,
+          "valid": 428
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -35.4,
+          "flip": null,
+          "valid": 180
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -8.1,
+          "flip": null,
+          "valid": 88
+        },
+        "EWY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -2.7,
+          "flip": 175.0,
+          "valid": 89
+        }
+      },
+      {
+        "ts": "2026-10-09 09:21 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1774.9,
+          "flip": 785.0,
+          "valid": 611
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 920.6,
+          "flip": 760.0,
+          "valid": 834
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 471.1,
+          "flip": 340.0,
+          "valid": 115
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 306.6,
+          "flip": 255.0,
+          "valid": 106
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 329.9,
+          "flip": 350.0,
+          "valid": 143
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 361.9,
+          "flip": 700.0,
+          "valid": 300
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 758.1,
+          "flip": null,
+          "valid": 189
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 330.6,
+          "flip": null,
+          "valid": 151
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 144.8,
+          "flip": 380.0,
+          "valid": 246
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 25.2,
+          "flip": null,
+          "valid": 453
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -35.4,
+          "flip": null,
+          "valid": 180
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -8.3,
+          "flip": null,
+          "valid": 86
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -11.5,
+          "flip": null,
+          "valid": 92
+        }
+      },
+      {
+        "ts": "2026-10-09 09:37 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1651.4,
+          "flip": 785.0,
+          "valid": 612
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 797.9,
+          "flip": 760.0,
+          "valid": 804
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 507.4,
+          "flip": 340.0,
+          "valid": 130
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 321.3,
+          "flip": 257.5,
+          "valid": 112
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 320.6,
+          "flip": 350.0,
+          "valid": 162
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 324.7,
+          "flip": 700.0,
+          "valid": 280
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 826.9,
+          "flip": null,
+          "valid": 183
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 307.0,
+          "flip": null,
+          "valid": 153
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 135.2,
+          "flip": 380.0,
+          "valid": 268
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 18.6,
+          "flip": null,
+          "valid": 453
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -42.1,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -6.9,
+          "flip": null,
+          "valid": 90
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -14.7,
+          "flip": null,
+          "valid": 91
+        }
+      },
+      {
+        "ts": "2026-10-09 09:52 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2210.0,
+          "flip": 785.0,
+          "valid": 602
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 939.1,
+          "flip": 760.0,
+          "valid": 786
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 530.7,
+          "flip": 340.0,
+          "valid": 125
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 312.6,
+          "flip": 257.5,
+          "valid": 110
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 329.0,
+          "flip": 350.0,
+          "valid": 156
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 356.3,
+          "flip": 700.0,
+          "valid": 261
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 794.3,
+          "flip": null,
+          "valid": 172
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 307.6,
+          "flip": null,
+          "valid": 149
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 149.6,
+          "flip": 380.0,
+          "valid": 256
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 39.3,
+          "flip": null,
+          "valid": 447
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -42.1,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -6.6,
+          "flip": null,
+          "valid": 92
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -14.0,
+          "flip": null,
+          "valid": 83
+        }
+      },
+      {
+        "ts": "2026-10-09 10:08 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 1012.2,
+          "flip": 785.0,
+          "valid": 661
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 664.7,
+          "flip": 760.0,
+          "valid": 833
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 518.2,
+          "flip": 340.0,
+          "valid": 130
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 319.3,
+          "flip": 255.0,
+          "valid": 130
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 300.1,
+          "flip": 350.0,
+          "valid": 163
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 358.0,
+          "flip": 700.0,
+          "valid": 301
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 753.5,
+          "flip": null,
+          "valid": 188
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 292.9,
+          "flip": null,
+          "valid": 147
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 145.1,
+          "flip": 380.0,
+          "valid": 240
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 21.0,
+          "flip": null,
+          "valid": 442
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -42.1,
+          "flip": null,
+          "valid": 177
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -8.2,
+          "flip": null,
+          "valid": 83
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -14.0,
+          "flip": null,
+          "valid": 83
+        }
+      },
+      {
+        "ts": "2026-10-09 10:24 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1861.2,
+          "flip": 785.0,
+          "valid": 635
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 839.8,
+          "flip": 760.0,
+          "valid": 805
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 528.2,
+          "flip": 340.0,
+          "valid": 138
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 275.0,
+          "flip": 257.5,
+          "valid": 127
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 279.4,
+          "flip": 350.0,
+          "valid": 141
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 348.0,
+          "flip": 700.0,
+          "valid": 297
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 828.6,
+          "flip": 510.0,
+          "valid": 204
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 329.9,
+          "flip": null,
+          "valid": 157
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 137.0,
+          "flip": 382.5,
+          "valid": 269
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 37.4,
+          "flip": null,
+          "valid": 458
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -39.6,
+          "flip": null,
+          "valid": 186
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -5.7,
+          "flip": null,
+          "valid": 91
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -12.4,
+          "flip": null,
+          "valid": 97
+        }
+      },
+      {
+        "ts": "2026-10-09 10:39 AM PT",
+        "SPY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 863.7,
+          "flip": 785.0,
+          "valid": 622
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 796.1,
+          "flip": 760.0,
+          "valid": 813
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 533.8,
+          "flip": 340.0,
+          "valid": 123
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 286.2,
+          "flip": 257.5,
+          "valid": 110
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 267.6,
+          "flip": 350.0,
+          "valid": 143
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 292.1,
+          "flip": 700.0,
+          "valid": 269
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 826.2,
+          "flip": 510.0,
+          "valid": 203
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 315.0,
+          "flip": null,
+          "valid": 160
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 132.7,
+          "flip": 380.0,
+          "valid": 268
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 42.6,
+          "flip": null,
+          "valid": 437
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -43.2,
+          "flip": null,
+          "valid": 191
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -6.1,
+          "flip": null,
+          "valid": 88
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -15.0,
+          "flip": null,
+          "valid": 96
+        }
+      },
+      {
+        "ts": "2026-10-09 10:55 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2017.0,
+          "flip": 785.0,
+          "valid": 582
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 817.7,
+          "flip": 760.0,
+          "valid": 783
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 534.1,
+          "flip": 340.0,
+          "valid": 122
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 291.2,
+          "flip": 255.0,
+          "valid": 110
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 272.6,
+          "flip": 350.0,
+          "valid": 129
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 301.7,
+          "flip": 700.0,
+          "valid": 297
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 815.0,
+          "flip": null,
+          "valid": 181
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 322.5,
+          "flip": null,
+          "valid": 153
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 134.6,
+          "flip": 380.0,
+          "valid": 245
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 32.7,
+          "flip": null,
+          "valid": 452
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -43.2,
+          "flip": null,
+          "valid": 191
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -5.9,
+          "flip": null,
+          "valid": 81
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -14.3,
+          "flip": null,
+          "valid": 95
+        }
+      },
+      {
+        "ts": "2026-10-09 11:11 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2281.6,
+          "flip": 785.0,
+          "valid": 559
+        },
+        "QQQ": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 850.4,
+          "flip": 760.0,
+          "valid": 756
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 532.7,
+          "flip": 340.0,
+          "valid": 112
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 321.4,
+          "flip": 257.5,
+          "valid": 110
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 244.5,
+          "flip": 350.0,
+          "valid": 156
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 323.4,
+          "flip": 700.0,
+          "valid": 299
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 803.8,
+          "flip": 510.0,
+          "valid": 189
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 305.6,
+          "flip": null,
+          "valid": 154
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 136.1,
+          "flip": 380.0,
+          "valid": 267
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 51.7,
+          "flip": null,
+          "valid": 445
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -43.2,
+          "flip": null,
+          "valid": 191
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -8.2,
+          "flip": null,
+          "valid": 83
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -16.4,
+          "flip": null,
+          "valid": 83
+        }
+      },
+      {
+        "ts": "2026-10-09 11:22 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2246.5,
+          "flip": 785.0,
+          "valid": 568
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1027.8,
+          "flip": 760.0,
+          "valid": 785
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 583.5,
+          "flip": 340.0,
+          "valid": 125
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 300.7,
+          "flip": 255.0,
+          "valid": 96
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 265.8,
+          "flip": 350.0,
+          "valid": 141
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 314.0,
+          "flip": 700.0,
+          "valid": 321
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 745.1,
+          "flip": null,
+          "valid": 157
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 276.3,
+          "flip": null,
+          "valid": 154
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 139.6,
+          "flip": 380.0,
+          "valid": 261
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 54.8,
+          "flip": null,
+          "valid": 441
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -43.2,
+          "flip": null,
+          "valid": 191
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -6.9,
+          "flip": null,
+          "valid": 87
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -16.0,
+          "flip": null,
+          "valid": 85
+        }
+      },
+      {
+        "ts": "2026-10-09 11:37 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2150.5,
+          "flip": 785.0,
+          "valid": 575
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1019.9,
+          "flip": 760.0,
+          "valid": 805
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 569.9,
+          "flip": 340.0,
+          "valid": 100
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 310.9,
+          "flip": 255.0,
+          "valid": 108
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 265.8,
+          "flip": 350.0,
+          "valid": 151
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 283.7,
+          "flip": 700.0,
+          "valid": 289
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 772.5,
+          "flip": null,
+          "valid": 149
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 319.0,
+          "flip": null,
+          "valid": 157
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 142.6,
+          "flip": 380.0,
+          "valid": 248
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 47.9,
+          "flip": null,
+          "valid": 440
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -45.2,
+          "flip": 1550.0,
+          "valid": 190
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -6.5,
+          "flip": null,
+          "valid": 85
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -16.0,
+          "flip": null,
+          "valid": 85
+        }
+      },
+      {
+        "ts": "2026-10-09 11:53 AM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2548.8,
+          "flip": 785.0,
+          "valid": 630
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1219.4,
+          "flip": 760.0,
+          "valid": 806
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 602.8,
+          "flip": 340.0,
+          "valid": 103
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 315.2,
+          "flip": 255.0,
+          "valid": 108
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 263.7,
+          "flip": 350.0,
+          "valid": 139
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 302.6,
+          "flip": 700.0,
+          "valid": 290
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 855.4,
+          "flip": null,
+          "valid": 148
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 310.7,
+          "flip": null,
+          "valid": 154
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 148.3,
+          "flip": 380.0,
+          "valid": 236
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 43.5,
+          "flip": null,
+          "valid": 448
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -45.2,
+          "flip": 1550.0,
+          "valid": 190
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -8.2,
+          "flip": null,
+          "valid": 84
+        },
+        "EWY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -6.4,
+          "flip": 175.0,
+          "valid": 84
+        }
+      },
+      {
+        "ts": "2026-10-09 12:09 PM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2618.0,
+          "flip": 785.0,
+          "valid": 613
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1108.1,
+          "flip": 760.0,
+          "valid": 817
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 622.9,
+          "flip": 340.0,
+          "valid": 108
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 318.6,
+          "flip": 257.5,
+          "valid": 113
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 267.3,
+          "flip": 350.0,
+          "valid": 148
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 322.3,
+          "flip": 700.0,
+          "valid": 307
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 849.9,
+          "flip": null,
+          "valid": 182
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 327.4,
+          "flip": null,
+          "valid": 149
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 148.7,
+          "flip": 380.0,
+          "valid": 253
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 6.3,
+          "flip": null,
+          "valid": 449
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -47.1,
+          "flip": 1550.0,
+          "valid": 186
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -5.2,
+          "flip": null,
+          "valid": 82
+        },
+        "EWY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -6.4,
+          "flip": 175.0,
+          "valid": 84
+        }
+      },
+      {
+        "ts": "2026-10-09 12:24 PM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2892.4,
+          "flip": 785.0,
+          "valid": 564
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1170.0,
+          "flip": 760.0,
+          "valid": 757
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 665.5,
+          "flip": 340.0,
+          "valid": 130
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 327.0,
+          "flip": 257.5,
+          "valid": 92
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 258.3,
+          "flip": 350.0,
+          "valid": 135
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 320.6,
+          "flip": 700.0,
+          "valid": 300
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 862.7,
+          "flip": null,
+          "valid": 194
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 331.1,
+          "flip": null,
+          "valid": 151
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 149.4,
+          "flip": 380.0,
+          "valid": 244
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 17.9,
+          "flip": null,
+          "valid": 427
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -47.1,
+          "flip": 1550.0,
+          "valid": 186
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -6.7,
+          "flip": null,
+          "valid": 84
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -13.5,
+          "flip": null,
+          "valid": 88
+        }
+      },
+      {
+        "ts": "2026-10-09 12:40 PM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2457.5,
+          "flip": 785.0,
+          "valid": 665
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 960.8,
+          "flip": 760.0,
+          "valid": 825
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 585.6,
+          "flip": 340.0,
+          "valid": 133
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 325.1,
+          "flip": 257.5,
+          "valid": 87
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 264.4,
+          "flip": 350.0,
+          "valid": 134
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 294.7,
+          "flip": 700.0,
+          "valid": 298
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 816.0,
+          "flip": null,
+          "valid": 182
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 321.6,
+          "flip": null,
+          "valid": 156
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 148.0,
+          "flip": 380.0,
+          "valid": 271
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 1.9,
+          "flip": null,
+          "valid": 437
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -47.1,
+          "flip": 1550.0,
+          "valid": 186
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -6.5,
+          "flip": null,
+          "valid": 77
+        },
+        "EWY": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -12.6,
+          "flip": null,
+          "valid": 92
+        }
+      },
+      {
+        "ts": "2026-10-09 12:55 PM PT",
+        "SPY": {
+          "label": "POSITIVE",
+          "raw_gex_m": 2394.3,
+          "flip": 785.0,
+          "valid": 617
+        },
+        "QQQ": {
+          "label": "POSITIVE",
+          "raw_gex_m": 1109.0,
+          "flip": 760.0,
+          "valid": 762
+        },
+        "AAPL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 592.5,
+          "flip": 340.0,
+          "valid": 116
+        },
+        "AMZN": {
+          "label": "POSITIVE",
+          "raw_gex_m": 307.2,
+          "flip": 257.5,
+          "valid": 108
+        },
+        "GOOGL": {
+          "label": "POSITIVE",
+          "raw_gex_m": 278.1,
+          "flip": 350.0,
+          "valid": 116
+        },
+        "META": {
+          "label": "POSITIVE",
+          "raw_gex_m": 298.0,
+          "flip": 700.0,
+          "valid": 293
+        },
+        "MSFT": {
+          "label": "POSITIVE",
+          "raw_gex_m": 798.1,
+          "flip": null,
+          "valid": 169
+        },
+        "NVDA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 313.7,
+          "flip": null,
+          "valid": 144
+        },
+        "TSLA": {
+          "label": "POSITIVE",
+          "raw_gex_m": 153.0,
+          "flip": 380.0,
+          "valid": 260
+        },
+        "MU": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": 18.2,
+          "flip": null,
+          "valid": 418
+        },
+        "SNDK": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -47.1,
+          "flip": 1550.0,
+          "valid": 186
+        },
+        "DRAM": {
+          "label": "NEGATIVE",
+          "raw_gex_m": -10.2,
+          "flip": null,
+          "valid": 77
+        },
+        "EWY": {
+          "label": "NEAR-FLIP",
+          "raw_gex_m": -5.3,
+          "flip": null,
+          "valid": 60
+        }
+      }
+    ]
+  },
+  "decision_impacts": {
+    "layer8_reads": 51,
+    "layer8_last": [
+      "2026-10-09 19:44:57,875 | INFO     | strategy.run_cycle | GEX Layer8: label=POSITIVE raw_gex_m=2457.5 flip=785.0 age=5min",
+      "2026-10-09 19:51:42,817 | INFO     | strategy.run_cycle | GEX Layer8: label=POSITIVE raw_gex_m=2457.5 flip=785.0 age=12min",
+      "2026-10-09 19:59:07,653 | INFO     | strategy.run_cycle | GEX Layer8: label=POSITIVE raw_gex_m=2394.3 flip=785.0 age=4min"
+    ],
+    "floor_raise_lines_mentioning_gex": 0,
+    "floor_raise_samples": [],
+    "kelly_gex_mult_applications": 0,
+    "kelly_gex_mult_samples": []
+  },
+  "entries_today": [
+    {
+      "ts": "2026-10-09T06:40:20.620418-07:00",
+      "symbol": "AMZN",
+      "direction": "long",
+      "size": 6,
+      "price": 258.43,
+      "score": 0
+    },
+    {
+      "ts": "2026-10-09T06:52:29.630257-07:00",
+      "symbol": "SNXX",
+      "direction": "long",
+      "size": 89,
+      "price": 14.41,
+      "score": 0
+    },
+    {
+      "ts": "2026-10-09T08:30:37.014227-07:00",
+      "symbol": "PLTU",
+      "direction": "long",
+      "size": 19,
+      "price": 67.32,
+      "score": 0
+    },
+    {
+      "ts": "2026-10-09T11:46:31.847463-07:00",
+      "symbol": "SNDQ",
+      "direction": "long",
+      "size": 16,
+      "price": 12.53,
+      "score": 0
+    }
+  ],
+  "note": "GEX_ENABLED=True (Rafael 2026-07-03). NEGATIVE SPY GEX raises MIN_SCORE +1 (Layer 8); Kelly risk x1.30 on NEGATIVE / x1.15 on POSITIVE for warmed-up signal types (no mult Fridays)."
+}
