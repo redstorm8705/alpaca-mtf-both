@@ -92,3 +92,6 @@ MSFT 5 opposite-direction).
   phantom Swing lot cannot sell Day shares.
 - P3: an overnight Day lot (failed force-flat) reads as claim 0 next morning (the claim is today-only). On a mismatch
   with a 0 broker claim, cross-check the Day tier's open lots and page if they disagree.
+- P1 built 2026-10-10 (branch claude/cohold-p1-fill-tier): fill_helpers._non_day_orders — both close-fill query paths
+  use nested=True and drop DT- parents with their legs. Board McKinney+Harris 2-0 APPROVE, cold-2nd PASS. Follow-up
+  (board nit): add a side filter to the legacy submitted_after path.

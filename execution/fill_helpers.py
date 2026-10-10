@@ -175,6 +175,24 @@ def _fill_unverified_fallback(symbol: str, trade: dict) -> float:
 # Fill-price poller
 # ---------------------------------------------------------------------------
 
+def _non_day_orders(orders) -> list:
+    """Flatten a nested=True CLOSED-orders result into candidate fills, dropping the
+    Day tier's orders (co-hold P1, board McKinney/Taleb 2026-10-10). Alpaca keeps one
+    net position per symbol, so with a co-held Day lot the most recent same-side fill
+    can be the Day tier's OCO stop leg — pricing a Swing exit at a Day fill (RC-4
+    class). A DT- parent is dropped WITH its child legs (Alpaca leaves child legs
+    untagged; nested=True rolls them under the parent). Any other parent is kept
+    together with its legs. Untagged/manual orders are kept (not the Day tier's)."""
+    from execution.ownership_guard import tier_of_coid
+    out: list = []
+    for _o in orders or []:
+        if tier_of_coid(getattr(_o, "client_order_id", None)) == "daytrade":
+            continue
+        out.append(_o)
+        out.extend(getattr(_o, "legs", None) or [])
+    return out
+
+
 def _recover_fill(
     symbol: str,
     trade: dict,
@@ -256,8 +274,9 @@ def _recover_fill(
                     limit=20,                # 5 could truncate the real close
                     direction=Sort.DESC,     # most-recent orders first
                     after=_ext_lower_bound,  # never reach pre-entry history
+                    nested=True,             # roll OCO legs under their parent
                 )
-                _ords = _tc.get_orders(filter=_req)
+                _ords = _non_day_orders(_tc.get_orders(filter=_req))
                 # Most-recent FILL first: an order created early can fill late,
                 # so sort by filled_at (mirrors _fetch_fill_timestamp), NOT
                 # created_at. None filled_at -> "" sinks to bottom under DESC.
@@ -299,8 +318,9 @@ def _recover_fill(
                 # 50ms grace: absorbs OCI↔Alpaca NTP drift without pulling in
                 # prior same-symbol closes (DS Q5; 2.0s rejected — too wide).
                 after=datetime.fromtimestamp(submitted_after - 0.05, tz=timezone.utc),
+                nested=True,  # roll OCO legs under their parent (Day legs dropped)
             )
-            _ords = _tc.get_orders(filter=_req)
+            _ords = _non_day_orders(_tc.get_orders(filter=_req))
             for _o in sorted(
                 _ords,
                 # None created_at -> "9999-12-31" sinks to bottom under ASC sort.
