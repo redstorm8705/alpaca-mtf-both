@@ -315,6 +315,56 @@ def _gate_blocks() -> bool:
         return False
 
 
+def _direction_block(sym: str, side: object, direction: object, mode: object, allow_counter_fade: bool,
+                     gate: dict) -> "tuple[bool, str]":
+    """Which direction rules BLOCK an entry (CEO 2026-10-10: "the day tier must trade" meant directionally, not any
+    trade for the sake of trading; board Asness/Douglas + Gro + GAI aligned on this set):
+      1. no clear daily trend (side not LONG/SHORT)                         -> block;
+      2. the INTRADAY trend is against the trade — every 2m/5m blocking check (fast vs slow EMA, close vs VWAP)
+         opposes it (CEO: no Day short in an intraday uptrend; mirrored for longs) -> block;
+      3. a LONG against a SHORT daily side — allowed only as a FADE whose intraday down-trend has confirmed failed
+         and while counter-trend fades pass their reversal criterion        -> else block.
+    A SHORT against a LONG daily side is governed by the watch-day rule (_watch_day_ok), not here. Mixed 2m/5m
+    readings are recorded, not blocked. config.DAYTRADE_ALIGN_GATE_BLOCKS=True restores the full gate (every
+    verdict blocks); DAYTRADE_DIRECTION_RULES_BLOCK=False turns these rules back to record-only. Unreadable intraday
+    data never blocks under rule 2. Returns (block, reason). Never raises."""
+    try:
+        if _gate_blocks():
+            return (not gate.get("ok"), str(gate.get("reason") or ""))
+        import config
+        if getattr(config, "DAYTRADE_DIRECTION_RULES_BLOCK", True) is not True:
+            return False, ""
+        s = str(side or "").upper()
+        d = str(direction or "").lower()
+        if s not in ("LONG", "SHORT"):
+            return True, f"no clear trend direction (side={s or 'UNKNOWN'})"
+        if d not in ("long", "short"):
+            return True, f"invalid trade direction {direction!r}"
+        al = gate.get("alignment") or _alignment_for(sym, d)
+        if not gate.get("alignment") and isinstance(al, dict):
+            gate["alignment"] = al            # late read -> the caller's skip record carries it (Rule D replay)
+        checks = al.get("checks") if isinstance(al, dict) else None
+        _tfs = {str(k)[-1] for k in (checks or {})} if isinstance(checks, dict) else set()
+        if isinstance(checks, dict) and {"2", "5"} <= _tfs and all(v is False for v in checks.values()):
+            trend = "uptrend" if d == "short" else "downtrend"
+            return True, f"intraday {trend} — every 2m/5m check opposes the {d} ({', '.join(sorted(checks))})"
+        if s == "SHORT" and d == "long":
+            if not (allow_counter_fade and str(mode or "").upper() == "FADE"):
+                return True, "long against the SHORT daily side (only a failed-trend fade is allowed)"
+            tf = gate.get("trend_failure") or _trend_failure_for(sym, d)
+            if not gate.get("trend_failure") and isinstance(tf, dict):
+                gate["trend_failure"] = tf
+            if not (isinstance(tf, dict) and tf.get("failed")):
+                return True, "counter-trend long fade blocked — intraday down-trend not confirmed failed"
+            ok, why = _counter_trend_fades_ok()
+            if not ok:
+                return True, why
+        return False, ""
+    except Exception as e:  # noqa: BLE001 — a selectivity rule never crashes the tick
+        logger.warning("[%s] day-tier direction rules unreadable (not blocking): %s", sym, e)
+        return False, ""
+
+
 def _is_counter(side: object, direction: object) -> bool:
     """True when the trade direction opposes a clear LONG/SHORT daily side (attribution tag only)."""
     s = str(side or "").upper()
@@ -975,10 +1025,12 @@ def run_tick() -> dict:
             # FAILED intraday trend (15m lead + 30m confirmation).
             _gate = _entry_direction_gate(sym, decision.get("side"), trigger.get("direction"),
                                           trigger.get("mode"), allow_counter_fade=True)
-            if not _gate["ok"] and _gate_blocks():
+            _blk, _blk_why = _direction_block(sym, decision.get("side"), trigger.get("direction"), trigger.get("mode"),
+                                              True, _gate)
+            if _blk:
                 _log_direction_skip(sym, decision, {**trigger, "alignment": _gate["alignment"],
                                                     "trend_failure": _gate["trend_failure"]},
-                                    _gate["reason"], bar_id)
+                                    _blk_why, bar_id)
                 continue
             # CEO order 2026-10-06 ("the day tier must trade"): the trend/alignment verdict is RECORDED on the
             # entry's decision record (Rule D) but no longer blocks. A trade against the daily side is tagged
@@ -1154,9 +1206,11 @@ def run_tick() -> dict:
                 _side_b = _side_for(sym)
                 _gate_b = _entry_direction_gate(sym, _side_b, trigger_b.get("direction"), trigger_b.get("mode"),
                                                 allow_counter_fade=False)
-                if not _gate_b["ok"] and _gate_blocks():
+                _blk_b, _blk_why_b = _direction_block(sym, _side_b, trigger_b.get("direction"), trigger_b.get("mode"),
+                                                      False, _gate_b)
+                if _blk_b:
                     _log_direction_skip(sym, {**decision_b, "side": _side_b},
-                                        {**trigger_b, "alignment": _gate_b["alignment"]}, _gate_b["reason"], bar_id)
+                                        {**trigger_b, "alignment": _gate_b["alignment"]}, _blk_why_b, bar_id)
                     continue
                 # CEO order 2026-10-06: the gate verdict is recorded, not blocking (see _gate_blocks).
                 trigger_b = {**trigger_b, "counter_trend": _is_counter(_side_b, trigger_b.get("direction")),

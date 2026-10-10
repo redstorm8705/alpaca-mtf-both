@@ -83,6 +83,69 @@ class Gate(unittest.TestCase):
         self.assertIn("invalid", self._gate("LONG", None)["reason"])
 
 
+UPTREND_VS_SHORT = {"aligned": False, "checks": {"ema2": False, "vwap2": False, "ema5": False, "vwap5": False},
+                    "reason": "not aligned: ema2, vwap2, ema5, vwap5"}
+
+
+class DirectionRules(unittest.TestCase):
+    """run_day_tier._direction_block (CEO 2026-10-10): no-trend, intraday trend against the trade, and longs against
+    a SHORT daily side (unless a failed-trend fade) block; everything else is recorded only."""
+
+    def _blk(self, side, direction, mode="RIDE", al=ALIGNED, failed=True, allow=True, ct_ok=(True, "ok"),
+             rules=True, full=None):
+        with mock.patch.object(rdt, "_alignment_for", return_value=al), \
+                mock.patch.object(rdt, "_trend_failure_for", return_value=FAILED if failed else NOT_FAILED), \
+                mock.patch.object(rdt, "_counter_trend_fades_ok", return_value=ct_ok), \
+                mock.patch.object(config, "DAYTRADE_ALIGN_GATE_BLOCKS", full, create=True), \
+                mock.patch.object(config, "DAYTRADE_DIRECTION_RULES_BLOCK", rules, create=True):
+            gate = rdt._entry_direction_gate("NVDA", side, direction, mode, allow_counter_fade=allow)
+            return rdt._direction_block("NVDA", side, direction, mode, allow, gate)
+
+    def test_no_clear_trend_blocks(self):
+        self.assertTrue(self._blk("TWO_SIDED", "short")[0])
+
+    def test_short_in_an_intraday_uptrend_blocks(self):
+        blk, why = self._blk("SHORT", "short", al=UPTREND_VS_SHORT)
+        self.assertTrue(blk)
+        self.assertIn("intraday uptrend", why)
+
+    def test_mixed_intraday_reading_does_not_block(self):
+        mixed = {"aligned": False, "checks": {"ema2": False, "vwap2": True, "ema5": False, "vwap5": True},
+                 "reason": "not aligned: ema2, ema5"}                     # the most common live reading (10/07-09)
+        self.assertEqual(self._blk("SHORT", "short", al=mixed), (False, ""))
+        self.assertEqual(self._blk("SHORT", "short", al=NOT_ALIGNED), (False, ""))   # only one timeframe read
+
+    def test_short_against_long_daily_side_is_left_to_the_watch_day_rule(self):
+        self.assertEqual(self._blk("LONG", "short", mode="RIDE"), (False, ""))
+        self.assertEqual(self._blk("LONG", "short", mode="FADE", failed=False), (False, ""))
+
+    def test_long_against_short_daily_side_needs_a_failed_trend_fade(self):
+        self.assertTrue(self._blk("SHORT", "long", mode="RIDE")[0])
+        self.assertTrue(self._blk("SHORT", "long", mode="FADE", failed=False)[0])
+        self.assertTrue(self._blk("SHORT", "long", mode="FADE", ct_ok=(False, "fades disabled"))[0])
+        self.assertTrue(self._blk("SHORT", "long", mode="FADE", allow=False)[0])         # Track B: no exception
+        self.assertEqual(self._blk("SHORT", "long", mode="FADE"), (False, ""))
+
+    def test_with_trend_aligned_trades(self):
+        self.assertEqual(self._blk("LONG", "long"), (False, ""))
+
+    def test_kill_flag_and_full_gate(self):
+        self.assertEqual(self._blk("TWO_SIDED", "short", rules=False), (False, ""))        # record-only again
+        self.assertTrue(self._blk("SHORT", "short", al=NOT_ALIGNED, full=True)[0])         # full gate blocks all
+
+    def test_late_alignment_read_is_kept_for_the_skip_record(self):
+        with mock.patch.object(rdt, "_alignment_for", return_value=UPTREND_VS_SHORT), \
+                mock.patch.object(config, "DAYTRADE_ALIGN_GATE_BLOCKS", None, create=True):
+            gate = {"ok": False, "reason": "x", "counter_trend": False, "alignment": {}, "trend_failure": {}}
+            blk, _why = rdt._direction_block("NVDA", "SHORT", "short", "RIDE", True, gate)
+        self.assertTrue(blk)
+        self.assertEqual(gate["alignment"], UPTREND_VS_SHORT)
+
+    def test_unreadable_intraday_data_never_blocks(self):
+        unknown = {"aligned": False, "checks": {}, "reason": "alignment unavailable"}
+        self.assertEqual(self._blk("SHORT", "short", al=unknown), (False, ""))
+
+
 class RunTickTrackA(unittest.TestCase):
     """Drives run_tick with function-level patches on the real modules (the RunnerWindowGate pattern) —
     never a sys.modules swap, which would unload modules other test files rely on."""
@@ -199,19 +262,20 @@ class RunTickTrackA(unittest.TestCase):
         self.assertEqual(trg["trend_failure"], NOT_FAILED)
 
 
-    # ── CEO order 2026-10-06: "the day tier must trade" — the gate RECORDS its verdict, it does not block ──────
-    def test_default_gate_records_but_does_not_block(self):
+    # ── CEO 2026-10-10: "must trade" means directionally — these rules BLOCK; mixed 2m/5m readings stay record-only ──
+    def test_direction_rules_block_no_trend_but_record_the_rest(self):
         with mock.patch.object(config, "DAYTRADE_ALIGN_GATE_BLOCKS", None, create=True):
-            self.assertFalse(rdt._gate_blocks())          # anything but an explicit True = not blocking
-        for side, direction, mode, failed in (("LONG", "short", None, True), ("TWO_SIDED", "short", None, True),
-                                              ("LONG", "short", "FADE", False)):
+            self.assertFalse(rdt._gate_blocks())          # the full gate stays off
+        _, placed, logged = self._run("TWO_SIDED", "short", blocks=False)
+        self.assertEqual(placed, [])
+        self.assertIn("no clear trend", logged[0][2]["trigger"]["skip_reason"])
+        # a short against a LONG daily side is the watch-day rule's call (watch day confirmed here) -> trades
+        for side, direction, mode, failed in (("LONG", "short", None, True), ("LONG", "short", "FADE", False)):
             out, placed, logged = self._run(side, direction, mode=mode, failed=failed, blocks=False)
             self.assertEqual([p[0] for p in placed], ["NVDA"], (side, direction, mode))
-            self.assertEqual(out["entered"], 1)
             trg = placed[0][1]
             self.assertFalse(trg["gate_ok"])
-            self.assertTrue(trg["gate_reason"])
-            self.assertEqual(trg["counter_trend"], side == "LONG")   # against a clear daily side -> tagged
+            self.assertTrue(trg["counter_trend"])
 
     def test_counter_trend_trade_still_writes_its_intent_record_first(self):
         out, placed, logged = self._run("LONG", "short", blocks=False)
