@@ -132,5 +132,84 @@ class EntryTrigger(unittest.TestCase):
             self.assertIn(k, r)
 
 
+def _tbars(rows):
+    """rows: list of (ET 'YYYY-MM-DD HH:MM', close, volume) -> a tz-aware (UTC) 5m frame like fetch_bars_ref."""
+    idx = pd.DatetimeIndex([pd.Timestamp(r[0], tz="America/New_York").tz_convert("UTC") for r in rows])
+    return pd.DataFrame({"close": [r[1] for r in rows], "high": [r[1] + 0.2 for r in rows],
+                         "low": [r[1] - 0.2 for r in rows], "volume": [r[2] for r in rows]}, index=idx)
+
+
+class FreshCross(unittest.TestCase):
+    """Losers audit 2026-10-09 (board Kyle+LdP, Gro, GAI): a RIDE close-through must be a fresh cross."""
+
+    def test_stale_break_waits_with_bars_logged(self):
+        rows = _CALM + [(105.0, 105.2, 104.0, 1000)] + [(106.0, 106.5, 105.5, 1000)] * 5 + [(106.5, 107.0, 106.0, 9000)]
+        r = et.compute_entry_trigger("NVDA", _decision("RIDE"), bars=_bars(rows), levels=_levels())
+        self.assertEqual(r["trigger"], "WAIT")
+        self.assertEqual(r["bars_since_cross"], 6)
+        self.assertIn("not a fresh cross", r["reason"])
+
+    def test_cross_three_bars_back_still_enters(self):
+        rows = _CALM + [(105.0, 105.2, 104.0, 1000), (106.0, 106.5, 105.5, 1000), (106.2, 106.5, 105.9, 1000),
+                        (106.5, 107.0, 106.0, 9000)]
+        r = et.compute_entry_trigger("NVDA", _decision("RIDE"), bars=_bars(rows), levels=_levels())
+        self.assertEqual((r["trigger"], r["bars_since_cross"]), ("ENTER", 3))
+
+    def test_gap_above_wall_since_prior_session_is_not_a_cross(self):
+        # SNXX/SNDK 10/09: above the wall since the prior close; the opening bars never closed below it.
+        rows = [("2026-10-08 15:50", 106.0, 1000), ("2026-10-08 15:55", 106.2, 1000)] + \
+               [(f"2026-10-09 09:{m:02d}", 106.4, 1000) for m in range(30, 50, 5)] + [("2026-10-09 09:50", 106.6, 9000)]
+        r = et.compute_entry_trigger("NVDA", _decision("RIDE"), bars=_tbars(rows), levels=_levels())
+        self.assertEqual(r["trigger"], "WAIT")
+        self.assertIsNone(r["bars_since_cross"])
+
+    def test_gap_through_counts_when_first_bar_closes_beyond(self):
+        rows = [("2026-10-08 15:45", 104.0, 1000), ("2026-10-08 15:50", 104.2, 1000), ("2026-10-08 15:55", 104.5, 1000),
+                ("2026-10-09 08:00", 105.5, 50), ("2026-10-09 09:00", 105.6, 60),           # thin premarket
+                ("2026-10-09 09:30", 106.0, 9000)]
+        frame = _tbars(rows)
+        self.assertEqual(et._bars_since_cross(frame, 105.0, "long"), 1)
+
+    def test_premarket_bars_do_not_make_the_open_bar_heavy(self):
+        # Opening bar vs thin premarket: no regular-session baseline yet and no same-time prior bar -> not confirmed.
+        rows = [("2026-10-09 08:00", 104.0, 50), ("2026-10-09 08:30", 104.1, 40), ("2026-10-09 09:00", 104.2, 60),
+                ("2026-10-09 09:30", 106.0, 3000)]
+        self.assertFalse(et._vol_ok(_tbars(rows)))
+
+    def test_open_bar_uses_same_time_prior_sessions(self):
+        rows = [("2026-10-08 09:30", 104.0, 2000), ("2026-10-08 12:00", 104.0, 100),
+                ("2026-10-09 09:00", 104.2, 60), ("2026-10-09 09:30", 106.0, 3000)]
+        self.assertTrue(et._vol_ok(_tbars(rows)))                       # 3000 >= 1.2 x 2000
+        rows[0] = ("2026-10-08 09:30", 104.0, 3000)
+        self.assertFalse(et._vol_ok(_tbars(rows)))                      # 3000 < 1.2 x 3000
+
+    @staticmethod
+    def _session(day, vol, close=104.0):
+        out = []
+        for i in range(78):                                   # a full regular session of 5m bars
+            h, m = divmod(9 * 60 + 30 + 5 * i, 60)
+            out.append((f"{day} {h:02d}:{m:02d}", close, vol))
+        return out
+
+    def test_realistic_frame_confirms_the_opening_gap_through(self):
+        # Full prior sessions (vol 2000), thin premarket, then the open gaps above the 105 wall on 5000 shares.
+        rows = self._session("2026-10-07", 2000) + self._session("2026-10-08", 2000) + \
+            [("2026-10-09 08:00", 104.5, 30), ("2026-10-09 09:00", 104.8, 40), ("2026-10-09 09:30", 106.0, 5000)]
+        frame = _tbars(rows)
+        self.assertTrue(et._vol_ok(frame))                    # 5000 >= 1.2 x the prior 09:30 bars (2000)
+        r = et.compute_entry_trigger("NVDA", _decision("RIDE"), bars=frame, levels=_levels())
+        self.assertEqual((r["trigger"], r["direction"], r["bars_since_cross"]), ("ENTER", "long", 1))
+
+    def test_fetch_requests_the_whole_window(self):
+        with mock.patch.object(et, "fetch_bars_ref", return_value=None) as f:
+            et._recent_bars("NVDA", None)
+        self.assertGreaterEqual(f.call_args.kwargs.get("num_bars", f.call_args.args[-1] if f.call_args.args else 0), 400)
+
+    def test_later_bars_use_todays_session_baseline(self):
+        rows = [("2026-10-08 15:55", 104.0, 50000)] + \
+               [(f"2026-10-09 09:{m:02d}", 104.0, 1000) for m in range(30, 50, 5)] + [("2026-10-09 09:50", 106.0, 1300)]
+        self.assertTrue(et._vol_ok(_tbars(rows)))                       # vs today's 1000s, not yesterday's 50000
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

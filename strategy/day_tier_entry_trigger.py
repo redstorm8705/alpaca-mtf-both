@@ -33,6 +33,7 @@ All thresholds PROV-tagged.
 from __future__ import annotations
 
 import logging
+import math
 from datetime import timedelta
 
 import config
@@ -49,6 +50,19 @@ _VOL_CONFIRM = 1.2         # PROV:daytier-entry-trigger — triggering-bar volum
 _SWEEP_LOOKBACK = 3        # PROV:daytier-entry-trigger — bars back to look for the sweep extreme (failed-sweep window)
 _MIN_BARS = 6              # PROV:daytier-entry-trigger — need >= this many 5m bars to judge tape + a recent-vol avg
 _INTRADAY_BARS = 30        # how many 5m bars to fetch (covers the session's recent action)
+# The whole 5-day IEX window (one session = 78 regular 5m bars): the regular-session volume baseline needs the PRIOR
+# sessions' same-time-of-day bars at the open, which a 30-bar tail never contains (cold-2nd 2026-10-10). Same single
+# fetch — fetch_bars_ref already reads _IEX_LOOKBACK_DAYS of bars and only trims to num_bars.
+_TRIGGER_FRAME_BARS = 600
+# FRESH CROSS (losers audit 2026-10-09; board Kyle+LdP, Gro, GAI aligned): a RIDE "close-through" must be a CROSS — the
+# last close on the other side of the wall within this many completed regular-session bars (today, plus the prior
+# session's last close so a gap through the wall counts only if the first bar CLOSES beyond it). The old level test
+# rode 7 of 9 RIDE entries 6-75 bars after the break (SNXX 10/09: SNDK above its $1,600 wall since the prior close).
+# PROV:daytier-ride-fresh-cross-2026-10-10 — a design-conformance value, NOT fitted to the 9 trades; bars_since_cross
+# is logged on every RIDE decision so N can be derived from that distribution later.
+_RIDE_FRESH_BARS = 3
+_RTH_OPEN = (9, 30)
+_RTH_CLOSE_HOUR = 16
 
 
 def _recent_bars(symbol: str, bars):
@@ -56,7 +70,7 @@ def _recent_bars(symbol: str, bars):
     if bars is not None:
         return bars
     try:
-        return fetch_bars_ref(symbol, config.TF_5M, num_bars=_INTRADAY_BARS)
+        return fetch_bars_ref(symbol, config.TF_5M, num_bars=_TRIGGER_FRAME_BARS)
     except Exception as _e:  # noqa: BLE001
         logger.debug("[%s] entry-trigger: 5m fetch failed: %s", symbol, _e)
         return None
@@ -91,20 +105,81 @@ def fetch_bars_ref(symbol, timeframe, num_bars):
     return closed
 
 
+def _et_times(df):
+    """The frame's bar start times in ET, or None when the index carries no tz-aware timestamps (unit frames)."""
+    try:
+        idx = df.index
+        if getattr(idx, "tz", None) is None:
+            return None
+        from zoneinfo import ZoneInfo
+        et = ZoneInfo("America/New_York")
+        return [t.astimezone(et) for t in idx]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _is_rth(t) -> bool:
+    return (t.hour, t.minute) >= _RTH_OPEN and t.hour < _RTH_CLOSE_HOUR
+
+
 def _vol_ok(df) -> bool:
-    """Triggering (latest) bar volume >= _VOL_CONFIRM × the average of the prior bars. Missing
+    """Triggering (latest) bar volume >= _VOL_CONFIRM × a REGULAR-SESSION baseline (board/Gro/GAI 2026-10-10: the old
+    29-bar average included thin premarket and prior-session bars, so an opening bar passed almost by default).
+    Baseline = today's earlier regular-session bars (>= 3 of them); before that, the prior sessions' bars at the SAME
+    time of day; neither -> False (WAIT). A frame without timestamps keeps the plain prior-bar average. Missing
     volume -> False (fail-safe: a break we can't volume-confirm is not a trigger)."""
     try:
         if "volume" not in df.columns or len(df) < 2:
             return False
-        vols = df["volume"].dropna()
-        if len(vols) < 2:
+        vols = [float(v) for v in df["volume"].tolist()]
+        last = vols[-1]
+        if not math.isfinite(last):
             return False
-        last = float(vols.iloc[-1])
-        avg = float(vols.iloc[:-1].mean())
+        times = _et_times(df)
+        if times is None:
+            prior = [v for v in vols[:-1] if math.isfinite(v)]
+        else:
+            t_last = times[-1]
+            today = [vols[i] for i in range(len(vols) - 1)
+                     if times[i].date() == t_last.date() and _is_rth(times[i])]
+            if len(today) >= 3:
+                prior = today
+            else:
+                prior = [vols[i] for i in range(len(vols) - 1)
+                         if times[i].date() != t_last.date() and _is_rth(times[i])
+                         and (times[i].hour, times[i].minute) == (t_last.hour, t_last.minute)]
+            prior = [v for v in prior if math.isfinite(v)]
+        if not prior:
+            return False
+        avg = sum(prior) / len(prior)
         return avg > 0 and last >= _VOL_CONFIRM * avg
     except Exception:  # noqa: BLE001
         return False
+
+
+def _bars_since_cross(df, wall: float, direction: str) -> "int | None":
+    """Completed bars from the last close on the OTHER side of `wall` to the latest bar (1 = the latest bar is the
+    break). Regular-session bars of the latest bar's day, preceded by the prior session's last regular-session close
+    (a gap through the wall counts only when the first bar closes beyond it). None = no other-side close in that
+    window (the break is older than today's session). A frame without timestamps uses all its bars. Never raises."""
+    try:
+        closes = [float(c) for c in df["close"].tolist()]
+        times = _et_times(df)
+        if times is not None:
+            day = times[-1].date()
+            today = [i for i, t in enumerate(times) if t.date() == day and _is_rth(t)]
+            before = [i for i, t in enumerate(times) if t.date() < day and _is_rth(t)]
+            seq = ([before[-1]] if before else []) + today
+            if not seq or seq[-1] != len(closes) - 1:
+                return None                      # the latest bar is not a regular-session bar of its day
+            closes = [closes[i] for i in seq]
+        for k in range(len(closes) - 1, -1, -1):
+            c = closes[k]
+            if math.isfinite(c) and ((c <= wall) if direction == "long" else (c >= wall)):
+                return len(closes) - 1 - k
+        return None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _f(x):
@@ -193,6 +268,14 @@ def compute_entry_trigger(symbol: str, decision: dict, bars=None, levels: "dict 
                 _cand = "close-through BELOW put_wall"
             else:
                 result["reason"] = "RIDE: no wall close-through yet — wait"
+                return result
+            _n = _bars_since_cross(df, float(result["wall_ref"]), str(result["direction"]))
+            result["bars_since_cross"] = _n
+            if _n is None or not (1 <= _n <= _RIDE_FRESH_BARS):
+                result.update(direction="none", entry_ref=None, wall_ref=None)
+                _nd = f"{_n} > {_RIDE_FRESH_BARS}" if _n is not None else "none since the prior session"
+                result["reason"] = (f"RIDE: {_cand} is not a fresh cross (bars since the other-side close: {_nd}) — wait")
+                logger.info("[%s] day-tier ENTRY-TRIGGER: %s", symbol, result["reason"])
                 return result
 
         # PROFIT-SIDE TARGET (2026-10-06 replay: 10 of 25 Track-A setups on 10/05-06 died at place_entry because the
