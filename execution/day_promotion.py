@@ -23,8 +23,8 @@ build review (board Thorp/Brandt + Taleb/Harris, Gro, GAI). Three steps, each re
      take-over mark, so the Day/Swing P&L never double-counts; Day cost kept on record; stop = the Swing stop from
      the Day cost; _promoted_from_day_tier=True so no break-even move shakes it out) and gets its GTC stop at once.
 
-Ownership-ledger note: the ledger attributes shares by order tag (DT-) and has no tier-transfer API yet, so a
-promoted lot still reads as Day-owned there until the ledger owner adds one. Trading for the lot never reads it.
+Ownership-ledger note: the ledger attributes shares by order tag (DT-); a completed hand-off records a Day -> Swing
+transfer (execution/tier_transfers.py) that the ledger replay applies at the hand-off time.
 Kill flag: DAYTRADE_PROMOTION_ENABLED (only an explicit False disables). Never raises into a caller.
 """
 from __future__ import annotations
@@ -343,6 +343,29 @@ def _booked_promotion(tid: str) -> bool:
         return False
 
 
+def _record_ledger_transfer(tid: str, h: dict) -> bool:
+    """Record the Day -> Swing hand-over in the tier-transfer journal so the ownership ledger moves these shares
+    from Day to Swing at the take-over mark (execution/tier_transfers.py). Idempotent by trade id. Recorded only once
+    the Swing tracker has ADOPTED the lot (cold-2nd 2026-10-10: a ledger that shows the lot as non-Day while it is
+    only "ready" lets a main-bot restart adopt it as an orphan at the Day cost — double-counting the Day result).
+    Called by adopt_promotions and retried on every Day-runner pass. Never raises."""
+    try:
+        from execution import tier_transfers
+        qty = int(h.get("adopted_qty") or h.get("qty") or 0)      # the shares the Swing tier actually adopted
+        mark = float(h.get("take_over_mark") or 0)
+        if qty < 1 or not mark > 0:
+            return False
+        try:
+            when = datetime.fromisoformat(str(h.get("adopted_ts") or h.get("ready_ts") or h.get("ts")))
+        except (TypeError, ValueError):
+            return False                    # no hand-over time -> never stamp "now" (could move a later Day lot)
+        return tier_transfers.record_transfer(tid, str(h.get("symbol") or ""), float(qty), "daytrade", "intraday",
+                                              mark, when=when, source="day_promotion")
+    except Exception as e:  # noqa: BLE001
+        logger.error("[%s] promotion ledger transfer not recorded: %s", h.get("symbol"), e)
+        return False
+
+
 def _past_close_min(now_et: datetime) -> float:
     """Minutes since 4:00 PM ET today (negative before). Half days are not modelled; the deadline is only a backstop."""
     return (now_et.hour * 60 + now_et.minute + now_et.second / 60.0) - 16 * 60
@@ -474,7 +497,11 @@ def complete_handoffs() -> dict:
         # unadopted after 45 min has no Swing stop (Alpaca stops only trigger in regular hours, so this is a page, not
         # a loss of protection overnight).
         now = datetime.now(PT)
-        for h in (_load() or {}).values():
+        for _tid, h in (_load() or {}).items():
+            if not isinstance(h, dict):
+                continue
+            if h.get("status") == "adopted":
+                _record_ledger_transfer(_tid, h)      # idempotent: a no-op once recorded
             try:
                 if h.get("status") == "ready" and (now - datetime.fromisoformat(str(h.get("ready_ts")))).total_seconds() > 2700:
                     dtm._page_once_today(str(h.get("symbol")), "promotion_unadopted",
@@ -560,7 +587,8 @@ def adopt_promotions(tracker, risk=None) -> list:
                                f"placed — the after-hours stop block retries; check Alpaca.")
             except Exception as _ge:  # noqa: BLE001
                 logger.error("[%s] day-promotion GTC stop failed: %s", sym, _ge)
-            _update(tid, {"status": "adopted", "adopted_ts": now_iso})
+            _update(tid, {"status": "adopted", "adopted_ts": now_iso, "adopted_qty": qty})
+            _record_ledger_transfer(tid, {**h, "qty": qty, "adopted_ts": now_iso})
             out.append(sym)
             logger.warning("[%s] day-promotion: ADOPTED by the Swing tier — %d sh @ take-over $%.2f (Day cost $%.2f), "
                            "stop $%.2f", sym, qty, mark, float(h.get("day_entry") or 0), stop)

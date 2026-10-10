@@ -892,12 +892,56 @@ def _fill_time_key(f: dict) -> str:
     return str(t)
 
 
+def _consume_fifo(lt: list, rem: float) -> None:
+    """Consume `rem` shares from the oldest long lots (in place)."""
+    while rem > _QTY_EPS and lt:
+        if lt[0][0] <= _QTY_EPS:
+            lt.pop(0)
+            continue
+        if lt[0][0] <= rem + _QTY_EPS:
+            rem -= lt[0][0]
+            lt.pop(0)
+        else:
+            lt[0][0] -= rem
+            rem = 0.0
+
+
+def _apply_tier_transfer(t: dict, tiers_qty: dict, lots: dict) -> bool:
+    """Apply one tier transfer to the replay state (see sync_ledger). True when applied. Never raises."""
+    try:
+        sym = str(t.get("symbol") or "")
+        src, dst = t.get("from_tier"), t.get("to_tier")
+        q = float(t.get("qty") or 0.0)
+        px = float(t.get("price") or 0.0)
+        import math
+        if (not sym or src == dst or src not in ("daytrade", "intraday") or dst not in ("daytrade", "intraday")
+                or not math.isfinite(q) or not math.isfinite(px) or abs(q) <= _QTY_EPS or not px > 0):
+            logger.error("sync_ledger: tier transfer %s invalid — skipped", t.get("ref"))
+            return False
+        tq = tiers_qty.setdefault(sym, {})
+        have = tq.get(src, 0.0)
+        if (q > 0 and have < q - _QTY_EPS) or (q < 0 and have > q + _QTY_EPS):
+            logger.warning("sync_ledger: tier transfer %s skipped — %s holds %g %s at %s, transfer is %+g",
+                           t.get("ref"), src, have, sym, t.get("ts_utc"), q)
+            return False
+        tq[src] = have - q
+        tq[dst] = tq.get(dst, 0.0) + q
+        if q > 0:
+            _consume_fifo(lots.setdefault(sym, {}).setdefault(src, []), q)
+            lots[sym].setdefault(dst, []).append([q, px])
+        return True
+    except (TypeError, ValueError) as e:
+        logger.error("sync_ledger: tier transfer %s unreadable (%s) — skipped", t.get("ref"), e)
+        return False
+
+
 def sync_ledger(
     fills: list,
     positions: list,
     coid_by_order_id: dict | None = None,
     qhm_holdings: dict | None = None,
     positions_settled: bool = False,
+    transfers: list | None = None,
 ) -> dict:
     """OPTION-C HEAL/AUDIT TOOL (board-blessed 2026-07-10; NOT the per-cycle
     authority). Deliberately-run only. Rebuilds the per-tier ownership ledger by
@@ -924,13 +968,26 @@ def sync_ledger(
     client_order_id → everything no-ops to intraday (safe, but not real attribution).
 
     Per tier, net qty = sum(buy/cover) - sum(sell/short); avg_cost is the FIFO-weighted
-    average of the tier's remaining open long lots. Fills are sorted chronologically
+    average of the tier's remaining open long lots.
+
+    TIER TRANSFERS (execution/tier_transfers.py, CEO 2026-10-10): `transfers` are hand-overs of an existing lot
+    between the liquidatable tiers daytrade -> intraday (a promoted / adopted Day lot). Each is applied in time
+    order among the fills: signed qty moves from the source tier to the destination tier, long shares at the
+    transfer price (FIFO lots consumed from the source). Applied ONLY when the source holds at least that many
+    same-signed shares at that moment (else logged and skipped — never creates shares). Protected tiers are never
+    a transfer source or destination (enforced here as well as in the journal). Fills are sorted chronologically
     here (defensive — never assumes the caller sorted). Returns the ledger dict on
     success, or {"healed": False, "reason":..., "shrink":{...}} on a refused replay.
     """
     tiers_qty: dict = {}  # symbol -> {tier: net_qty}
     lots: dict = {}  # symbol -> {tier: list[[qty, price]]} open longs, FIFO
-    for f in sorted((fills or []), key=_fill_time_key):
+    _events = [(_fill_time_key(f), 0, f) for f in (fills or [])]
+    _events += [(str(t.get("ts_utc") or "~"), 1, t) for t in (transfers or [])
+                if isinstance(t, dict)]
+    for _ek, _kind, f in sorted(_events, key=lambda e: (e[0], e[1])):
+        if _kind == 1:
+            _apply_tier_transfer(f, tiers_qty, lots)
+            continue
         sym = f.get("symbol")
         side = str(f.get("side", "")).lower()
         try:

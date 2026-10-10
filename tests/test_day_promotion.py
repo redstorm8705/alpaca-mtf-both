@@ -11,6 +11,7 @@ from unittest import mock
 
 from execution import day_promotion as dp
 from execution import day_trade_manager as dtm
+from execution import tier_transfers as _tt
 
 EQUITY = 2600.0
 
@@ -37,6 +38,7 @@ class _Env:
         self.patches = [
             mock.patch.object(dtm, "_STATE", self.state_path),
             mock.patch.object(dp, "_HANDOFF", self.hand_path),
+            mock.patch.object(_tt, "_PATH", d / "tier_transfers.json"),     # never the real journal
             mock.patch.object(dtm, "_enabled", return_value=True),
             mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={}),
             mock.patch("execution.broker.get_open_positions", return_value=positions),
@@ -170,6 +172,7 @@ class Handoff(unittest.TestCase):
             h = env.hand()["DT-AAPL-b-1-x"]
             self.assertEqual((h["status"], h["take_over_mark"]), ("ready", 340.42))
             self.assertEqual(_rec(env)["state"], "promoted")
+            self.assertEqual(_tt.load_transfers(), [])      # ledger transfer waits for the Swing adoption
 
     def test_waits_while_a_day_leg_may_be_live(self):
         with _Env(self._pending(), []) as env:
@@ -331,6 +334,8 @@ class Adopt(unittest.TestCase):
             self.assertEqual(t["gtc_stop_order_id"], "G1")
             self.assertEqual(g.call_args.args, ("AAPL", 4, "sell", 330.24))
             self.assertEqual(env.hand()["DT-AAPL-b-1-x"]["status"], "adopted")
+            rows = _tt.load_transfers()
+            self.assertEqual([(r["ref"], r["qty"], r["price"]) for r in rows], [("DT-AAPL-b-1-x", 4.0, 340.42)])
             self.assertEqual(dp.adopt_promotions(tr), [])                  # idempotent
 
     def test_never_overwrites_another_swing_trade(self):
@@ -360,6 +365,8 @@ class Adopt(unittest.TestCase):
                 self.assertEqual(dp.adopt_promotions(tr), ["AAPL"])
             self.assertEqual(tr.open_trades["AAPL"]["qty"], 3)
             self.assertEqual(g.call_args.args[1], 3)
+            self.assertEqual(env.hand()["DT-AAPL-b-1-x"]["adopted_qty"], 3)
+            self.assertEqual([r["qty"] for r in _tt.load_transfers()], [3.0])
 
     def test_unreadable_handoff_does_nothing(self):
         with _Env({}, []) as env:
