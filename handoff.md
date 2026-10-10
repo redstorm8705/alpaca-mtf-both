@@ -8,6 +8,20 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-10 late, Claude signed) — Day-tier losers fixes live (#569-#575)
+
+From the 10/09 losers audit + CEO clarifications ("must trade" = directionally; no caps when conviction is high and
+stops are respected): #569 stop room from real-time bars incl. the open; #570 RIDE needs a fresh wall cross + session
+volume baseline; #572 an invalidated setup is not retried on the same bar; #573 10/10 max-size sized to stop
+distance (2% ceiling), room cap removed; #574 direction rules block (no-trend, intraday trend against, counter-trend
+longs; shorts vs LONG stay with the watch-day rule); #575 tier label F6. All deployed, unexercised.
+
+**⏩ EXACT NEXT ACTION:** Monday 10/12 post-live audits of #562 (promotion), #564 (QHM NVDA buy), #565, #567, #569,
+#570, #572, #573, #574. Then build: same-direction co-hold (CEO rule; needs quantity-bounded Swing exits, bracket
+entries vs resting stops, own/foreign order tags); QHM stop-quantity reconcile (Codex branch
+fix/qhm-stop-quantity-reconcile); nightly autonomous_review fix (Groq 413/429, never reaches GAI, pull --rebase vs
+dirty logs); make preship_audit print a reviewer's REJECT reason (two uncaptured Gro rejects 10/10).
+
 ## ⏩ LATEST (2026-10-10 PM, Claude signed) — ledger tier transfers (#567); ChatGPT queue taken over
 
 ChatGPT is out until 10/14; Claude owns its queue. PR #567 (99fb1f3): execution/tier_transfers.py journal; sync_ledger
