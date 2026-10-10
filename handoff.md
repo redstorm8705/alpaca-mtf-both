@@ -8,6 +8,21 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-10 PM, Claude signed) — ledger tier transfers (#567); ChatGPT queue taken over
+
+ChatGPT is out until 10/14; Claude owns its queue. PR #567 (99fb1f3): execution/tier_transfers.py journal; sync_ledger
+moves Day->Swing hand-overs; day_promotion records on adoption. AAPL/EWY rows backfilled; ledger has 0 crossed rows,
+0 drift. Earlier today: #564 (QHM buys restored), #565 (no false crash pages). Cleanup of 21 dead items done
+(archived in logs/archive/cleanup_2026-10-10 on the Mac main checkout; branches kept; PRs 446/169/170 closed).
+Losers audit 10/09 (SNXX/AMZN/AAPL): opening-noise stop room (5m ATR from the prior afternoon, 15-min delayed
+bars), stale RIDE breakout (level test, not a cross), retry of an invalidated setup.
+
+**⏩ EXACT NEXT ACTION:** build in order, each replay-first + full gate: (1) Day-tier room stop uses today's
+real-time bars at the open; (2) RIDE/FADE triggers need a real cross + RTH-only volume; (3) no retry of an
+invalidated bar; (4) same-direction co-hold (CEO rule) — quantity-bounded Swing exits, bracket entries vs resting
+stops, own/foreign order tags; (5) QHM stop-quantity reconcile (Codex branch fix/qhm-stop-quantity-reconcile).
+Open CEO question: F6 display name ("F6" per 10/07 vs "Forever 6" introduced by #535).
+
 ## ⏩ LATEST (2026-10-10, Claude signed) — QHM buys restored (#564), no false crash pages (#565)
 
 Friday 10/09: account +$18.70 (+0.74%), equity $2,546.78; realized (Alpaca fills) -$3.84, all Day tier. Week since
