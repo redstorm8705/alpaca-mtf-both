@@ -67,7 +67,7 @@ _EDGE_TIER_LABELS = {
     "swing": "Swing",
     "day": "Day",
     "qhm": "QHM",
-    "forever_6": "Forever 6",
+    "forever_6": "F6",
     "unattributed": "Unattributed",
 }
 
