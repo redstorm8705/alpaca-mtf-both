@@ -60,7 +60,8 @@ _TRIGGER_FRAME_BARS = 600
 # rode 7 of 9 RIDE entries 6-75 bars after the break (SNXX 10/09: SNDK above its $1,600 wall since the prior close).
 # PROV:daytier-ride-fresh-cross-2026-10-10 — a design-conformance value, NOT fitted to the 9 trades; bars_since_cross
 # is logged on every RIDE decision so N can be derived from that distribution later.
-_RIDE_FRESH_BARS = 3
+_RIDE_FRESH_BARS = 3  # PROV:daytier-ride-fresh-cross-2026-10-10
+_VOL_BASELINE_MIN_BARS = 3  # PROV:daytier-ride-fresh-cross-2026-10-10 — today's session bars needed before they form the volume baseline
 _RTH_OPEN = (9, 30)
 _RTH_CLOSE_HOUR = 16
 
@@ -142,7 +143,7 @@ def _vol_ok(df) -> bool:
             t_last = times[-1]
             today = [vols[i] for i in range(len(vols) - 1)
                      if times[i].date() == t_last.date() and _is_rth(times[i])]
-            if len(today) >= 3:
+            if len(today) >= _VOL_BASELINE_MIN_BARS:
                 prior = today
             else:
                 prior = [vols[i] for i in range(len(vols) - 1)
