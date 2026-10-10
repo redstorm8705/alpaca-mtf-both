@@ -103,3 +103,5 @@ MSFT 5 opposite-direction).
   the Day lot loses its target and stop. Fix before the guard lifts: scope that cancel to the calling tier
   (cancel_open_orders_for_symbol(only_tier=...)). Also (board nit): the swing-breakout partial stop exit could sell
   down to the cap instead of refusing, because it books the actual fill.
+- P4 built 2026-10-10 (branch claude/cohold-p4-tier-cancel): the failed-partial cleanup is IN- only. Cold-2nd PASS,
+  board Harris+Taleb 2-0.

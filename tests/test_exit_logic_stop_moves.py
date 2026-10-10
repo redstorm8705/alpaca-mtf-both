@@ -230,14 +230,26 @@ class TestPartialExitSequence(Base):
 
     def test_failed_partial_restores_stop_to_full_size_and_keeps_other_stops(self):
         self.m["partial_close_position"].side_effect = lambda s, q, **k: self.calls.append(("partial", q)) or False
-        blocking = SimpleNamespace(id="LMT", type="limit")
-        stop = SimpleNamespace(id="S1-r", type="stop")
+        blocking = SimpleNamespace(id="LMT", type="limit", client_order_id="IN-X-s-1-aaaa")
+        stop = SimpleNamespace(id="S1-r", type="stop", client_order_id="IN-X-s-2-bbbb")
         self.m["get_open_orders"].return_value = [blocking, stop]
         t = self._trade()
         self._run(t)
         self.assertEqual(self.calls[0], ("replace", "S1", 95.0, 6))
         self.assertEqual(self.calls[2], ("replace", "S1-r", 95.0, 9))          # restored to all 9 shares
         self.m["cancel_order"].assert_called_once_with("LMT")                  # never the stop
+
+    def test_failed_partial_never_cancels_another_tiers_or_untagged_orders(self):
+        # Co-hold P4 (2026-10-10): a Day OCO parent (a DT- limit carrying the Day lot's target + stop) and an
+        # untagged/manual limit survive the Swing tier's failed-partial cleanup; only the Swing's own limit goes.
+        self.m["partial_close_position"].side_effect = lambda s, q, **k: self.calls.append(("partial", q)) or False
+        day_oco = SimpleNamespace(id="DTOCO", type="limit", client_order_id="DT-X-s-1-cccc")
+        manual = SimpleNamespace(id="MAN", type="limit", client_order_id="web-order-uuid")
+        own = SimpleNamespace(id="LMT", type="limit", client_order_id="IN-X-s-1-aaaa")
+        qhm = SimpleNamespace(id="QLMT", type="limit", client_order_id="QH-X-s-1-dddd")
+        self.m["get_open_orders"].return_value = [day_oco, manual, own, qhm]
+        self._run(self._trade())
+        self.m["cancel_order"].assert_called_once_with("LMT")
 
     def test_realtime_price_triggers_tranche_the_delayed_bar_has_not_reached(self):
         # delayed 15M close $103 (< T1 $104); real-time IEX $104.5 -> T1 fires on the live price
