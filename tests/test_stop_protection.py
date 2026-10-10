@@ -84,7 +84,7 @@ class StopProtectionInvariant(unittest.TestCase):
 
     def _run(self, *, open_orders, position, trade, session="rth", place=True,
              submit_day=_DEF_ORDER, submit_gtc=_DEF_ORDER, close_ok=True,
-             position_raises=False, cover_fill=89.5, qhm=(), f6=(), tracker=None):
+             position_raises=False, cover_fill=89.5, qhm=(), f6=(), tracker=None, day_claim=0.0):
         tracker = tracker if tracker is not None else _Tracker({"X": dict(trade)})
         risk = _Risk()
         goo = mock.Mock(return_value=open_orders)
@@ -108,6 +108,7 @@ class StopProtectionInvariant(unittest.TestCase):
              mock.patch.object(sp, "fetch_actual_fill_price_or_none", fill), \
              mock.patch.object(sp, "_qhm_symbols", qhmm), \
              mock.patch.object(sp, "_forever6_symbols", f6m), \
+             mock.patch.object(sp, "_day_tier_claim_for_stop", mock.Mock(return_value=day_claim)), \
              mock.patch.object(sp, "_page", page):
             summary = sp.reconcile_protection(tracker, risk, session=session, place=place)
         return summary, dict(day=sday, gtc=sgtc, close=cpos, fill=fill, page=page,
@@ -690,6 +691,49 @@ class BrokerStopScope(unittest.TestCase):
         self.assertEqual([p[0] for p in s["already_protected"]], ["AAA"])
         self.assertEqual([c[0] for c in s["covered"]], ["BBB"])
         sday.assert_not_called()
+
+
+class StopProtectionCohold(StopProtectionInvariant):
+    """Co-hold T3 (2026-10-10): the placed stop covers this tier's shares only (net minus the Day tier's claim)."""
+
+    def test_stop_sized_to_own_shares(self):
+        s, m = self._run(open_orders=[], position=_position("long", 10, 110.0), trade=_trade(qty=7), day_claim=3.0)
+        m["day"].assert_called_once()
+        self.assertEqual(m["day"].call_args.kwargs["qty"], 7)
+
+    def test_short_cohold(self):
+        s, m = self._run(open_orders=[], position=_position("short", -6, 90.0),
+                         trade=_trade(direction="short", stop=95.0, qty=4), day_claim=-2.0)
+        self.assertEqual(m["day"].call_args.kwargs["qty"], 4)
+
+    def test_all_day_shares_pages_places_nothing(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), day_claim=3.0)
+        m["day"].assert_not_called()
+        self.assertIn(("X", "co-hold sizing"), s["paged"])
+
+    def test_opposite_claim_pages_places_nothing(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), day_claim=-2.0)
+        m["day"].assert_not_called()
+        self.assertIn(("X", "co-hold sizing"), s["paged"])
+
+    def test_unreadable_claim_with_day_order_open_fails_safe(self):
+        day_tp = types.SimpleNamespace(id="d1", symbol="X", side="buy", type="limit", qty=1, status="new",
+                                       client_order_id="DT-X-b-1-aaaa")
+        s, m = self._run(open_orders=[day_tp], position=_position("long", 3, 110.0), trade=_trade(), day_claim=None)
+        m["day"].assert_not_called()
+        self.assertTrue(any("unreadable" in r for _s, r in s["skipped"]))
+
+    def test_unreadable_claim_with_day_order_pages_once_across_cycles(self):
+        day_tp = types.SimpleNamespace(id="d1", symbol="X", side="buy", type="limit", qty=1, status="new",
+                                       client_order_id="DT-X-b-1-aaaa")
+        _, m1 = self._run(open_orders=[day_tp], position=_position("long", 3, 110.0), trade=_trade(), day_claim=None)
+        _, m2 = self._run(open_orders=[day_tp], position=_position("long", 3, 110.0), trade=_trade(), day_claim=None)
+        self.assertEqual(m1["page"].call_count, 1)
+        m2["page"].assert_not_called()
+
+    def test_unreadable_claim_no_day_order_places_full_stop(self):
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), day_claim=None)
+        self.assertEqual(m["day"].call_args.kwargs["qty"], 3)
 
 
 if __name__ == "__main__":

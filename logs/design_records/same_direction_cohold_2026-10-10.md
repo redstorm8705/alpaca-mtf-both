@@ -105,3 +105,5 @@ MSFT 5 opposite-direction).
   down to the cap instead of refusing, because it books the actual fill.
 - P4 built 2026-10-10 (branch claude/cohold-p4-tier-cancel): the failed-partial cleanup is IN- only. Cold-2nd PASS,
   board Harris+Taleb 2-0.
+- T3 built 2026-10-10 (branch claude/cohold-t3): stop_protection safety-net stop sized to net minus the Day claim.
+  The other Swing stop sites are tracker-sized. Board Harris+Taleb, cold-2nd x2.
