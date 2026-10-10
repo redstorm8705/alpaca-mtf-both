@@ -69,3 +69,15 @@ MSFT 5 opposite-direction).
 - T3: D2 stop qty = min(tracker qty, broker net minus other tiers' claims); <= 0 -> page, never the netted size.
 - F5 (Gro): stale snapshot at Day-entry time -> place_entry re-reads ownership immediately before submit (it already
   re-reads positions/orders; extend to the same-direction check).
+- R1 (found 2026-10-10 during D1, verified at source): the Swing size-mismatch reconcile
+  (execution/orphan_manager.py ~L1819-1885) sets the Swing tracker's qty_remaining to the WHOLE Alpaca net. With a
+  co-held Day lot it would absorb the Day shares into Swing (Swing 7 + Day 3 -> Swing tracker 10). When the Day lot
+  closes (net 7 < tracker 10) it then banks a fake "externally closed" partial on 3 shares. Fix before the guard
+  lifts: the reconcile compares against net minus the other tiers' claims (the same Day claim D1 uses). The
+  direction-mismatch GTC re-stop (~L1790) is sized to the whole net too (T3 list).
+
+## Build status
+- D1 (chokepoint bound): built 2026-10-10, branch claude/cohold-close-bound. The Day claim comes from today's broker
+  orders (DT- parents + their nested untagged OCO legs, verified on 10/09 prod orders) minus today's Day -> Swing
+  hand-overs. Fallback: the Day log claim. Both unreadable -> previous full close + page (deviation from the fork-1
+  ruling, because the broker has no tracker quantity; put to the board seat).

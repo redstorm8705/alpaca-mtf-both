@@ -1975,6 +1975,163 @@ def _raw_close_position(symbol: str, only_tier: "str | None" = None) -> bool:
         return False
 
 
+def _signed_fill(order) -> float:
+    """+filled qty for a buy, -filled qty for a sell (0 when unreadable)."""
+    try:
+        q = float(getattr(order, "filled_qty", 0) or 0)
+        sd = str(getattr(getattr(order, "side", ""), "value", getattr(order, "side", ""))).lower()
+        if not math.isfinite(q) or q <= 0 or sd not in ("buy", "sell"):
+            return 0.0
+        return q if sd == "buy" else -q
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _day_tier_claim(symbol: str) -> "float | None":
+    """The Day tier's signed share claim on `symbol` RIGHT NOW from broker truth (co-hold design D1/T1, 2026-10-10):
+    the sum of today's (ET) filled DT- orders and their OCO/bracket child legs (Alpaca leaves child legs untagged, so
+    they are attributed through the nested parent), minus today's Day -> Swing hand-overs recorded in
+    execution/tier_transfers.py (a promoted lot keeps its DT- buy but is no longer the Day tier's). Real-time, unlike
+    the Day log, which is written after the fill. None when the orders or the hand-over journal cannot be read.
+    Never raises."""
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        from execution.ownership_guard import tier_of_coid as _toc
+        from execution.tier_transfers import load_transfers as _lt
+        _et = _ZI("America/New_York")
+        _now = _dt.now(_et)
+        _sod = _now.replace(hour=0, minute=0, second=0, microsecond=0)
+        transfers = _lt()
+        if transfers is None:
+            raise ValueError("tier-transfer journal unreadable")
+        req = GetOrdersRequest(status=QueryOrderStatus.ALL, after=_sod, symbols=[symbol], nested=True, limit=500)
+        orders = _get_trading_client().get_orders(filter=req) or []
+        claim = 0.0
+        for o in orders:
+            if _toc(str(getattr(o, "client_order_id", "") or "")) != "daytrade":
+                continue
+            claim += _signed_fill(o)
+            for leg in (getattr(o, "legs", None) or []):
+                claim += _signed_fill(leg)
+        for t in transfers:
+            if str(t.get("symbol", "")).upper() != symbol.upper():
+                continue
+            when = _dt.fromisoformat(str(t["ts_utc"]).replace("Z", "+00:00")).astimezone(_et)
+            if when.date() != _now.date():
+                continue
+            q = float(t["qty"])
+            if t.get("from_tier") == "daytrade":
+                claim -= q
+            elif t.get("to_tier") == "daytrade":
+                claim += q
+        return round(claim, 6)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{symbol}] day-tier claim unreadable from broker orders: {e}")
+        return None
+
+
+_COHOLD_PAGED: dict = {}
+
+
+def _cohold_page(symbol: str, msg: str, *, once_per_day: str = "") -> None:
+    """Critical log + Slack page for the co-hold close bound. `once_per_day` rate-limits a repeating refusal (the
+    hard-stop branch re-enters every cycle) to one page per symbol per kind (its value) per ET day. Never raises."""
+    logger.critical(f"[{symbol}] {msg}")
+    try:
+        if once_per_day:
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+            key = (symbol, once_per_day, _dt.now(_ZI("America/New_York")).date())
+            if key in _COHOLD_PAGED:
+                return
+            _COHOLD_PAGED[key] = True
+        from alerts import send_slack
+        send_slack(f":warning: [{symbol}] {msg}")
+    except Exception as _pe:  # noqa: BLE001
+        logger.error(f"[{symbol}] co-hold close page failed: {_pe}")
+
+
+def _cohold_bounded_close(symbol: str, tier: str) -> "bool | None":
+    """Co-hold design D1 (board Harris/Taleb + Gro + GAI, 2026-10-10): a NON-day tier's full close must never sell the
+    Day tier's shares on the same symbol — the Day OCO stop/target would later sell shares that are gone (accidental
+    SHORT). Returns None when no bound is needed (no Day claim -> the caller's normal close), else the result of a
+    bounded partial close of the tier's own shares (net minus the Day claim). Day claim unreadable -> falls back to the
+    Day log claim; both unreadable -> None (normal close) and a page, since a Day lot is then possible but unproven.
+    The claim is read before AND after the position read and must match (cold-2nd 2026-10-10: a Day stop filling
+    between the reads would otherwise under-sell the tier's shares and still report success); a mismatch retries once,
+    then falls back to the normal close and pages. Every fallback to a normal close pages. Never raises."""
+    try:
+        claim = _day_tier_claim(symbol)
+        if claim is None:
+            try:
+                from execution.ownership_snapshot import build_ownership_snapshot
+                _snap = build_ownership_snapshot()
+                if any(str(e).startswith("daytrade_log:") for e in _snap.errors):
+                    raise ValueError(f"day-tier log unreadable: {_snap.errors}")
+                claim = float(_snap.claimed_qty(symbol, "day"))
+            except Exception as _se:  # noqa: BLE001
+                _cohold_page(symbol, f"{tier} full close ran without knowing the Day tier's share count (broker "
+                                     f"orders + Day log unreadable: {_se}). If the Day tier held shares, check for a "
+                                     f"stray Day stop.")
+                return None
+            if abs(claim) < 1e-6:
+                return None
+            pos = get_open_position(symbol)
+        else:
+            if abs(claim) < 1e-6:
+                return None
+            pos = None
+            for _attempt in range(2):
+                pos = get_open_position(symbol)
+                _again = _day_tier_claim(symbol)
+                if _again is not None and abs(_again - claim) < 1e-6:
+                    break
+                claim = _again if _again is not None else claim
+                pos = None
+                if _attempt == 1 or _again is None:
+                    _cohold_page(symbol, f"{tier} close: the Day tier's share count changed while closing — full "
+                                         f"close as before; check for a stray Day stop on this symbol.")
+                    return None
+            if abs(claim) < 1e-6:
+                return None
+        if pos is None:
+            return True                                    # already flat (the normal not-found -> True contract)
+        net = float(pos.qty)
+        side = "long" if net > 0 else "short"
+        if (net > 0) != (claim > 0):
+            # Opposite-direction co-holds are blocked at Day entry; if one exists anyway, keep the old full close
+            # (never refuse a stop exit) and page so the Day lot's own orders are checked.
+            _cohold_page(symbol, f"{tier} close: the Day tier's claim {claim:+g} is OPPOSITE the net {net:+g} — full "
+                                 f"close as before; check the Day tier's orders on this symbol.")
+            return None
+        if abs(claim) > abs(net) + 1e-6:
+            # e.g. Swing long 2 + Day short 5 = net -3: an opposite lot hidden inside the net. A full cover plus the
+            # Day OCO buy would leave an unprotected long, so refuse (board H-2).
+            _cohold_page(symbol, f"{tier} close refused: the Day tier's claim {claim:+g} exceeds the net {net:+g} — "
+                                 f"an opposite-direction {tier} lot is hidden inside the net. Check Alpaca.",
+                         once_per_day="hidden_lot")
+            return False
+        own = int(abs(net) - abs(claim) + 1e-6)
+        if own < 1:
+            _cohold_page(symbol, f"{tier} close refused: all {abs(net):g} shares belong to the Day tier (claim "
+                                 f"{claim:+g}); {tier} holds none at the broker — the Day tier manages its own lot. "
+                                 f"Check {tier}'s book.", once_per_day="all_day")
+            return False
+        logger.warning(f"[{symbol}] {tier} close bounded to its own {own} share(s): the Day tier holds "
+                       f"{abs(claim):g} of the {abs(net):g} (co-hold).")
+        ok = bool(partial_close_position(symbol, own, tier=tier, position_side=side))
+        if not ok:
+            # Parity with _raw_close_position (board H-1): the tier's own stop may already be cancelled.
+            _cohold_page(symbol, f"{tier} bounded close of {own} share(s) FAILED — its own stop may already be "
+                                 f"cancelled, so these shares may have NO broker stop. Check Alpaca now.")
+        return ok
+    except Exception as e:  # noqa: BLE001
+        _cohold_page(symbol, f"{tier} co-hold close bound failed ({e}) — full close as before; if the Day tier "
+                             f"held shares, check for a stray Day stop.")
+        return None
+
+
 def close_position(symbol: str, *, tier: str = "intraday") -> bool:
     """Close an open position — THE never-sell-floor CHOKEPOINT (increment 4a).
 
@@ -1990,6 +2147,10 @@ def close_position(symbol: str, *, tier: str = "intraday") -> bool:
     is keyword-only so a legacy positional call can never silently mis-tag.
     """
     import config
+    if tier != "daytrade":
+        _bounded = _cohold_bounded_close(symbol, tier)
+        if _bounded is not None:
+            return _bounded
     if not getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
         return _raw_close_position(symbol, only_tier=tier)   # DORMANT floor; tier-scoped recovery cancel
     # Function-boundary never-raises wrapper (Reliability seat 2026-07-18): any unexpected

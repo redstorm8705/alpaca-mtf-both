@@ -68,6 +68,7 @@ class _Env:
             mock.patch.object(bk, "cancel_order", side_effect=_cancel),
             mock.patch.object(bk, "_floor_bound_stop_qty", side_effect=lambda s, q, sd, t: q),
             mock.patch.object(bk.time, "sleep"),
+            mock.patch.object(bk, "_day_tier_claim", return_value=0.0),   # no Day lot unless a test says so
             mock.patch.dict(sys.modules, {"alerts": types.SimpleNamespace(alert_gtc_failed=self.alert,
                                                                           send_slack=self.slack)}),
         ]
@@ -388,6 +389,181 @@ class MarketOrderWashTrade(unittest.TestCase):
         with _Env([Exception(held)]):
             bk.submit_market_order("YYY", 2, "sell", tier="intraday")
         self.assertNotIn("YYY", bk._short_blocked_symbols)
+
+
+def _fill(coid, side, qty, legs=None):
+    return types.SimpleNamespace(client_order_id=coid, side=side, filled_qty=str(qty), legs=legs)
+
+
+class DayClaimFromOrders(unittest.TestCase):
+    """Co-hold D1/T1 (2026-10-10): the Day tier's claim is rebuilt from today's broker orders."""
+
+    def _claim(self, orders, transfers=()):
+        client = mock.Mock()
+        client.get_orders.return_value = orders
+        with mock.patch.object(bk, "_get_trading_client", return_value=client), \
+                mock.patch("execution.tier_transfers.load_transfers", return_value=list(transfers)):
+            return bk._day_tier_claim("EWY")
+
+    def test_dt_parent_and_its_untagged_legs(self):
+        legs = [_fill("bracket-leg-uuid", "sell", 2), _fill("bracket-leg-uuid2", "sell", 0)]
+        orders = [_fill("DT-EWY-b-1-aaaa", "buy", 5, legs), _fill("IN-EWY-b-1-bbbb", "buy", 7),
+                  _fill("QH-EWY-b-1-cccc", "buy", 3), _fill("untagged", "buy", 9)]
+        self.assertEqual(self._claim(orders), 3.0)              # 5 bought, 2 sold by its own stop leg
+
+    def test_day_short_is_negative(self):
+        self.assertEqual(self._claim([_fill("DT-EWY-s-1-aaaa", "sell", 4)]), -4.0)
+
+    def test_enum_side(self):
+        buy = types.SimpleNamespace(value="buy")
+        self.assertEqual(self._claim([_fill("DT-EWY-b-1-aaaa", buy, 2)]), 2.0)
+
+    def test_todays_promotion_removes_the_lot(self):
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        t = {"symbol": "EWY", "qty": 5.0, "from_tier": "daytrade", "to_tier": "intraday", "ts_utc": now}
+        self.assertEqual(self._claim([_fill("DT-EWY-b-1-aaaa", "buy", 5)], [t]), 0.0)
+
+    def test_older_promotion_is_ignored(self):
+        t = {"symbol": "EWY", "qty": 5.0, "from_tier": "daytrade", "to_tier": "intraday",
+             "ts_utc": "2020-01-02T21:00:00.000000Z"}
+        self.assertEqual(self._claim([_fill("DT-EWY-b-1-aaaa", "buy", 5)], [t]), 5.0)
+
+    def test_unreadable_orders_or_journal_is_none(self):
+        client = mock.Mock()
+        client.get_orders.side_effect = Exception("503")
+        with mock.patch.object(bk, "_get_trading_client", return_value=client), \
+                mock.patch("execution.tier_transfers.load_transfers", return_value=[]):
+            self.assertIsNone(bk._day_tier_claim("EWY"))
+        with mock.patch("execution.tier_transfers.load_transfers", return_value=None):
+            self.assertIsNone(bk._day_tier_claim("EWY"))
+
+
+class CoholdBoundedClose(unittest.TestCase):
+    """Co-hold D1 (2026-10-10): a non-Day full close sells only its own shares, never the Day lot."""
+
+    def setUp(self):
+        bk._COHOLD_PAGED.clear()
+
+    def _run(self, claim, net, tier="intraday", snapshot=None, claims=None, pcp_ok=True):
+        pos = types.SimpleNamespace(qty=str(net), side="long" if net > 0 else "short")
+        slack = mock.Mock()
+        pcp = mock.Mock(return_value=pcp_ok)
+        raw = mock.Mock(return_value=True)
+        _claim = (mock.patch.object(bk, "_day_tier_claim", side_effect=list(claims)) if claims is not None
+                  else mock.patch.object(bk, "_day_tier_claim", return_value=claim))
+        ps = [_claim,
+              mock.patch.object(bk, "get_open_position", return_value=pos),
+              mock.patch.object(bk, "partial_close_position", pcp),
+              mock.patch.object(bk, "_raw_close_position", raw),
+              mock.patch.dict(sys.modules, {"alerts": types.SimpleNamespace(send_slack=slack)})]
+        if snapshot is not None:
+            ps.append(mock.patch("execution.ownership_snapshot.build_ownership_snapshot", snapshot))
+        for p in ps:
+            p.start()
+        try:
+            out = bk.close_position("EWY", tier=tier)
+        finally:
+            for p in reversed(ps):
+                p.stop()
+        return out, pcp, raw, slack
+
+    def test_swing_close_leaves_the_day_lot(self):
+        out, pcp, raw, _ = self._run(claim=3.0, net=10)
+        self.assertTrue(out)
+        pcp.assert_called_once_with("EWY", 7, tier="intraday", position_side="long")
+        raw.assert_not_called()
+
+    def test_short_cohold(self):
+        out, pcp, raw, _ = self._run(claim=-2.0, net=-5)
+        pcp.assert_called_once_with("EWY", 3, tier="intraday", position_side="short")
+        raw.assert_not_called()
+
+    def test_no_day_lot_is_a_normal_close(self):
+        out, pcp, raw, _ = self._run(claim=0.0, net=10)
+        pcp.assert_not_called()
+        raw.assert_called_once()
+
+    def test_all_shares_are_the_day_tiers_refuses_and_pages(self):
+        out, pcp, raw, slack = self._run(claim=4.0, net=4)
+        self.assertFalse(out)
+        pcp.assert_not_called()
+        raw.assert_not_called()
+        slack.assert_called_once()
+
+    def test_opposite_claim_keeps_old_close_and_pages(self):
+        out, pcp, raw, slack = self._run(claim=-2.0, net=10)
+        pcp.assert_not_called()
+        raw.assert_called_once()
+        slack.assert_called_once()
+
+    def test_day_tier_close_is_never_bounded(self):
+        out, pcp, raw, _ = self._run(claim=3.0, net=10, tier="daytrade")
+        pcp.assert_not_called()
+        raw.assert_called_once()
+
+    def test_unreadable_broker_falls_back_to_day_log(self):
+        snap = mock.Mock(return_value=types.SimpleNamespace(errors=(), claimed_qty=lambda s, t: 3.0))
+        out, pcp, raw, _ = self._run(claim=None, net=10, snapshot=snap)
+        pcp.assert_called_once_with("EWY", 7, tier="intraday", position_side="long")
+
+    def test_unreadable_everywhere_closes_and_pages(self):
+        snap = mock.Mock(return_value=types.SimpleNamespace(errors=("daytrade_log:ValueError",),
+                                                            claimed_qty=lambda s, t: 0.0))
+        out, pcp, raw, slack = self._run(claim=None, net=10, snapshot=snap)
+        pcp.assert_not_called()
+        raw.assert_called_once()
+        slack.assert_called_once()
+
+    def test_day_stop_filling_mid_close_is_not_an_undersell(self):
+        # cold-2nd race: claim +5 before the position read, 0 after (the Day stop filled) -> re-read; it matches
+        # 0 on the retry -> no Day lot left -> normal full close of the tier's shares.
+        out, pcp, raw, slack = self._run(claim=None, net=10, claims=[5.0, 0.0, 0.0])
+        pcp.assert_not_called()
+        raw.assert_called_once()
+
+    def test_claim_keeps_changing_closes_and_pages(self):
+        out, pcp, raw, slack = self._run(claim=None, net=10, claims=[5.0, 4.0, 3.0])
+        pcp.assert_not_called()
+        raw.assert_called_once()
+        slack.assert_called_once()
+
+    def test_second_read_unreadable_closes_and_pages(self):
+        out, pcp, raw, slack = self._run(claim=None, net=10, claims=[5.0, None])
+        raw.assert_called_once()
+        slack.assert_called_once()
+
+    def test_failed_bounded_close_pages_no_stop(self):
+        out, pcp, raw, slack = self._run(claim=3.0, net=10, pcp_ok=False)
+        self.assertFalse(out)
+        raw.assert_not_called()
+        self.assertIn("NO broker stop", slack.call_args.args[0])
+
+    def test_opposite_lot_hidden_in_net_refuses_and_pages(self):
+        out, pcp, raw, slack = self._run(claim=-5.0, net=-3)     # Swing long 2 + Day short 5
+        self.assertFalse(out)
+        pcp.assert_not_called()
+        raw.assert_not_called()
+        self.assertIn("hidden", slack.call_args.args[0])
+
+    def test_refusal_pages_once_per_day(self):
+        self._run(claim=4.0, net=4)
+        out, pcp, raw, slack = self._run(claim=4.0, net=4)
+        self.assertFalse(out)
+        slack.assert_not_called()
+
+    def test_position_read_error_closes_and_pages(self):
+        slack = mock.Mock()
+        with mock.patch.object(bk, "_day_tier_claim", return_value=3.0), \
+                mock.patch.object(bk, "get_open_position", side_effect=Exception("500")), \
+                mock.patch.dict(sys.modules, {"alerts": types.SimpleNamespace(send_slack=slack)}):
+            self.assertIsNone(bk._cohold_bounded_close("EWY", "intraday"))
+        slack.assert_called_once()
+
+    def test_flat_position_is_success(self):
+        with mock.patch.object(bk, "_day_tier_claim", return_value=3.0), \
+                mock.patch.object(bk, "get_open_position", return_value=None):
+            self.assertTrue(bk._cohold_bounded_close("EWY", "intraday"))
 
 
 if __name__ == "__main__":
