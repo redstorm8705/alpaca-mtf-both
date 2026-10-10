@@ -279,13 +279,14 @@ class ExitConfirmation(unittest.TestCase):
         close_order = SimpleNamespace(id="close-1")
         with mock.patch("execution.broker.get_open_position", return_value=pos), \
              mock.patch("execution.broker.cancel_open_orders_for_symbol", return_value=1), \
-             mock.patch("execution.broker.partial_close_position", return_value=close_order), \
+             mock.patch("execution.broker.partial_close_position", return_value=close_order) as pcp, \
              mock.patch.object(dtm, "_set_pending_exit", return_value=True), \
              mock.patch.object(dtm, "_clear_pending_exit"), \
              mock.patch.object(dtm, "_confirmed_order_fill", return_value=(True, 2.0, 90.0)), \
              mock.patch("strategy.day_tier_logger.log_exit_fill", return_value=True) as log_exit, \
              mock.patch("trade_logger.log_event"):
             self.assertTrue(dtm.flatten_position("MSFT", 2, "long", entry_price=100.0, trade_id="DT-x"))
+        self.assertEqual(pcp.call_args.kwargs["position_side"], "long")   # broker re-checks the net side (T2)
         self.assertEqual(log_exit.call_args.kwargs["fill_price"], 90.0)
         self.assertEqual(log_exit.call_args.kwargs["realized_pnl"], -20.0)
 

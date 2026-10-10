@@ -1300,7 +1300,10 @@ def flatten_position(symbol: str, qty: int, position_side: str, *, entry_price: 
             broker.cancel_open_orders_for_symbol(symbol, only_tier="daytrade")
         except Exception as e:  # noqa: BLE001
             logger.warning("[%s] flatten: tier-scoped cancel raised (continuing): %s", symbol, e)
-        close_order = broker.partial_close_position(symbol, int(qty), tier="daytrade", _return_order=True)
+        # position_side (co-hold board T2, 2026-10-10): the broker re-checks the net side at submit and refuses if
+        # it flipped since the read above, so a "close long" can never become a buy that grows the position.
+        close_order = broker.partial_close_position(symbol, int(qty), tier="daytrade", _return_order=True,
+                                                    position_side=position_side)
         close_order_id = str(getattr(close_order, "id", "") or "")
         if not close_order_id:
             _page(f"[{symbol}] day-tier flatten submit was not attributable to an order ({reason}) — "
