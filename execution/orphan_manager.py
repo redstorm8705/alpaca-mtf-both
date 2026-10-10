@@ -1073,6 +1073,34 @@ def _get_breakout_syms() -> set:
         return set()
 
 
+def _reconcile_day_claim(symbol: str) -> Optional[float]:
+    """The Day tier's signed same-day share claim on `symbol` (co-hold R1,
+    2026-10-10). Broker truth first: today's DT- orders + their nested OCO legs
+    minus same-day hand-overs, the same source broker.close_position bounds a
+    non-Day close with. Else the Day lifecycle log via the ownership snapshot.
+    None when neither is readable. Never raises."""
+    try:
+        from execution.broker import _day_tier_claim
+        _c = _day_tier_claim(symbol)
+        if _c is not None:
+            return float(_c)
+    except Exception as _be:  # noqa: BLE001
+        logger.warning(
+            "[%s] reconcile: Day claim from broker orders failed: %s",
+            symbol, _be)
+    try:
+        from execution.ownership_snapshot import build_ownership_snapshot
+        _snap = build_ownership_snapshot()
+        if any(str(_e).startswith("daytrade_log:") for _e in _snap.errors):
+            return None
+        return float(_snap.claimed_qty(symbol, "day"))
+    except Exception as _se:  # noqa: BLE001
+        logger.warning(
+            "[%s] reconcile: Day claim from the Day log failed: %s",
+            symbol, _se)
+        return None
+
+
 def reconcile_positions(
     tracker: "PortfolioTracker",
     risk: "Optional[RiskManager]" = None,
@@ -1618,16 +1646,87 @@ def reconcile_positions(
     # ── Size mismatches ──────────────────────────────────────────────────────
     for sym in tracker_symbols & alpaca_symbols:
         # abs(): short positions are negative in Alpaca
-        alpaca_qty  = abs(int(float(alpaca_positions[sym].qty)))
+        _alpaca_raw_qty = float(alpaca_positions[sym].qty)
+        alpaca_qty  = abs(int(_alpaca_raw_qty))
         tracker_qty = tracker.open_trades[sym].get(
             "qty_remaining",
             tracker.open_trades[sym].get("qty", 0),
         )
 
+        # ── Co-hold R1 (2026-10-10): compare the Swing book with ITS shares ──
+        # Alpaca keeps one net position per symbol. A same-direction Day lot
+        # (DT- tagged, tracked in the Day tier's own state) must not be absorbed
+        # into the Swing tracker (Swing 7 + Day 3 -> tracker 10), nor its later
+        # exit banked as a fake Swing partial. The Day claim is read for EVERY
+        # symbol (cold-2nd: a Day lot can exactly mask a Swing loss — tracker 7,
+        # Day 3, net 7 — so a matching total proves nothing). Unreadable claim on
+        # a mismatch -> previous behaviour minus any GROW + page. An opposite or
+        # all-Day claim -> tracker unchanged + page (never flip the Swing
+        # direction or zero its book from a Day lot).
+        _net_dir = "long" if _alpaca_raw_qty > 0 else "short"
+        _trk_dir = tracker.open_trades[sym].get("direction", "long")
+        _dclaim = _reconcile_day_claim(sym)
+        if _dclaim is None and (alpaca_qty != tracker_qty
+                                or _net_dir != _trk_dir):
+            # Board McKinney/Taleb: with the Day count unknown, never GROW the
+            # Swing book (that absorbs a possible Day lot); a SHRINK is still
+            # banked (Swing shares really left — never hide a loss).
+            _grow = _net_dir == _trk_dir and alpaca_qty > tracker_qty
+            logger.critical(
+                f"[{sym}] reconcile: Day-tier share count unreadable — "
+                + ("Swing book NOT grown to the Alpaca net (a co-held Day "
+                   "lot cannot be ruled out)." if _grow else
+                   "Swing book matched to the Alpaca position as before.")
+            )
+            try:
+                send_slack(
+                    f":warning: [{sym}] Startup reconcile could not read "
+                    f"the Day tier's share count (Alpaca "
+                    f"{_alpaca_raw_qty:+g}, Swing book {tracker_qty}). "
+                    + ("The Swing book was left unchanged; check whether "
+                       "the extra shares are the Day tier's." if _grow else
+                       "The Swing book was matched to Alpaca as before.")
+                )
+            except Exception as _r1e:
+                logger.warning(f"[{sym}] reconcile R1 page failed: {_r1e}")
+            if _grow:
+                continue
+        elif _dclaim is not None and abs(_dclaim) > 1e-6:
+            _own = abs(_alpaca_raw_qty) - abs(_dclaim)
+            _same = (_alpaca_raw_qty > 0) == (_dclaim > 0)
+            if _same and _own >= 1 - 1e-6:
+                logger.warning(
+                    f"[{sym}] reconcile: the Day tier holds {_dclaim:+g} "
+                    f"of the Alpaca net {_alpaca_raw_qty:+g} — Swing book "
+                    f"compared with its own {int(_own + 1e-6)} share(s)."
+                )
+                _alpaca_raw_qty = _alpaca_raw_qty - _dclaim
+                alpaca_qty = int(abs(_alpaca_raw_qty) + 1e-6)
+            else:
+                logger.critical(
+                    f"[{sym}] reconcile: Day-tier claim {_dclaim:+g} vs "
+                    f"Alpaca net {_alpaca_raw_qty:+g} leaves no "
+                    f"same-direction Swing shares — Swing book left "
+                    f"unchanged (tracker {tracker_qty}); check Alpaca."
+                )
+                try:
+                    send_slack(
+                        f":warning: [{sym}] Startup reconcile: the Day "
+                        f"tier's shares ({_dclaim:+g}) account for the "
+                        f"whole Alpaca position ({_alpaca_raw_qty:+g}) or "
+                        f"run the other way. The Swing book "
+                        f"({tracker_qty} sh) was left unchanged. Check "
+                        f"whether the Swing lot still exists."
+                    )
+                except Exception as _r1e:
+                    logger.warning(
+                        f"[{sym}] reconcile R1 page failed: {_r1e}")
+                continue
+
         # ── Direction mismatch check ─────────────────────────────────────────
-        # Mirrors orphan adoption: pos.qty sign is authoritative.
+        # Mirrors orphan adoption: pos.qty sign is authoritative
+        # (net of a co-held Day lot, R1 above).
         # pos.qty < 0 in Alpaca → position is short.
-        _alpaca_raw_qty    = float(alpaca_positions[sym].qty)
         _alpaca_direction  = "long" if _alpaca_raw_qty > 0 else "short"
         _tracker_direction = tracker.open_trades[sym].get("direction", "long")
         if _alpaca_direction != _tracker_direction:
