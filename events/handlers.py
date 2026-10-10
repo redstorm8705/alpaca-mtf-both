@@ -95,6 +95,20 @@ def safe_close_all(tracker, risk=None,
             # P5-H2: anchor before close to filter stale fills
             _close_ts = _time.time()
             success = close_position(sym)
+            if not success:
+                # Close refused (e.g. another tier's / an untagged order holds
+                # the shares): the trade stays open and managed. Page so the
+                # operator knows the mass close did not complete (2026-10-10).
+                logger.error(f"[{sym}] safe_close_all: close FAILED — still open.")
+                try:
+                    from alerts import send_slack
+                    send_slack(
+                        f":rotating_light: [{sym}] safe_close_all could not close "
+                        f"the position — still open (its stop may have been "
+                        f"cancelled). Check Alpaca now."
+                    )
+                except Exception as _se:  # noqa: BLE001
+                    logger.error(f"[{sym}] safe_close_all page not sent: {_se}")
             if success:
                 # SF-02: fetch actual Alpaca fill price (poll 1.2 s for settlement)
                 # instead of fabricating the stored stop level as exit price.
