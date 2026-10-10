@@ -116,7 +116,7 @@ _page_throttle: dict = {}
 _PAGE_TTL_NAKED_SEC = 900.0      # 15 min — position unprotected NOW, or module blind to it
 _PAGE_TTL_CONFLICT_SEC = 3600.0  # 60 min — a stop is live; manual reconcile needed
 _NAKED_REASONS = frozenset((
-    "no stop level", "place failed", "cover failed", "under-covered",
+    "no stop level", "place failed", "cover failed", "under-covered", "co-hold sizing",
     "sub-share qty", "unknown direction", "loop error",
 ))
 _CONFLICT_REASONS = frozenset((
@@ -195,6 +195,26 @@ def _forever6_symbols() -> set:
             return set(_cached_protected_symbols() or [])
         except Exception:  # noqa: BLE001
             return set()
+
+
+def _day_tier_claim_for_stop(symbol: str) -> float | None:
+    """The Day tier's signed same-day claim on `symbol` (broker._day_tier_claim: today's DT- orders + nested OCO legs
+    minus hand-overs). None when unreadable. Never raises."""
+    try:
+        from execution.broker import _day_tier_claim
+        return _day_tier_claim(symbol)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] stop-protect: Day-tier claim lookup failed: %s", symbol, e)
+        return None
+
+
+def _has_day_order(orders) -> bool:
+    """True when any open order in this symbol's slice carries the Day tier's DT- tag. Never raises."""
+    try:
+        from execution.ownership_guard import tier_of_coid
+        return any(tier_of_coid(getattr(o, "client_order_id", None)) == "daytrade" for o in orders or [])
+    except Exception:  # noqa: BLE001 — unknown -> assume a Day order may be open (the cautious branch)
+        return True
 
 
 def _order_side(o) -> str:
@@ -523,6 +543,40 @@ def reconcile_protection(
                                 now_mono)
                 summary["paged"].append((symbol, "sub-share qty"))
                 continue
+
+            # Co-hold T3 (2026-10-10): size the stop to THIS tier's shares — the Alpaca net minus the Day tier's
+            # same-day claim — never the whole net. A same-direction Day lot carries its own OCO/stop; a Swing
+            # stop over its shares would over-sell into a short when both fire. Unreadable claim: if a Day-tier
+            # (DT-) order is open on the symbol, fail safe on the order + page (never guess); with no Day order
+            # visible, place the full stop as before (an unprotected Swing position is the worse outcome). An
+            # opposite or all-Day claim -> page, nothing placed.
+            _dclaim = _day_tier_claim_for_stop(symbol)
+            if _dclaim is None:
+                if _has_day_order(orders):
+                    # Throttled (cold-2nd): _skip_unknown's once-per-episode streak is reset by the clean-
+                    # evaluation pop above, so it would page every cycle here.
+                    summary["skipped"].append((symbol, "Day-tier share count unreadable with a Day order open"))
+                    _throttled_page(symbol, "co-hold sizing",
+                                    f"UNPROTECTED {direction} x{net_qty:g}: the Day tier's share count is "
+                                    f"unreadable while a Day order is open — nothing placed; MANUAL check.",
+                                    now_mono)
+                    summary["paged"].append((symbol, "co-hold sizing"))
+                    continue
+                logger.warning("[%s] STOP-PROTECT: Day-tier claim unreadable and no Day order open — sizing "
+                               "to the whole position as before.", symbol)
+            elif abs(_dclaim) > _QTY_EPS:
+                _same = (_dclaim > 0) == (direction == "long")
+                _own = net_qty - abs(_dclaim)
+                if not _same or _own < 1 - _QTY_EPS:
+                    _throttled_page(symbol, "co-hold sizing",
+                                    f"UNPROTECTED {direction} x{net_qty:g}: the Day tier claims {_dclaim:+g} of it, "
+                                    f"leaving no same-direction {direction} shares of this tier to stop — nothing "
+                                    f"placed; MANUAL check.", now_mono)
+                    summary["paged"].append((symbol, "co-hold sizing"))
+                    continue
+                qty_int = int(_own + _QTY_EPS)
+                logger.warning("[%s] STOP-PROTECT: Day tier holds %+g of the net %g — stop sized to this tier's "
+                               "%d share(s).", symbol, _dclaim, net_qty, qty_int)
 
             if not place:  # shadow mode — report intended action, submit nothing
                 summary["placed"].append((symbol, "SHADOW", side, qty_int, intended))
