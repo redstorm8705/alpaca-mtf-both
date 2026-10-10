@@ -1724,9 +1724,56 @@ def _floor_bound_partial_qty_impl(symbol: str, qty: int, tier: str) -> int:
     return _bq if _bq >= 1 else 0
 
 
+def _cohold_own_cap(symbol: str, tier: str) -> "int | None":
+    """The most shares a NON-day tier may sell on `symbol` without touching a co-held Day lot (co-hold P2, board
+    McKinney/Taleb + Harris/Taleb 2026-10-10): |net| minus the Day tier's same-day claim. Claim source as in D1
+    (broker orders, else the Day log); read before AND after the position and must match, else unbounded + page
+    (a Day stop filling between the reads would otherwise skew the cap). None = no bound (no Day claim, or it could
+    not be read / changed mid-read / runs the other way — each pages once per symbol, tier and kind per day and keeps
+    the previous behaviour). Never raises."""
+    try:
+        claim = _day_tier_claim(symbol)
+        from_log = False
+        if claim is None:
+            try:
+                from execution.ownership_snapshot import build_ownership_snapshot
+                _snap = build_ownership_snapshot()
+                if any(str(e).startswith("daytrade_log:") for e in _snap.errors):
+                    raise ValueError(f"day-tier log unreadable: {_snap.errors}")
+                claim = float(_snap.claimed_qty(symbol, "day"))
+                from_log = True
+            except Exception as _se:  # noqa: BLE001
+                _cohold_page(symbol, f"{tier} partial close ran without knowing the Day tier's share count (broker "
+                                     f"orders + Day log unreadable: {_se}).",
+                             once_per_day=f"partial_unreadable:{tier}")
+                return None
+        if abs(claim) < 1e-6:
+            return None
+        pos = get_open_position(symbol)
+        if not from_log:
+            _again = _day_tier_claim(symbol)
+            if _again is None or abs(_again - claim) > 1e-6:
+                _cohold_page(symbol, f"{tier} partial close: the Day tier's share count changed while closing — not "
+                                     f"bounded this time.", once_per_day=f"partial_changed:{tier}")
+                return None
+        if pos is None:
+            return None                                    # the caller's own not-found handling applies
+        net = float(pos.qty)
+        if (net > 0) != (claim > 0):
+            _cohold_page(symbol, f"{tier} partial close: the Day tier's claim {claim:+g} is OPPOSITE the net "
+                                 f"{net:+g} — not bounded; check the Day tier's orders.",
+                         once_per_day=f"partial_opposite:{tier}")
+            return None
+        return max(int(abs(net) - abs(claim) + 1e-6), 0)
+    except Exception as e:  # noqa: BLE001
+        _cohold_page(symbol, f"{tier} partial close: co-hold bound failed ({e}) — not bounded.",
+                     once_per_day=f"partial_error:{tier}")
+        return None
+
+
 def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
                            *, _bypass_floor: bool = False, _return_order: bool = False,
-                           position_side: "str | None" = None):
+                           position_side: "str | None" = None, _cohold_checked: bool = False):
     """
     Close a specific quantity of an open position (partial exit).
     Used for taking first-target profits while letting remainder run.
@@ -1764,6 +1811,18 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
         if _fq < 1:
             return False
         qty = _fq
+
+    # CO-HOLD P2 (2026-10-10): a non-Day tier never sells more than its own shares — a partial larger than |net|
+    # minus the Day tier's same-day claim would sell the Day lot (its OCO would later oversell into a short).
+    # Refused + paged, never silently shrunk (the caller books the qty it asked for). _cohold_checked: the
+    # close_position chokepoint already bounded this qty from the same claim.
+    if tier != "daytrade" and not _cohold_checked:
+        _cap = _cohold_own_cap(symbol, tier)
+        if _cap is not None and qty > _cap:
+            _cohold_page(symbol, f"{tier} partial close of {qty} REFUSED: only {_cap} share(s) are {tier}'s — the "
+                                 f"rest belong to the Day tier. Check {tier}'s book.",
+                         once_per_day=f"partial_over:{tier}")
+            return False
 
     client = _get_trading_client()
     try:
@@ -2120,7 +2179,7 @@ def _cohold_bounded_close(symbol: str, tier: str) -> "bool | None":
             return False
         logger.warning(f"[{symbol}] {tier} close bounded to its own {own} share(s): the Day tier holds "
                        f"{abs(claim):g} of the {abs(net):g} (co-hold).")
-        ok = bool(partial_close_position(symbol, own, tier=tier, position_side=side))
+        ok = bool(partial_close_position(symbol, own, tier=tier, position_side=side, _cohold_checked=True))
         if not ok:
             # Parity with _raw_close_position (board H-1): the tier's own stop may already be cancelled.
             _cohold_page(symbol, f"{tier} bounded close of {own} share(s) FAILED — its own stop may already be "

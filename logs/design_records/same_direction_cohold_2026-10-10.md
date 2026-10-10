@@ -95,3 +95,11 @@ MSFT 5 opposite-direction).
 - P1 built 2026-10-10 (branch claude/cohold-p1-fill-tier): fill_helpers._non_day_orders — both close-fill query paths
   use nested=True and drop DT- parents with their legs. Board McKinney+Harris 2-0 APPROVE, cold-2nd PASS. Follow-up
   (board nit): add a side filter to the legacy submitted_after path.
+- P2 built 2026-10-10 (branch claude/cohold-p2-partial-bound): partial_close_position refuses a non-Day partial larger
+  than |net| minus the Day claim (re-read must match; Day-log fallback; pages once per symbol/tier/kind/day). Board
+  Harris+Taleb APPROVE-WITH-CHANGES (applied), cold-2nd PASS.
+- P4 (found by the P2 board, verified at execution/exit_logic.py:1090): after a failed partial, exit_logic cancels
+  EVERY non-stop open order on the symbol with no tier filter. That includes the Day OCO parent (a limit order), so
+  the Day lot loses its target and stop. Fix before the guard lifts: scope that cancel to the calling tier
+  (cancel_open_orders_for_symbol(only_tier=...)). Also (board nit): the swing-breakout partial stop exit could sell
+  down to the cap instead of refusing, because it books the actual fill.
