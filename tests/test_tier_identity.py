@@ -20,8 +20,8 @@ def test_exactly_four_canonical_tiers():
         ("swing", "swing", "Swing"),
         ("intraday", "swing", "Swing"),
         ("qhm", "qhm", "QHM"),
-        ("forever_6", "forever_6", "Forever 6"),
-        ("forever6", "forever_6", "Forever 6"),
+        ("forever_6", "forever_6", "F6"),
+        ("forever6", "forever_6", "F6"),
     ],
 )
 def test_legacy_keys_are_read_as_canonical(raw, canonical, label):

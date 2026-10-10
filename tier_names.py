@@ -10,7 +10,7 @@ from typing import Literal
 
 TierId = Literal["day", "swing", "qhm", "forever_6"]
 TIER_IDS: tuple[TierId, ...] = ("day", "swing", "qhm", "forever_6")
-TIER_NAMES = ("Day", "Swing", "QHM", "Forever 6")
+TIER_NAMES = ("Day", "Swing", "QHM", "F6")
 
 TIER_DISPLAY = {
     "day": "Day",
@@ -18,8 +18,8 @@ TIER_DISPLAY = {
     "intraday": "Swing",   # internal key of the Swing tier (IN- order tags); "intraday" is a historical name
     "swing": "Swing",
     "qhm": "QHM",
-    "forever6": "Forever 6",
-    "forever_6": "Forever 6",
+    "forever6": "F6",
+    "forever_6": "F6",
 }
 
 _ALIASES: dict[str, TierId] = {

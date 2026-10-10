@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501
-"""Gate: person-facing tier names are Day, Swing, QHM, and Forever 6.
+"""Gate: person-facing tier names are Day, Swing, QHM, and F6.
 
 Scans every string literal in the bot's Python (docstrings excluded — they are developer documentation) for the retired
 names "Core MTF", "main bot", "Forever-6", and "Day-Trade". A hit fails CI: route the name through
@@ -61,9 +61,9 @@ class TierNames(unittest.TestCase):
 
     def test_labels(self):
         from tier_names import TIER_NAMES, tier_label
-        self.assertEqual(TIER_NAMES, ("Day", "Swing", "QHM", "Forever 6"))
+        self.assertEqual(TIER_NAMES, ("Day", "Swing", "QHM", "F6"))
         self.assertEqual([tier_label(k) for k in ("daytrade", "intraday", "swing", "qhm", "forever6")],
-                         ["Day", "Swing", "Swing", "QHM", "Forever 6"])
+                         ["Day", "Swing", "Swing", "QHM", "F6"])
         self.assertEqual(tier_label("unattributed", "Unattributed"), "Unattributed")
         self.assertEqual(tier_label(None), "")
 

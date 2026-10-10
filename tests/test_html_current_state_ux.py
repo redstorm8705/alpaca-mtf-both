@@ -70,7 +70,7 @@ def test_tier_components_use_current_bot_vocabulary():
     assert "Swing 2" in badges
     assert "QHM 1" in badges
     table = tier_performance_table(_figures().strategy_edge_stats())
-    for label in ("Swing", "Day", "QHM", "Forever 6", "Unattributed"):
+    for label in ("Swing", "Day", "QHM", "F6", "Unattributed"):
         assert label in table
     assert "+$10.00" in table
 
@@ -232,7 +232,7 @@ def test_monthly_accepts_canonical_tiers_and_rejects_alias_collision():
     }
     with mock.patch.object(figures, "strategy_edge_stats", return_value=canonical):
         html, _ = _strategy_edge_html(figures)
-    assert "Swing" in html and "Day" in html and "Forever 6" in html
+    assert "Swing" in html and "Day" in html and "F6" in html
 
     collision = dict(original)
     collision["by_tier"] = dict(original["by_tier"])
