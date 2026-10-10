@@ -1085,16 +1085,23 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     # Fix 4 / BUG-W1, narrowed (P0 inc 3): cancel blocking NON-STOP open orders only —
                     # the protective stop is never cancelled here (the blanket cancel left the
                     # position without a broker stop until the next cycle).
+                    # Co-hold P4 (2026-10-10): only the Swing tier's OWN orders (IN- tag). Another tier's
+                    # order — e.g. a Day OCO parent, which is a limit order carrying that lot's target and
+                    # stop — or an untagged/manual one is never cancelled (fail toward inaction, as in
+                    # broker.cancel_open_orders_for_symbol).
                     try:
+                        from execution.ownership_guard import tier_of_coid as _tier_of
                         _n_cancelled = 0
                         for _bo in get_open_orders(symbol) or []:
                             _bt = getattr(_bo, "type", "")
                             if "stop" in str(getattr(_bt, "value", _bt)).lower():
                                 continue
+                            if _tier_of(getattr(_bo, "client_order_id", None)) != "intraday":
+                                continue
                             if cancel_order(str(_bo.id)):
                                 _n_cancelled += 1
                         logger.warning(
-                            f"[{symbol}] Auto-cancelled {_n_cancelled} blocking non-stop order(s) "
+                            f"[{symbol}] Auto-cancelled {_n_cancelled} blocking non-stop Swing order(s) "
                             f"— partial close will retry next cycle."
                         )
                     except Exception as _coe:
