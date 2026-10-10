@@ -693,6 +693,46 @@ def _min_stop_room_ok(symbol: str, direction: str, entry_px: float, stop_px: flo
         return False, f"min-stop gate error (fail-closed skip): {e!r}"
 
 
+def _realtime_vol_room(symbol: str, k: float) -> "float | None":
+    """Volatility room from REAL-TIME completed IEX 5-min bars (losers audit 2026-10-09). _robust_atr_5m reads the
+    default feed — consolidated SIP, ~15 min delayed on this plan — so at the open its 14 bars are mostly the PRIOR
+    AFTERNOON: AMZN 10/09 09:40 ET got a $0.30 room (1.5 x ~$0.20) while its first three bars ranged $2.79 / $1.25 /
+    $1.35, and the stop hit 3 minutes before the target. Returns max(k x median true range of the last 14 completed
+    real-time bars, mean true range of TODAY's completed regular-session bars); None when no fresh real-time bars
+    (the caller keeps the existing room). Replay of all 26 logged Day trades (research/day_tier_open_room_replay.py):
+    -$20.07 -> -$10.98 at the same dollar risk. Never raises."""
+    try:
+        from strategy.day_tier_entry_trigger import fetch_bars_ref   # real-time IEX, completed bars, freshness-guarded
+        df = fetch_bars_ref(symbol, config.TF_5M, 30)
+        if df is None or getattr(df, "empty", True) or len(df) < 15:
+            return None
+        highs = [float(x) for x in df["high"].tolist()]
+        lows = [float(x) for x in df["low"].tolist()]
+        closes = [float(x) for x in df["close"].tolist()]
+        trs = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+               for i in range(1, len(closes))]
+        window = sorted(t for t in trs[-14:] if math.isfinite(t) and t >= 0)
+        if len(window) < 14:
+            return None
+        med = (window[7] + window[6]) / 2.0
+        today = datetime.now(ET).date()
+        idx = [i.astimezone(ET) for i in df.index]
+        t_tr: list = []
+        prev: "float | None" = None
+        for j, ts in enumerate(idx):
+            if ts.date() != today or (ts.hour, ts.minute) < (9, 30) or ts.hour >= 16:
+                continue
+            h, lo = highs[j], lows[j]
+            t_tr.append(h - lo if prev is None else max(h - lo, abs(h - prev), abs(lo - prev)))
+            prev = closes[j]
+        today_mean = (sum(t_tr) / len(t_tr)) if t_tr else 0.0
+        room = max(k * med, today_mean)
+        return room if (math.isfinite(room) and room > 0) else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] day-tier real-time volatility room failed (existing room kept): %s", symbol, e)
+        return None
+
+
 def _room_stop(symbol: str, direction: str, limit_px: float, stop_px: float) -> "tuple[float | None, str]":
     """CEO order 2026-10-06 ("the day tier must trade"; replay of 10/05-06: 9 of 25 Track-A setups died in the
     min-stop gate). Returns a protective stop with at least the volatility room k x ATR(5m), measured from BOTH the
@@ -735,6 +775,18 @@ def _room_stop(symbol: str, direction: str, limit_px: float, stop_px: float) -> 
         min_pct = float(_cfg("DAYTRADE_ROOM_MIN_PCT", 0.001))  # PROV:room-stop-last-price-2026-10-09
         vol_floor = (max(k * atr, min_pct * live_ref) if (atr is not None and math.isfinite(atr) and atr > 0)
                      else fallback_pct * live_ref)
+        rt_room = _realtime_vol_room(symbol, k)
+        rt_note = ""
+        # Cap the real-time contribution (board Harris+Thorp 2026-10-10): one halt-reopen / news bar must not set a
+        # 5-8% stop — on a 10/10 max-size entry (sized to notional caps, not stop distance) that multiplies the dollar
+        # risk. The cap never narrows the existing room.
+        max_pct = float(_cfg("DAYTRADE_ROOM_MAX_PCT", 0.0125))  # PROV:room-open-realtime-2026-10-10
+        if rt_room is not None and math.isfinite(max_pct) and max_pct > 0 and rt_room > max_pct * live_ref:
+            rt_note = f"; real-time room ${rt_room:.4f} capped at {max_pct:.2%} of price"
+            rt_room = max_pct * live_ref
+        if rt_room is not None and rt_room > vol_floor:
+            rt_note += f"; real-time/open volatility raised the room ${vol_floor:.4f}->${rt_room:.4f}"
+            vol_floor = rt_room
         if direction == "long":
             need = round(min(e, live_ref) - vol_floor, 2)
             out = min(s, need)
@@ -746,7 +798,7 @@ def _room_stop(symbol: str, direction: str, limit_px: float, stop_px: float) -> 
             return None, "room stop: no positive protective stop"
         how = "kept" if out == round(s, 2) else f"WIDENED {s:.2f}->{out:.2f}"
         return out, (f"room stop {how}: min room ${vol_floor:.4f} (vol ${vol_floor:.4f}) from limit ${e:.2f} / "
-                     f"live ${live_ref:.2f} [{src}]")
+                     f"live ${live_ref:.2f} [{src}]{rt_note}")
     except Exception as ex:  # noqa: BLE001
         logger.warning("[%s] day-tier room-stop error: %s", symbol, ex)
         return None, f"room stop error: {ex!r}"
