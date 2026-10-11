@@ -1,0 +1,17 @@
+{
+  "change": "pr548-opposite-signal-exit",
+  "tier": 1,
+  "paths": [
+    "execution/entry_logic.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "#12c exit complete — fill"
+    }
+  ],
+  "expected_rate": "each Swing opposite-signal (#12c) exit; a few per week",
+  "window_sessions": 10,
+  "reversal": "an opposite-signal exit books the trade closed while Alpaca still shows the position, or #12c close_position FAILED repeats without the Slack page",
+  "baseline_exempt_reason": "PR #548 shipped 2026-10-09, before the post-live engine; its own log text is the proof"
+}
