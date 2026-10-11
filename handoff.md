@@ -8,6 +8,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-11 later, Claude signed) — post-live audit engine live (#592)
+
+Every shipped production file now needs a post-live expectation record (logs/post_live/expect/, record_expectation.py;
+the gate refuses without it). OCI cron 22:15 UTC weekdays runs scripts/post_live_eval.py -> GitHub issues labelled
+post-live + one Slack line. Design record logs/design_records/post_live_engine_2026-10-11.md. ChatGPT owns its own
+queue again (Rafael 2026-10-11).
+
+**⏩ EXACT NEXT ACTION:** Monday close: first evaluator run; work any post-live issues. Build next (BGG first):
+bracket-order adds for co-held stocks (Alpaca exempts bracket/OCO from the wash rule); Day after-hours exit coverage
+(step through the touch before 8 PM ET; Alpaca 24/5 overnight session 8 PM-4 AM supports limit orders); retry-all-
+session for an unreadable Day share count; Track B keep/merge/retire recommendation; post-live engine increment 2
+(metric evaluation).
+
 ## ⏩ LATEST (2026-10-11, Claude signed) — same-direction co-hold LIVE in config (#589 bracket, #590 lift)
 
 CEO rule shipped: the Day tier may trade a stock another tier holds in the SAME direction (config
