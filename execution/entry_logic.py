@@ -1566,6 +1566,16 @@ def execute_entries(
         # Submit plain market order — no brackets, no stops attached
         # All stop/target levels stored in tracker only, bot manages execution
         side = "buy" if direction == "long" else "sell"
+        # FOREIGN-STOP DEFER (design record cohold_buys_vs_foreign_stops_2026-10-11.md, Option A): Alpaca rejects this
+        # entry while another tier's opposite-side stop rests on the symbol (wash rule). Defer this scan, logged; it
+        # fires on a later scan if the signal still holds once that stop clears (a Day lot exits the same session).
+        from execution.foreign_stop_guard import clear_deferral, foreign_opposite_stop, note_deferral
+        _fstop = foreign_opposite_stop(symbol, side, "intraday")
+        if _fstop is not None:
+            note_deferral(symbol, "intraday", _fstop)
+            _rc8_clear_buffers(symbol, "foreign-stop-defer")
+            continue
+        clear_deferral(symbol, "intraday")
         from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
         # Reserve an upper gross-notional buffer for either direction and a separate
         # lower short-sale price for honest stop-risk measurement.
@@ -2066,6 +2076,13 @@ def _overnight_entry_check(
 
     # After 8 PM ET the AH session is closed — submit plain DAY limit (queues for pre-mkt)
     _use_extended = _mins < _main._OVERNIGHT_ENTRY_START   # True only if before 8 PM (edge case)
+    # FOREIGN-STOP DEFER (Option A, design record cohold_buys_vs_foreign_stops_2026-10-11.md): see the intraday path.
+    from execution.foreign_stop_guard import clear_deferral, foreign_opposite_stop, note_deferral
+    _fstop = foreign_opposite_stop(symbol, side, "intraday")
+    if _fstop is not None:
+        note_deferral(symbol, "intraday", _fstop)
+        return
+    clear_deferral(symbol, "intraday")
     from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
     _capital = live_admit("swing", "intraday", symbol, side, shares, limit_price, stop_price=stop, overnight=True)
     if not _capital.approved:
