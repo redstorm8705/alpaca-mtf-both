@@ -1,0 +1,35 @@
+{
+  "change": "qhm-stop-quantity-reconcile",
+  "tier": 2,
+  "paths": [
+    "execution/broker.py",
+    "execution/ownership_guard.py",
+    "execution/quarterly_hold_manager.py",
+    "main.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "QHM stop resized atomically"
+    }
+  ],
+  "expected_rate": "only when a live QHM protective stop differs from exact QHM-owned quantity or price; rare and possibly zero for several sessions",
+  "window_sessions": 10,
+  "reversal": "a QHM stop remains missing or covers a quantity different from QHM ownership after reconciliation, another tier's sell is canceled, or recovery submits from ambiguous evidence",
+  "metrics": [
+    {
+      "name": "QHM stop coverage equality",
+      "source": "QHM state, ownership ledger, and Alpaca open-order snapshot",
+      "direction": "none",
+      "bound": "for each exercised QHM hold, live QH stop remaining quantity equals the QHM ledger claim"
+    },
+    {
+      "name": "cross-tier stop cancellations",
+      "source": "logs/mtf_bot.log and Alpaca order history",
+      "direction": "none",
+      "bound": "zero recognized Day, Swing, or Forever-6 orders canceled by the QHM stray guard"
+    }
+  ],
+  "verification": "tests/test_qhm_stop_quantity_reconcile.py",
+  "baseline_exempt_reason": "The proof text is introduced by this change but intentionally remains a concise operational QHM log line instead of embedding the change slug."
+}

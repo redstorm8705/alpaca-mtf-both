@@ -137,6 +137,7 @@ class GuardBoundaryTests(unittest.TestCase):
             mock.patch.object(
                 guard, "_LEDGER_MIGRATION_LOCK_PATH", root / ".migration.lock"
             ),
+            mock.patch.object(guard, "_LEDGER_LOCK_PATH", root / ".ledger.lock"),
         ]
         for patch in self.patches:
             patch.start()
@@ -169,6 +170,36 @@ class GuardBoundaryTests(unittest.TestCase):
         backup = guard._load_bak_ledger()
         self.assertEqual(guard.tier_qty(backup, "NVDA", "forever6"), 4.0)
         self.assertEqual(guard.protected_floor(backup, "NVDA"), 7.0)
+
+    def test_exact_qhm_fill_reduction_supports_coheld_symbol_and_is_idempotent(self):
+        row = ledger_v1()  # QHM=3, other tiers=7, total/net=10
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        source = "qhm_registered_stop:order-123"
+        self.assertTrue(guard.apply_authorized_tier_fill_reduction(
+            "NVDA", "qhm", 2, 8, source
+        ))
+        canonical = guard.load_canonical_ledger()
+        entry = canonical["positions"]["NVDA"]
+        self.assertEqual(entry["tiers"]["qhm"]["qty"], 1)
+        self.assertEqual(entry["tiers"]["qhm"]["last_fill_id"], source)
+        self.assertEqual((entry["alpaca_net_qty"], entry["drift"]), (8, 0))
+        self.assertTrue(guard.apply_authorized_tier_fill_reduction(
+            "NVDA", "qhm", 2, 8, source
+        ))
+        self.assertEqual(
+            guard.load_canonical_ledger()["positions"]["NVDA"]["tiers"]["qhm"]["qty"],
+            1,
+        )
+
+    def test_exact_qhm_fill_reduction_rejects_unexplained_net_delta(self):
+        guard._LEDGER_PATH.write_bytes(dumps(ledger_v1(), target=2))
+        self.assertFalse(guard.apply_authorized_tier_fill_reduction(
+            "NVDA", "qhm", 2, 7, "qhm_registered_stop:order-123"
+        ))
+        self.assertEqual(
+            guard.load_canonical_ledger()["positions"]["NVDA"]["tiers"]["qhm"]["qty"],
+            3,
+        )
 
     def test_invalid_candidate_leaves_current_and_backup_unchanged(self):
         original = dumps(ledger_v1(), target=1)

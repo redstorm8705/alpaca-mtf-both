@@ -453,8 +453,12 @@ def main():
         # every QHM buy raised TypeError (NVDA tranche 1, 49 failures on 2026-10-09).
         def submit_limit_order(self, s, q, side, price, ext=False, tier="qhm", client_order_id=None):
             return _qhm_submit_limit(s, q, side, price, ext, tier=tier, client_order_id=client_order_id)
-        def submit_gtc_stop_order(self, s, q, side, price, tier="qhm"):
-            return _qhm_submit_gtc_stop(s, q, side, price, tier=tier)
+        def submit_gtc_stop_order(
+            self, s, q, side, price, tier="qhm", client_order_id=None
+        ):
+            return _qhm_submit_gtc_stop(
+                s, q, side, price, tier=tier, client_order_id=client_order_id
+            )
         # tier="qhm" (matches the submit siblings): the QHM manager's own close must
         # tag the qhm tier so the never-sell-floor chokepoint (broker.close_position,
         # increment 4a) routes it to the qhm tier's shares — else it defaults to

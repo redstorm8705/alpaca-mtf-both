@@ -15,7 +15,9 @@ class FakeDispatcher:
         self.stop_ok, self.add_ok = stop_ok, add_ok
         self.stops, self.adds = [], []
 
-    def submit_gtc_stop(self, broker, sym, qty, side, price):
+    def submit_gtc_stop(
+        self, broker, sym, qty, side, price, client_order_id=None
+    ):
         self.stops.append((sym, qty, side, price))
         return SimpleNamespace(id="stop-new") if self.stop_ok else None
 
@@ -174,11 +176,13 @@ class StopSafeAdd(unittest.TestCase):
             recovery_pos.qty_filled = owner
             return owner
         manager._strict_resync_qty = _prove_owner
+        manager._get_open_orders = lambda: []
         recovered_broker = SimpleNamespace(
-            get_order=lambda _oid: SimpleNamespace(status="canceled", filled_qty=1)
+            get_order=lambda _oid: SimpleNamespace(status="canceled", filled_qty=1),
+            get_order_by_client_order_id=lambda _coid: None,
         )
         with mock.patch.dict(sys.modules, {"execution.broker": recovered_broker}):
-            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol, []))
         self.assertEqual(d.stops, [("NVDA", 1, "sell", 200.0)])
         self.assertFalse(pos.stop_recovery_requires_qty_proof)
         self.assertIsNone(pos.stop_recovery_canceled_order_id)

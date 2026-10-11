@@ -42,12 +42,15 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import time
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
@@ -347,6 +350,8 @@ class HoldPosition:
     stop_recovery_canceled_order_id: Optional[str] = None
     stop_recovery_baseline_qty: Optional[int] = None
     stop_recovery_add_submitted: bool = False
+    stop_recovery_client_order_id: Optional[str] = None
+    stop_recovery_intended_qty: Optional[int] = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -416,8 +421,12 @@ class OrderDispatcher:
         qty: int,
         side: str,
         stop_price: float,
+        client_order_id: str | None = None,
     ) -> object:
-        return broker.submit_gtc_stop_order(symbol, qty, side, stop_price, tier="qhm")
+        return broker.submit_gtc_stop_order(
+            symbol, qty, side, stop_price, tier="qhm",
+            client_order_id=client_order_id,
+        )
 
     def close(self, broker, symbol: str) -> bool:
         # tier="qhm" (matches submit_limit / submit_gtc_stop above): tags the qhm
@@ -564,11 +573,50 @@ class QuarterlyHoldManager:
         Peterffy: reconcile ADOPTS existing stops; AH loop resubmits missing ones.
         """
         result = ReconcileResult()
+        _startup_blocked: set[str] = set()
+        _startup_guard_skip: set[str] = set()
+        _startup_snapshot = self._get_open_orders() if not self.dry_run else []
+        if _startup_snapshot is None:
+            _startup_blocked = {
+                sym for sym, p in self._positions.items()
+                if p.state in (HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE)
+            }
+            _startup_guard_skip.update(_startup_blocked)
+            if _startup_blocked:
+                self._alert(
+                    ":rotating_light: QHM startup stop snapshot unreadable for %s — "
+                    "adoption and stray cancellation blocked."
+                    % sorted(_startup_blocked)
+                )
+        else:
+            for _sym, _pos in list(self._positions.items()):
+                if _pos.state not in (HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE):
+                    continue
+                if (_pos.stop_recovery_requires_qty_proof
+                        or _pos.ambiguous_add_client_order_id):
+                    _startup_guard_skip.add(_sym)
+                    continue
+                try:
+                    _skip, _block = self._reconcile_stop_coverage(
+                        _pos, _startup_snapshot
+                    )
+                except Exception as exc:  # isolate one bad hold from the book
+                    logger.exception(
+                        "QHM startup stop preflight failed for %s: %s", _sym, exc
+                    )
+                    result.errors.append(f"{_sym}: stop preflight: {exc}")
+                    _skip, _block = True, True
+                if _skip:
+                    _startup_guard_skip.add(_sym)
+                if _block:
+                    _startup_blocked.add(_sym)
         # HOLE-2 guard (2026-07-02): before the per-symbol reconcile and before RTH,
         # kill any stray SELL resting on a QHM-held symbol so an orphaned or
         # cross-process sell cannot fill at the open and liquidate a quarterly hold.
         try:
-            _stray = self.cancel_stray_sell_orders()
+            _stray = (self.cancel_stray_sell_orders(
+                open_orders=_startup_snapshot, skip_symbols=_startup_guard_skip
+            ) if _startup_snapshot is not None else 0)
             if _stray:
                 logger.critical(
                     "QuarterlyHoldManager reconcile_on_startup: cancelled %d stray "
@@ -580,14 +628,17 @@ class QuarterlyHoldManager:
                 "error: %s", e,
             )
         for symbol, pos in list(self._positions.items()):
+            if symbol in _startup_blocked:
+                continue
             try:
                 if pos.state == HoldState.AWAITING_FILL:
                     self._reconcile_awaiting_fill(pos, result, dry_run=self.dry_run)
                     result.symbols_reconciled.append(symbol)
 
                 elif pos.state == HoldState.ACTIVE:
-                    # Adopt existing stop (if any); do NOT resubmit at startup
-                    self._adopt_existing_stop(pos, result)
+                    # The single-snapshot preflight above already proved and
+                    # durably adopted/resized this stop.
+                    result.orders_verified += 1
                     result.symbols_reconciled.append(symbol)
 
                 elif pos.state == HoldState.PENDING_STOP_REPLACE:
@@ -628,7 +679,11 @@ class QuarterlyHoldManager:
         )
         return result
 
-    def cancel_stray_sell_orders(self) -> int:
+    def cancel_stray_sell_orders(
+        self,
+        open_orders: "Optional[list]" = None,
+        skip_symbols: "Optional[set[str]]" = None,
+    ) -> int:
         """HOLE-2 guard (2026-07-02, board + Gro + GAI): cancel any resting SELL
         order on a QHM-held symbol that is NOT that hold's own registered protective
         stop.
@@ -670,6 +725,10 @@ class QuarterlyHoldManager:
         }
         if not guarded:
             return 0
+        # Copy the optional parameter to an explicit local book.  This keeps the
+        # caller-supplied snapshot distinct from the fallback broker read below.
+        order_book = open_orders
+        symbols_to_skip = skip_symbols or set()
         # Distinguish an API error (None) from a genuinely-empty book ([]). broker's
         # get_open_orders() returns None ONLY on API failure. We must NOT blindly
         # cancel on unreadable state: a fail-CLOSED "cancel every sell on a guarded
@@ -677,15 +736,16 @@ class QuarterlyHoldManager:
         # the hold unprotected — the opposite of this guard's purpose (board+Gro+GAI
         # 2026-07-02). So we fail OPEN on the cancel action, but make the blindness
         # LOUD (CRITICAL + Slack) so a human verifies holds while the API is degraded.
-        try:
-            from execution.broker import get_open_orders
-            open_orders = get_open_orders()
-        except Exception as e:  # RC-3
-            open_orders = None
-            logger.warning(
-                "QHM cancel_stray_sell_orders: get_open_orders raised: %s", e
-            )
-        if open_orders is None:
+        if order_book is None:
+            try:
+                from execution.broker import get_open_orders
+                order_book = get_open_orders()
+            except Exception as e:  # RC-3
+                order_book = None
+                logger.warning(
+                    "QHM cancel_stray_sell_orders: get_open_orders raised: %s", e
+                )
+        if order_book is None:
             logger.critical(
                 "QHM cancel_stray_sell_orders: order API UNREADABLE — stray-sell "
                 "guard could NOT run; %d QHM hold(s) %s not verified this pass. "
@@ -698,18 +758,27 @@ class QuarterlyHoldManager:
                 f"{sorted(guarded)} for stray sells this pass. Manual check advised."
             )
             return 0
-        if not open_orders:
+        if not order_book:
             return 0  # genuinely no open orders on the book
         cancelled = 0
-        for o in open_orders:
+        for o in order_book:
             try:
                 o_sym = getattr(o, "symbol", None)
                 if o_sym not in guarded:
+                    continue
+                if o_sym in symbols_to_skip:
                     continue
                 _side_raw = getattr(o, "side", "")
                 o_side = str(getattr(_side_raw, "value", _side_raw)).lower()
                 if "sell" not in o_side:
                     continue  # buy — never liquidates a long hold
+                # This guard owns QHM orders only.  A Day/Swing/F6 stop on a
+                # co-held symbol protects that tier's shares and must not be
+                # cancelled merely because its id differs from QHM's stop.
+                _coid = str(getattr(o, "client_order_id", "") or "")
+                if (_coid and not _coid.startswith("QH-")
+                        and self._recognized_foreign_sell_coid(_coid, o_sym)):
+                    continue
                 o_id = getattr(o, "id", None)
                 if o_id is None:
                     continue
@@ -747,14 +816,79 @@ class QuarterlyHoldManager:
                 )
         return cancelled
 
+    @staticmethod
+    def _recognized_foreign_sell_coid(client_order_id: str, symbol: str) -> bool:
+        """Recognize a canonical Day/Swing/Forever-6 sell identity.
+
+        Arbitrary custom IDs remain stray.  The suffix is intentionally opaque
+        because older valid IDs have one token while current IDs carry epoch and
+        uniqueness tokens.
+        """
+        parts = str(client_order_id or "").split("-", 3)
+        return bool(
+            len(parts) == 4
+            and parts[0] in {"DT", "IN", "F6"}
+            and parts[1].upper() == str(symbol).upper()
+            and parts[2].lower() == "s"
+            and parts[3]
+        )
+
     def run_weekly_check(self) -> None:
         """Once per RTH cycle: external close detection + resync + max-hold exit.
         GTC stop is the primary exit path. _initiate_exit() is the 13-week backstop.
         """
-        # HOLE-2 guard (2026-07-02): kill any stray SELL on a QHM-held symbol that
-        # appeared since the last cycle, before it can fill and liquidate a hold.
+        # Prove QHM-owned quantity and stop coverage from ONE order-book snapshot
+        # before the stray-sell guard.  This lets a valid replacement stop be
+        # durably adopted before the guard decides which sell id is legitimate.
+        _coverage_blocked: set[str] = set()
+        _guard_skip: set[str] = set()
         try:
-            _stray = self.cancel_stray_sell_orders()
+            _order_snapshot = self._get_open_orders()
+        except Exception as _snapshot_exc:  # RC-3
+            _order_snapshot = None
+            logger.critical("QHM stop-coverage snapshot failed: %s", _snapshot_exc)
+        if _order_snapshot is None:
+            _guard_skip = {
+                sym for sym, p in self._positions.items()
+                if p.state in (HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE)
+            }
+            _coverage_blocked.update(_guard_skip)
+            if _guard_skip:
+                self._alert(
+                    ":rotating_light: QHM stop-coverage snapshot unreadable for %s — "
+                    "all stop-mutating QHM work blocked this cycle."
+                    % sorted(_guard_skip)
+                )
+        else:
+            for _sym, _pos in list(self._positions.items()):
+                if _pos.state not in (HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE):
+                    continue
+                # Special add/cancel recovery has stronger, fill-aware invariants
+                # and remains owned by resubmit_stop_if_needed().
+                if (_pos.stop_recovery_requires_qty_proof
+                        or _pos.ambiguous_add_client_order_id):
+                    _guard_skip.add(_sym)
+                    continue
+                try:
+                    _skip_guard, _block_loop = self._reconcile_stop_coverage(
+                        _pos, _order_snapshot
+                    )
+                except Exception as exc:  # one symbol must not suppress the rest
+                    logger.exception(
+                        "QHM RTH stop preflight failed for %s: %s", _sym, exc
+                    )
+                    _skip_guard, _block_loop = True, True
+                if _skip_guard:
+                    _guard_skip.add(_sym)
+                if _block_loop:
+                    _coverage_blocked.add(_sym)
+
+        # HOLE-2 guard (2026-07-02): kill any stray SELL on a QHM-held symbol that
+        # appeared since the last cycle. It consumes the SAME snapshot used above.
+        try:
+            _stray = (self.cancel_stray_sell_orders(
+                open_orders=_order_snapshot, skip_symbols=_guard_skip
+            ) if _order_snapshot is not None else 0)
             if _stray:
                 logger.critical(
                     "QuarterlyHoldManager run_weekly_check: cancelled %d stray sell "
@@ -765,6 +899,8 @@ class QuarterlyHoldManager:
                 "QuarterlyHoldManager run_weekly_check: stray-sell guard error: %s", e
             )
         for symbol, pos in list(self._positions.items()):
+            if symbol in _coverage_blocked:
+                continue
             _stuck = (HoldState.PENDING_STOP_REPLACE, HoldState.PENDING_EARNINGS)
             if pos.state in _stuck:
                 try:
@@ -785,7 +921,7 @@ class QuarterlyHoldManager:
                     # scheduled restart) indefinitely away. Now attempts
                     # recovery every cycle instead of waiting for a restart.
                     if pos.state == HoldState.PENDING_STOP_REPLACE:
-                        self.resubmit_stop_if_needed(symbol)
+                        self.resubmit_stop_if_needed(symbol, _order_snapshot)
                     elif pos.state == HoldState.PENDING_EARNINGS:
                         self._reconcile_pending_earnings(pos, ReconcileResult())
                 except Exception as e:  # RC-3
@@ -800,7 +936,12 @@ class QuarterlyHoldManager:
                 if self._detect_external_close(pos, ReconcileResult()):
                     continue
 
-                self._resync_from_alpaca(pos)
+                if self._strict_resync_qty(pos) is None:
+                    logger.critical(
+                        "QuarterlyHoldManager: %s QHM ownership proof unavailable; "
+                        "skipping ACTIVE mutations this cycle", symbol,
+                    )
+                    continue
 
                 # EARNINGS PROFIT-TAKE: evaluated BEFORE the day-5 stop-cancel below so it has
                 # a resting stop to cancel/resubmit around; DORMANT unless _EARNINGS_TRIM_ENABLED
@@ -1212,10 +1353,43 @@ class QuarterlyHoldManager:
         count rearmed. Never raises into the caller."""
         n = 0
         try:
+            # Use one broker-book snapshot for the whole recovery pass.  An
+            # ordinary pending hold must first adopt or atomically resize any
+            # live QH stop already on the book; submitting from state alone can
+            # create duplicate reducing orders after a crash between broker
+            # acceptance and local persistence.
+            _snapshot = self._get_open_orders()
+            if _snapshot is None:
+                logger.critical(
+                    "QHM resubmit_pending_stops: order API unreadable — no stop "
+                    "recovery mutation attempted"
+                )
+                self._alert(
+                    ":rotating_light: QHM pending-stop recovery blocked: broker "
+                    "order book unreadable; no blind stop submitted."
+                )
+                return 0
             for _sym, _pos in list(self._positions.items()):
                 if _pos is not None and _pos.state == HoldState.PENDING_STOP_REPLACE:
                     try:
-                        if self.resubmit_stop_if_needed(_sym):
+                        _special_recovery = bool(
+                            _pos.stop_recovery_requires_qty_proof
+                            or _pos.stop_recovery_canceled_order_id
+                            or _pos.ambiguous_add_client_order_id
+                        )
+                        if not _special_recovery:
+                            _skip, _blocked = self._reconcile_stop_coverage(
+                                _pos, _snapshot
+                            )
+                            if _blocked:
+                                continue
+                            # The helper mutates state after broker proof; use
+                            # its runtime value without relying on mypy's stale
+                            # narrowing from the loop predicate above.
+                            if getattr(_pos.state, "value", _pos.state) == "ACTIVE":
+                                n += 1
+                                continue
+                        if self.resubmit_stop_if_needed(_sym, _snapshot):
                             n += 1
                     except Exception as _re:
                         logger.warning("QHM resubmit_pending_stops: %s failed: %s", _sym, _re)
@@ -1223,7 +1397,9 @@ class QuarterlyHoldManager:
             logger.warning("QHM resubmit_pending_stops error: %s", _e)
         return n
 
-    def resubmit_stop_if_needed(self, symbol: str) -> bool:
+    def resubmit_stop_if_needed(
+        self, symbol: str, order_snapshot: Optional[list] = None
+    ) -> bool:
         """Called by AH GTC loop (run_cycle.py AH section) to resubmit missing stops.
         Peterffy: only AH loop initiates resubmit — not startup reconcile.
         Returns True if stop was resubmitted.
@@ -1233,12 +1409,42 @@ class QuarterlyHoldManager:
             return False
         if self.dry_run or pos.stop_price <= 0:
             return False
+        if order_snapshot is None:
+            order_snapshot = self._get_open_orders()
+        if order_snapshot is None:
+            logger.critical(
+                "QuarterlyHoldManager: %s recovery blocked — order book unreadable",
+                pos.symbol,
+            )
+            return False
+        _qh_sells = [
+            o for o in order_snapshot
+            if (str(getattr(o, "symbol", "") or "").upper()
+                == pos.symbol.upper()
+                and str(getattr(o, "client_order_id", "") or "").startswith("QH-")
+                and str(getattr(
+                    getattr(o, "side", ""), "value", getattr(o, "side", "")
+                )).lower() == "sell")
+        ]
+        if (len(_qh_sells) > 1
+                or (len(_qh_sells) == 1
+                    and self._qh_stop_shape(_qh_sells[0], pos) is None)):
+            self._stop_coverage_pending(
+                pos, "ambiguous QH stop book during recovery"
+            )
+            return False
+        _had_strict_recovery = bool(
+            pos.stop_recovery_requires_qty_proof
+            or pos.stop_recovery_canceled_order_id
+            or pos.ambiguous_add_client_order_id
+        )
         if (pos.stop_recovery_requires_qty_proof
                 or pos.stop_recovery_canceled_order_id is not None):
             from execution.broker import get_order as _get_canceled_stop
 
             _canceled_id = pos.stop_recovery_canceled_order_id
             _baseline_qty = pos.stop_recovery_baseline_qty
+            _baseline_qty = self._whole_share_qty(_baseline_qty)
             if not _canceled_id or _baseline_qty is None or _baseline_qty < 0:
                 logger.critical(
                     "QuarterlyHoldManager: %s missing canceled-stop recovery evidence",
@@ -1255,9 +1461,10 @@ class QuarterlyHoldManager:
                     pos.symbol, _canceled_id,
                 )
                 return False
-            try:
-                _stop_filled = int(float(getattr(_canceled, "filled_qty", 0) or 0))
-            except (TypeError, ValueError):
+            _stop_filled = self._whole_share_qty(
+                getattr(_canceled, "filled_qty", None)
+            )
+            if _stop_filled is None:
                 return False
             if _stop_filled < 0 or _stop_filled > _baseline_qty:
                 return False
@@ -1333,11 +1540,10 @@ class QuarterlyHoldManager:
                         "reach terminal state; keeping PENDING_STOP_REPLACE", pos.symbol,
                     )
                     return False
-            try:
-                _amb_filled = int(float(getattr(_amb, "filled_qty", 0) or 0))
-            except (TypeError, ValueError):
+            _amb_filled = self._whole_share_qty(getattr(_amb, "filled_qty", None))
+            if _amb_filled is None:
                 return False
-            _baseline = pos.ambiguous_add_baseline_qty
+            _baseline = self._whole_share_qty(pos.ambiguous_add_baseline_qty)
             if _baseline is None:
                 return False
             _expected_owner_qty = _baseline + _amb_filled
@@ -1346,14 +1552,17 @@ class QuarterlyHoldManager:
             _stop_before_filled = 0
             if _provisional_id:
                 _stop_before = _get_ambiguous_order(_provisional_id)
-                if _stop_before is None:
+                if (_stop_before is None
+                        or not self._registered_qhm_stop_identity_ok(
+                            _stop_before, pos, _provisional_id
+                        )):
                     return False
-                try:
-                    _stop_before_filled = int(float(
-                        getattr(_stop_before, "filled_qty", 0) or 0
-                    ))
-                except (TypeError, ValueError):
+                _parsed_before = self._whole_share_qty(
+                    getattr(_stop_before, "filled_qty", None)
+                )
+                if _parsed_before is None:
                     return False
+                _stop_before_filled = _parsed_before
                 if _stop_before_filled < 0:
                     return False
             _pre_cancel_owner_qty = max(
@@ -1371,15 +1580,21 @@ class QuarterlyHoldManager:
             _cover = self._live_covering_qhm_stop(pos, _pre_cancel_qty)
             if _cover is not None:
                 _cover_coid = pos.ambiguous_add_client_order_id
+                _recovery_stop_coid = pos.stop_recovery_client_order_id
+                _recovery_stop_qty = pos.stop_recovery_intended_qty
                 pos.stop_order_id = getattr(_cover, "id", pos.stop_order_id)
                 pos.ambiguous_add_client_order_id = None
                 pos.ambiguous_add_baseline_qty = None
+                pos.stop_recovery_client_order_id = None
+                pos.stop_recovery_intended_qty = None
                 pos.state = HoldState.ACTIVE
                 pos.updated_at = self._now_et().isoformat()
                 if self._save_state():
                     return True
                 pos.ambiguous_add_client_order_id = _cover_coid
                 pos.ambiguous_add_baseline_qty = _baseline
+                pos.stop_recovery_client_order_id = _recovery_stop_coid
+                pos.stop_recovery_intended_qty = _recovery_stop_qty
                 pos.state = HoldState.PENDING_STOP_REPLACE
                 return False
             # Cancel the provisional stop before the final strict quantity read.
@@ -1407,12 +1622,20 @@ class QuarterlyHoldManager:
                     _stop_time.sleep(0.5)
                 else:
                     return False
-                try:
-                    _stop_after_filled = int(float(
-                        getattr(_stop_terminal, "filled_qty", 0) or 0
-                    ))
-                except (TypeError, ValueError):
+                if not self._registered_qhm_stop_identity_ok(
+                    _stop_terminal, pos, _provisional_id
+                ):
+                    logger.critical(
+                        "QuarterlyHoldManager: %s provisional stop terminal response "
+                        "failed exact QHM identity proof", pos.symbol,
+                    )
                     return False
+                _parsed_after = self._whole_share_qty(
+                    getattr(_stop_terminal, "filled_qty", None)
+                )
+                if _parsed_after is None:
+                    return False
+                _stop_after_filled = _parsed_after
                 if _stop_after_filled < _stop_before_filled:
                     return False
                 # The persisted baseline predates this provisional stop, so every
@@ -1420,6 +1643,15 @@ class QuarterlyHoldManager:
                 # fills that occurred before this recovery cycle began.
                 _stop_fill_delta = _stop_after_filled
                 pos.stop_order_id = None
+                # A confirmed terminal provisional recovery stop consumes its
+                # idempotency key.  A differently-sized final stop needs a new
+                # durable intent; Alpaca will not accept reuse of the old key.
+                if pos.stop_recovery_client_order_id:
+                    pos.stop_recovery_client_order_id = None
+                    pos.stop_recovery_intended_qty = None
+                    pos.updated_at = self._now_et().isoformat()
+                    if not self._save_state():
+                        return False
             if _stop_fill_delta:
                 _baseline = max(_baseline - _stop_fill_delta, 0)
                 pos.ambiguous_add_baseline_qty = _baseline
@@ -1440,17 +1672,14 @@ class QuarterlyHoldManager:
                     "QuarterlyHoldManager: %s ambiguous dip-add has no fresh post-cancel "
                     "position proof; keeping recovery metadata and pending state", pos.symbol,
                 )
-                try:
-                    _fallback = (
-                        self._dispatcher.submit_gtc_stop(
-                            self.broker, pos.symbol, _surviving_owner_qty,
-                            "sell" if pos.direction == "long" else "buy",
-                            pos.stop_price,
-                        )
-                        if _surviving_owner_qty > 0 else None
+                _fallback = (
+                    self._recover_or_submit_stop(
+                        pos, _surviving_owner_qty,
+                        "sell" if pos.direction == "long" else "buy",
+                        pos.stop_price,
                     )
-                except Exception:
-                    _fallback = None
+                    if _surviving_owner_qty > 0 else None
+                )
                 if _fallback is not None and hasattr(_fallback, "id"):
                     pos.stop_order_id = _fallback.id
                 self._save_state()
@@ -1466,13 +1695,10 @@ class QuarterlyHoldManager:
                 pos.updated_at = self._now_et().isoformat()
                 self._save_state()
                 return False
-            try:
-                _final_stop = self._dispatcher.submit_gtc_stop(
-                    self.broker, pos.symbol, _actual_qty,
-                    "sell" if pos.direction == "long" else "buy", pos.stop_price,
-                )
-            except Exception:
-                _final_stop = None
+            _final_stop = self._recover_or_submit_stop(
+                pos, _actual_qty,
+                "sell" if pos.direction == "long" else "buy", pos.stop_price,
+            )
             if not (_final_stop is not None and hasattr(_final_stop, "id")):
                 logger.critical(
                     "QuarterlyHoldManager: %s final stop submit failed after ambiguous "
@@ -1485,14 +1711,20 @@ class QuarterlyHoldManager:
                 )
                 return False
             _resolved_coid = pos.ambiguous_add_client_order_id
+            _resolved_stop_coid = pos.stop_recovery_client_order_id
+            _resolved_stop_qty = pos.stop_recovery_intended_qty
             pos.stop_order_id = _final_stop.id
             pos.ambiguous_add_client_order_id = None
             pos.ambiguous_add_baseline_qty = None
+            pos.stop_recovery_client_order_id = None
+            pos.stop_recovery_intended_qty = None
             pos.state = HoldState.ACTIVE
             pos.updated_at = self._now_et().isoformat()
             if not self._save_state():
                 pos.ambiguous_add_client_order_id = _resolved_coid
                 pos.ambiguous_add_baseline_qty = _baseline
+                pos.stop_recovery_client_order_id = _resolved_stop_coid
+                pos.stop_recovery_intended_qty = _resolved_stop_qty
                 pos.state = HoldState.PENDING_STOP_REPLACE
                 logger.critical(
                     "QuarterlyHoldManager: %s recovered stop is live but ACTIVE state "
@@ -1500,6 +1732,102 @@ class QuarterlyHoldManager:
                 )
                 return False
             return True
+        # Ordinary missing-stop recovery must refresh exact QHM ownership too;
+        # pos.qty_filled may otherwise contain a stale or whole-symbol quantity.
+        # First account for a terminal fill on the exact registered QHM stop.  The
+        # live order book omits terminal orders, and a co-held symbol may still have
+        # a broker position, so treating that absence as a missing stop would place
+        # a new QHM stop over another tier's shares.
+        if pos.stop_order_id and not any(
+            str(getattr(o, "id", "") or "") == str(pos.stop_order_id)
+            for o in order_snapshot
+        ):
+            from execution.broker import get_order as _get_registered_stop
+
+            terminal_order = _get_registered_stop(str(pos.stop_order_id))
+            terminal_status = str(
+                getattr(getattr(terminal_order, "status", ""), "value",
+                        getattr(terminal_order, "status", "")) or ""
+            ).lower()
+            terminal_states = {"filled", "canceled", "cancelled", "rejected", "expired"}
+            if (terminal_order is None or terminal_status not in terminal_states
+                    or not self._registered_qhm_stop_identity_ok(
+                        terminal_order, pos, str(pos.stop_order_id)
+                    )):
+                self._stop_coverage_pending(
+                    pos, "registered missing stop has no exact QHM terminal proof"
+                )
+                return False
+            submitted_qty = self._whole_share_qty(getattr(terminal_order, "qty", None))
+            stopped_qty = self._whole_share_qty(
+                getattr(terminal_order, "filled_qty", None)
+            )
+            if (submitted_qty is None or stopped_qty is None
+                    or submitted_qty <= 0 or stopped_qty < 0
+                    or stopped_qty > submitted_qty
+                    or (terminal_status == "filled" and stopped_qty != submitted_qty)
+                    or (terminal_status in {"rejected", "expired"} and stopped_qty != 0)):
+                self._stop_coverage_pending(
+                    pos, "registered terminal stop has contradictory quantity evidence"
+                )
+                return False
+            if stopped_qty:
+                live_position = self.broker.get_position(pos.symbol)
+                broker_net: Optional[int]
+                if live_position is None:
+                    broker_net = 0
+                else:
+                    broker_net = self._whole_share_qty(
+                        getattr(live_position, "qty", None)
+                    )
+                if broker_net is None:
+                    self._stop_coverage_pending(pos, "post-stop broker quantity unreadable")
+                    return False
+                from execution import ownership_guard as _ownership
+
+                if not _ownership.apply_authorized_tier_fill_reduction(
+                    pos.symbol, "qhm", stopped_qty, broker_net,
+                    f"qhm_registered_stop:{pos.stop_order_id}",
+                ):
+                    self._stop_coverage_pending(
+                        pos, "registered stop fill not committed to ownership ledger"
+                    )
+                    return False
+                prior_qty_filled = pos.qty_filled
+                prior_qty_total = pos.qty_total
+                prior_stop_order_id = pos.stop_order_id
+                prior_state = pos.state
+                prior_updated_at = pos.updated_at
+                remaining = pos.qty_filled - stopped_qty
+                if remaining < 0:
+                    self._stop_coverage_pending(pos, "registered stop exceeded QHM state")
+                    return False
+                pos.qty_filled = remaining
+                pos.qty_total = min(pos.qty_total, remaining)
+            pos.stop_order_id = None
+            pos.updated_at = self._now_et().isoformat()
+            if pos.qty_filled <= 0:
+                pos.state = HoldState.CLOSED
+                if not self._save_state():
+                    pos.qty_filled = prior_qty_filled
+                    pos.qty_total = prior_qty_total
+                    pos.stop_order_id = prior_stop_order_id
+                    pos.state = prior_state
+                    pos.updated_at = prior_updated_at
+                    return False
+                _deregister_symbol(pos.symbol)
+                return False
+            if not self._save_state():
+                if stopped_qty:
+                    pos.qty_filled = prior_qty_filled
+                    pos.qty_total = prior_qty_total
+                    pos.stop_order_id = prior_stop_order_id
+                    pos.state = prior_state
+                    pos.updated_at = prior_updated_at
+                self._stop_coverage_pending(pos, "terminal stop reconciliation did not persist")
+                return False
+        if not _had_strict_recovery and self._strict_resync_qty(pos) is None:
+            return False
         if pos.qty_filled <= 0:
             return False
 
@@ -1509,14 +1837,32 @@ class QuarterlyHoldManager:
         # duplicate — Alpaca rejects the duplicate with 40310000 (held_for_orders)
         # every cycle and the state never recovers to ACTIVE.
         if pos.stop_order_id:
-            _book = self._get_open_orders()
-            if _book is None:
-                return False  # unknown book — never risk a duplicate submit blind
-            if any(str(getattr(o, "id", None)) == str(pos.stop_order_id)
-                   for o in _book):
+            _book = order_snapshot
+            _registered = next((
+                o for o in _book
+                if str(getattr(o, "id", None)) == str(pos.stop_order_id)
+            ), None)
+            if _registered is not None:
+                _shape = self._qh_stop_shape(_registered, pos)
+                _exact = bool(
+                    _shape is not None
+                    and _shape["remaining"] == pos.qty_filled
+                    and round(_shape["stop_price"], 2)
+                    == round(float(pos.stop_price), 2)
+                )
+                if not _exact:
+                    self._stop_coverage_pending(
+                        pos, "registered stop exists but is not exact QHM cover"
+                    )
+                    return False
                 pos.state = HoldState.ACTIVE
                 pos.updated_at = self._now_et().isoformat()  # RC-1
-                self._save_state()
+                if not self._save_state():
+                    pos.state = HoldState.PENDING_STOP_REPLACE
+                    self._stop_coverage_pending(
+                        pos, "registered exact stop adoption did not persist"
+                    )
+                    return False
                 logger.info(
                     "QuarterlyHoldManager: %s stop %s found RESTING on Alpaca — "
                     "re-adopted, state → ACTIVE (no resubmit needed).",
@@ -1528,26 +1874,40 @@ class QuarterlyHoldManager:
                 )
                 return True
         try:
-            stop_side = "sell" if pos.direction == "long" else "buy"
-            order = self._dispatcher.submit_gtc_stop(
-                self.broker, pos.symbol, pos.qty_filled, stop_side, pos.stop_price
+            order = self._recover_or_submit_stop(
+                pos, pos.qty_filled,
+                "sell" if pos.direction == "long" else "buy", pos.stop_price,
             )
             if order and hasattr(order, "id"):
                 pos.stop_order_id = order.id
                 _proof_id = pos.stop_recovery_canceled_order_id
                 _proof_baseline = pos.stop_recovery_baseline_qty
                 _proof_add_submitted = pos.stop_recovery_add_submitted
+                _proof_recovery_coid = pos.stop_recovery_client_order_id
+                _proof_recovery_qty = pos.stop_recovery_intended_qty
                 pos.stop_recovery_requires_qty_proof = False
                 pos.stop_recovery_canceled_order_id = None
                 pos.stop_recovery_baseline_qty = None
                 pos.stop_recovery_add_submitted = False
+                pos.stop_recovery_client_order_id = None
+                pos.stop_recovery_intended_qty = None
                 pos.state = HoldState.ACTIVE
                 pos.updated_at = self._now_et().isoformat()  # RC-1
                 if not self._save_state():
-                    pos.stop_recovery_requires_qty_proof = True
+                    # Restore strict proof only when this recovery actually
+                    # began with durable canceled-stop evidence.  Ordinary
+                    # missing-stop recovery has no canceled order id; arming
+                    # proof with None deadlocks every later retry.  The new stop
+                    # id stays registered so the next full-book preflight can
+                    # adopt the live broker order without submitting another.
+                    pos.stop_recovery_requires_qty_proof = bool(
+                        _proof_id is not None and _proof_baseline is not None
+                    )
                     pos.stop_recovery_canceled_order_id = _proof_id
                     pos.stop_recovery_baseline_qty = _proof_baseline
                     pos.stop_recovery_add_submitted = _proof_add_submitted
+                    pos.stop_recovery_client_order_id = _proof_recovery_coid
+                    pos.stop_recovery_intended_qty = _proof_recovery_qty
                     pos.state = HoldState.PENDING_STOP_REPLACE
                     logger.critical(
                         "QuarterlyHoldManager: %s replacement stop is live but "
@@ -4080,12 +4440,12 @@ class QuarterlyHoldManager:
             alpaca_pos = self.broker.get_position(pos.symbol)
             if alpaca_pos is None:
                 return None
-            raw_qty = int(float(getattr(alpaca_pos, "qty", 0)))
+            raw_qty = self._whole_share_qty(getattr(alpaca_pos, "qty", None))
             side = str(
                 getattr(getattr(alpaca_pos, "side", ""), "value", None)
                 or getattr(alpaca_pos, "side", "")
             ).lower()
-            if raw_qty <= 0 or side not in ("long", "position_side.long"):
+            if raw_qty is None or raw_qty <= 0 or side not in ("long", "position_side.long"):
                 logger.critical(
                     "QuarterlyHoldManager: %s strict qty rejected side=%r qty=%r",
                     pos.symbol, side, raw_qty,
@@ -4093,8 +4453,8 @@ class QuarterlyHoldManager:
                 return None
             from execution.ownership_guard import load_ledger, tier_qty
             ledger_qty_raw = tier_qty(load_ledger(), pos.symbol, "qhm")
-            ledger_qty = int(float(ledger_qty_raw))
-            if ledger_qty <= 0:
+            ledger_qty = self._whole_share_qty(ledger_qty_raw)
+            if ledger_qty is None or ledger_qty <= 0:
                 return None
             if owner_qty_hint is not None:
                 # Exact QH-tagged order fills plus the durably persisted pre-submit
@@ -4123,6 +4483,19 @@ class QuarterlyHoldManager:
         pos.updated_at = self._now_et().isoformat()
         return live_qty
 
+    @staticmethod
+    def _whole_share_qty(value: Any) -> Optional[int]:
+        """Parse broker/ledger quantity without silently truncating evidence."""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number) or not number.is_integer():
+            return None
+        return int(number)
+
     def _live_covering_qhm_stop(self, pos: HoldPosition, qty: int):
         """Return a confirmed live QHM reducing stop covering qty, else None."""
         book = self._get_open_orders()
@@ -4137,10 +4510,9 @@ class QuarterlyHoldManager:
                              or getattr(order, "type", "")).lower()
             status = str(getattr(order, "status", "") or "").lower()
             coid = str(getattr(order, "client_order_id", "") or "")
-            try:
-                order_qty = int(float(getattr(order, "qty", 0) or 0))
-                filled_qty = int(float(getattr(order, "filled_qty", 0) or 0))
-            except (TypeError, ValueError):
+            order_qty = self._whole_share_qty(getattr(order, "qty", None))
+            filled_qty = self._whole_share_qty(getattr(order, "filled_qty", None))
+            if order_qty is None or filled_qty is None:
                 continue
             remaining_qty = order_qty - filled_qty
             if (0 <= filled_qty <= order_qty
@@ -4150,6 +4522,358 @@ class QuarterlyHoldManager:
                     and coid.startswith("QH-") and remaining_qty == qty):
                 return order
         return None
+
+    def _stop_coverage_pending(self, pos: HoldPosition, reason: str) -> bool:
+        """Persist fail-closed recovery state and page. Returns the save result."""
+        pos.state = HoldState.PENDING_STOP_REPLACE
+        pos.updated_at = self._now_et().isoformat()
+        saved = self._save_state()
+        logger.critical(
+            "QuarterlyHoldManager: %s stop coverage unresolved (%s); "
+            "state=PENDING_STOP_REPLACE saved=%s",
+            pos.symbol, reason, saved,
+        )
+        self._alert(
+            ":rotating_light: QHM %s stop coverage unresolved (%s) — "
+            "PENDING_STOP_REPLACE; no blind stop mutation." % (pos.symbol, reason)
+        )
+        return saved
+
+    def _recover_or_submit_stop(
+        self,
+        pos: HoldPosition,
+        qty: int,
+        side: str,
+        stop_price: float,
+    ) -> Optional[object]:
+        """Recover one exact stop intent or submit it once, broker-idempotently.
+
+        Every recovery branch uses this helper.  The client ID is durable before
+        send, exact-ID lookup precedes retry, and a fresh readable book must still
+        contain no QH reducing stop immediately before submission.
+        """
+        if qty <= 0 or stop_price <= 0:
+            return None
+        from execution.broker import get_order_by_client_order_id
+
+        recovery_coid = pos.stop_recovery_client_order_id
+        if not recovery_coid:
+            prior_recovery_coid = pos.stop_recovery_client_order_id
+            prior_intended_qty = pos.stop_recovery_intended_qty
+            side_code = "b" if str(side).lower().startswith("b") else "s"
+            recovery_coid = (
+                f"QH-{pos.symbol}-{side_code}-{int(time.time() * 1000)}-"
+                f"{uuid.uuid4().hex[:8]}"
+            )
+            pos.stop_recovery_client_order_id = recovery_coid
+            pos.stop_recovery_intended_qty = qty
+            pos.updated_at = self._now_et().isoformat()
+            if not self._save_state():
+                # The intent was never durable.  Do not leave its ID in memory,
+                # where a later call could mistake it for persisted state and
+                # submit an order that a restart could not recover.
+                pos.stop_recovery_client_order_id = prior_recovery_coid
+                pos.stop_recovery_intended_qty = prior_intended_qty
+                logger.critical(
+                    "QuarterlyHoldManager: %s recovery intent did not persist; "
+                    "stop submit blocked", pos.symbol,
+                )
+                return None
+
+        intended_qty = pos.stop_recovery_intended_qty
+        if (intended_qty is None or isinstance(intended_qty, bool)
+                or not isinstance(intended_qty, int) or intended_qty <= 0):
+            self._stop_coverage_pending(
+                pos, "recovery intent has no durable whole-share quantity"
+            )
+            return None
+
+        recovered = get_order_by_client_order_id(recovery_coid)
+        if recovered is not None:
+            recovered_coid = str(
+                getattr(recovered, "client_order_id", "") or ""
+            )
+            status_raw = getattr(recovered, "status", "")
+            recovered_status = str(
+                getattr(status_raw, "value", status_raw)
+            ).lower()
+            terminal = {"filled", "canceled", "cancelled", "rejected", "expired"}
+            if recovered_coid == recovery_coid and recovered_status in terminal:
+                submitted_raw = getattr(recovered, "qty", None)
+                filled_raw = getattr(recovered, "filled_qty", None)
+                if submitted_raw is None or filled_raw is None:
+                    submitted_f = math.nan
+                    filled_f = math.nan
+                else:
+                    try:
+                        submitted_f = float(submitted_raw)
+                        filled_f = float(filled_raw)
+                    except (TypeError, ValueError):
+                        submitted_f = math.nan
+                        filled_f = math.nan
+                if (not math.isfinite(submitted_f)
+                        or not submitted_f.is_integer()
+                        or not math.isfinite(filled_f)
+                        or not filled_f.is_integer()):
+                    submitted_qty = -1
+                    filled_qty = -1
+                else:
+                    submitted_qty = int(submitted_f)
+                    filled_qty = int(filled_f)
+                if (submitted_raw is None or filled_raw is None
+                        or submitted_qty != intended_qty or filled_qty < 0
+                        or filled_qty > submitted_qty):
+                    self._stop_coverage_pending(
+                        pos, "terminal recovery stop has invalid quantity evidence"
+                    )
+                    return None
+                if ((recovered_status == "filled" and filled_qty != submitted_qty)
+                        or (recovered_status in {
+                            "rejected", "expired"
+                        } and filled_qty != 0)):
+                    self._stop_coverage_pending(
+                        pos, "terminal recovery status contradicts fill quantity"
+                    )
+                    return None
+                residual_qty = submitted_qty - filled_qty
+                if qty not in {submitted_qty, residual_qty}:
+                    self._stop_coverage_pending(
+                        pos, "current ownership does not match recovery intent/residual"
+                    )
+                    return None
+                prior_qty_filled = pos.qty_filled
+                prior_qty_total = pos.qty_total
+                prior_updated_at = pos.updated_at
+                if filled_qty:
+                    verified = self._strict_resync_qty(
+                        pos, residual_qty, submitted_qty
+                    )
+                    if verified != residual_qty:
+                        self._stop_coverage_pending(
+                            pos, "terminal recovery stop fill is not ownership-proven"
+                        )
+                        return None
+                pos.stop_recovery_client_order_id = None
+                pos.stop_recovery_intended_qty = None
+                pos.updated_at = self._now_et().isoformat()
+                if not self._save_state():
+                    pos.stop_recovery_client_order_id = recovery_coid
+                    pos.stop_recovery_intended_qty = intended_qty
+                    pos.qty_filled = prior_qty_filled
+                    pos.qty_total = prior_qty_total
+                    pos.updated_at = prior_updated_at
+                    return None
+                if residual_qty <= 0:
+                    return None
+                # The consumed intent is durably retired.  Re-enter once to
+                # persist a new ID and protect the proven residual quantity.
+                return self._recover_or_submit_stop(
+                    pos, residual_qty, side, stop_price
+                )
+            shape = self._qh_stop_shape(recovered, pos)
+            if (shape is None or not shape["id"]
+                    or recovered_coid != recovery_coid
+                    or intended_qty != qty
+                    or shape["remaining"] != qty
+                    or round(shape["stop_price"], 2)
+                    != round(float(stop_price), 2)):
+                self._stop_coverage_pending(
+                    pos, "recovery client id resolved to non-exact stop"
+                )
+                return None
+            return recovered
+
+        fresh_book = self._get_open_orders()
+        if fresh_book is None:
+            logger.critical(
+                "QuarterlyHoldManager: %s pre-submit order book unreadable",
+                pos.symbol,
+            )
+            return None
+        qh_sells = [
+            o for o in fresh_book
+            if (str(getattr(o, "symbol", "") or "").upper()
+                == pos.symbol.upper()
+                and str(getattr(o, "client_order_id", "") or "").startswith("QH-")
+                and str(getattr(
+                    getattr(o, "side", ""), "value", getattr(o, "side", "")
+                )).lower() == "sell")
+        ]
+        if qh_sells:
+            self._stop_coverage_pending(
+                pos, "QH stop appeared before recovery submit"
+            )
+            return None
+        try:
+            return self._dispatcher.submit_gtc_stop(
+                self.broker, pos.symbol, qty, side, stop_price,
+                client_order_id=recovery_coid,
+            )
+        except Exception as exc:  # ambiguous acceptance; keep durable ID for lookup
+            logger.warning(
+                "QuarterlyHoldManager: %s idempotent stop submit raised: %s",
+                pos.symbol, exc,
+            )
+            return None
+
+    @staticmethod
+    def _qh_stop_shape(order, pos: HoldPosition) -> Optional[dict]:
+        """Parse a sole QH stop candidate. None means it is not safely replaceable."""
+        symbol = str(getattr(order, "symbol", "") or "").upper()
+        coid = str(getattr(order, "client_order_id", "") or "")
+        side_raw = getattr(order, "side", "")
+        side = str(getattr(side_raw, "value", side_raw)).lower()
+        type_raw = getattr(order, "type", "")
+        order_type = str(getattr(type_raw, "value", type_raw)).lower()
+        status_raw = getattr(order, "status", "")
+        status = str(getattr(status_raw, "value", status_raw)).lower()
+        qty_raw = getattr(order, "qty", None)
+        filled_raw = getattr(order, "filled_qty", None)
+        stop_raw = getattr(order, "stop_price", None)
+        if qty_raw is None or filled_raw is None or stop_raw is None:
+            return None
+        try:
+            qty_f = float(qty_raw)
+            filled_f = float(filled_raw)
+            stop_price = float(stop_raw)
+        except (TypeError, ValueError):
+            return None
+        if (not math.isfinite(qty_f) or not qty_f.is_integer() or qty_f < 1
+                or not math.isfinite(filled_f) or not filled_f.is_integer()
+                or filled_f != 0 or filled_f > qty_f
+                or not math.isfinite(stop_price) or stop_price <= 0
+                or symbol != pos.symbol.upper() or not coid.startswith("QH-")
+                or side != "sell" or "stop" not in order_type
+                or status not in {"new", "accepted"}):
+            return None
+        return {
+            "id": str(getattr(order, "id", "") or ""),
+            "qty": int(qty_f),
+            "remaining": int(qty_f - filled_f),
+            "stop_price": stop_price,
+        }
+
+    @staticmethod
+    def _registered_qhm_stop_identity_ok(
+        order: object, pos: HoldPosition, expected_id: str
+    ) -> bool:
+        """Prove an order is the exact QHM protective stop recorded in state."""
+        order_id = str(getattr(order, "id", "") or "")
+        symbol = str(getattr(order, "symbol", "") or "").upper()
+        coid = str(getattr(order, "client_order_id", "") or "")
+        side_raw = getattr(order, "side", "")
+        side = str(getattr(side_raw, "value", side_raw)).lower()
+        type_raw = getattr(order, "type", "")
+        order_type = str(getattr(type_raw, "value", type_raw)).lower()
+        stop_raw: Any = getattr(order, "stop_price", None)
+        try:
+            stop_price = float(stop_raw)
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            order_id == str(expected_id)
+            and symbol == pos.symbol.upper()
+            and coid.startswith("QH-")
+            and side == "sell"
+            and "stop" in order_type
+            and math.isfinite(stop_price)
+            and round(stop_price, 2) == round(float(pos.stop_price), 2)
+        )
+
+    def _reconcile_stop_coverage(
+        self, pos: HoldPosition, order_snapshot: list
+    ) -> tuple[bool, bool]:
+        """Reconcile one QHM stop from a caller-owned immutable book snapshot.
+
+        Returns (skip_stray_guard_for_symbol, block_remaining_qhm_loop_for_symbol).
+        """
+        desired_qty = self._strict_resync_qty(pos)
+        if desired_qty is None or desired_qty <= 0:
+            self._stop_coverage_pending(pos, "ownership proof unavailable")
+            return True, True
+
+        # Any QH-tagged order on this symbol participates in ambiguity detection,
+        # including wrong-side/type/status orders.  They must never be ignored and
+        # then cancelled/resized under a different interpretation.
+        qh_orders = []
+        for o in order_snapshot:
+            side_raw = getattr(o, "side", "")
+            side = str(getattr(side_raw, "value", side_raw)).lower()
+            if (str(getattr(o, "symbol", "") or "").upper() == pos.symbol.upper()
+                    and str(getattr(o, "client_order_id", "") or "").startswith("QH-")
+                    and side == "sell"):
+                qh_orders.append(o)
+        if not qh_orders:
+            if not self._stop_coverage_pending(pos, "no live QH stop"):
+                return True, True
+            return False, False  # same-cycle proven resubmit may proceed
+        if len(qh_orders) != 1:
+            self._stop_coverage_pending(pos, "multiple QH stop candidates")
+            return True, True
+
+        candidate = qh_orders[0]
+        shape = self._qh_stop_shape(candidate, pos)
+        if shape is None or not shape["id"]:
+            self._stop_coverage_pending(pos, "ambiguous QH stop candidate")
+            return True, True
+
+        exact = (
+            shape["remaining"] == desired_qty
+            and round(shape["stop_price"], 2) == round(float(pos.stop_price), 2)
+        )
+        old_id = str(pos.stop_order_id or "")
+        if exact:
+            old_recovery_coid = pos.stop_recovery_client_order_id
+            old_recovery_qty = pos.stop_recovery_intended_qty
+            pos.stop_order_id = shape["id"]
+            pos.stop_recovery_client_order_id = None
+            pos.stop_recovery_intended_qty = None
+            pos.state = HoldState.ACTIVE
+            pos.updated_at = self._now_et().isoformat()
+            confirmed_qty = self._strict_resync_qty(pos)
+            if confirmed_qty != desired_qty or not self._save_state():
+                pos.stop_order_id = old_id or shape["id"]
+                pos.stop_recovery_client_order_id = old_recovery_coid
+                pos.stop_recovery_intended_qty = old_recovery_qty
+                self._stop_coverage_pending(pos, "exact-stop adoption did not persist")
+                return True, True
+            return False, False
+
+        # A unique, stable QH sell-stop is safe to resize in place.  Never cancel it.
+        from execution.broker import replace_stop_order
+        replacement = replace_stop_order(
+            pos.symbol, shape["id"], float(pos.stop_price), qty=desired_qty
+        )
+        new_shape = self._qh_stop_shape(replacement, pos) if replacement is not None else None
+        if (new_shape is None or not new_shape["id"]
+                or new_shape["remaining"] != desired_qty
+                or round(new_shape["stop_price"], 2) != round(float(pos.stop_price), 2)):
+            pos.stop_order_id = old_id or shape["id"]
+            self._stop_coverage_pending(pos, "atomic stop resize unconfirmed")
+            return True, True
+        confirmed_qty = self._strict_resync_qty(pos)
+        if confirmed_qty != desired_qty:
+            pos.stop_order_id = old_id or shape["id"]
+            self._stop_coverage_pending(pos, "ownership changed during stop resize")
+            return True, True
+        old_recovery_coid = pos.stop_recovery_client_order_id
+        old_recovery_qty = pos.stop_recovery_intended_qty
+        pos.stop_order_id = new_shape["id"]
+        pos.stop_recovery_client_order_id = None
+        pos.stop_recovery_intended_qty = None
+        pos.state = HoldState.ACTIVE
+        pos.updated_at = self._now_et().isoformat()
+        if not self._save_state():
+            pos.stop_order_id = old_id or new_shape["id"]
+            pos.stop_recovery_client_order_id = old_recovery_coid
+            pos.stop_recovery_intended_qty = old_recovery_qty
+            self._stop_coverage_pending(pos, "resized stop id did not persist")
+            return True, True
+        logger.info(
+            "QuarterlyHoldManager: %s QHM stop resized atomically %s→%s qty=%d @ $%.2f",
+            pos.symbol, shape["id"], new_shape["id"], desired_qty, pos.stop_price,
+        )
+        return True, False
 
     def _qhm_total_notional(self, exclude_grandfathered: bool = False) -> Optional[float]:
         """Total live market value of QHM holds (every position with qty_filled > 0; with

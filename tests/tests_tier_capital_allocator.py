@@ -21,6 +21,30 @@ from execution.quarterly_hold_manager import (
 from execution.tier_capital_allocator import EntryRequest, TierCapitalAllocator
 
 
+def _lookup_only(expected, order):
+    return lambda client_id: order if client_id == expected else None
+
+
+def _prep_qhm_manager(manager):
+    manager._get_open_orders = Mock(return_value=[])
+    manager._clock = None
+    manager.alerter = None
+
+
+def _qhm_stop(status, filled_qty=0, order_id="stop-1", stop_price=90.0):
+    return SimpleNamespace(
+        id=order_id,
+        symbol="NVDA",
+        client_order_id="QH-NVDA-s-test",
+        side="sell",
+        type="stop",
+        status=status,
+        qty=5,
+        filled_qty=filled_qty,
+        stop_price=stop_price,
+    )
+
+
 class _Broker:
     def __init__(
         self,
@@ -770,6 +794,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_recovery_metadata_must_persist_before_stop_cancel(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager._now_et = Mock(return_value=datetime.now(timezone.utc))
         manager._save_state = Mock(return_value=False)
         pos = HoldPosition("NVDA", "long", 0.2, state=HoldState.ACTIVE)
@@ -779,6 +804,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_unreadable_qty_retains_provisional_stop_and_ambiguity(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager._positions = {}
         manager._strict_resync_qty = Mock(return_value=None)
@@ -791,16 +817,17 @@ class AllocatorTests(unittest.TestCase):
             ambiguous_add_baseline_qty=5,
         )
         manager._positions[pos.symbol] = pos
-        recovered = SimpleNamespace(id="add-1", status="filled")
+        recovered = SimpleNamespace(id="add-1", status="canceled", filled_qty=0)
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=recovered)
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, recovered)
+        )
         fake_broker.get_order = Mock(side_effect=[
-            SimpleNamespace(status="accepted", filled_qty=0),
-            SimpleNamespace(status="canceled", filled_qty=0),
+            _qhm_stop("accepted"), _qhm_stop("canceled"),
         ])
         fake_broker.cancel_order = Mock()
         with patch.dict(sys.modules, {"execution.broker": fake_broker}):
-            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol, []))
         fake_broker.cancel_order.assert_not_called()
         self.assertEqual(pos.stop_order_id, "stop-1")
         self.assertEqual(pos.ambiguous_add_client_order_id, "QH-NVDA-test")
@@ -808,6 +835,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_stop_fill_during_cancel_uses_post_cancel_qty(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager._positions = {}
         manager._strict_resync_qty = Mock(side_effect=[5, 0])
@@ -821,16 +849,17 @@ class AllocatorTests(unittest.TestCase):
             ambiguous_add_baseline_qty=5,
         )
         manager._positions[pos.symbol] = pos
-        recovered = SimpleNamespace(id="add-1", status="filled")
+        recovered = SimpleNamespace(id="add-1", status="canceled", filled_qty=0)
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=recovered)
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, recovered)
+        )
         fake_broker.get_order = Mock(side_effect=[
-            SimpleNamespace(status="accepted", filled_qty=0),
-            SimpleNamespace(status="canceled", filled_qty=0),
+            _qhm_stop("accepted"), _qhm_stop("canceled"),
         ])
         fake_broker.cancel_order = Mock(return_value=True)
         with patch.dict(sys.modules, {"execution.broker": fake_broker}):
-            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol, []))
         fake_broker.cancel_order.assert_called_once_with("stop-1")
         self.assertEqual(manager._strict_resync_qty.call_count, 2)
         # The mocked strict reader owns mutation in production.
@@ -839,11 +868,13 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_final_state_save_failure_keeps_recovery_armed(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager._positions = {}
         manager._strict_resync_qty = Mock(side_effect=[5, 5])
         manager._live_covering_qhm_stop = Mock(return_value=None)
-        manager._save_state = Mock(return_value=False)
+        # Durable stop intent persists; the later ACTIVE transition fails.
+        manager._save_state = Mock(side_effect=[True, False])
         manager._now_et = Mock(return_value=datetime.now(timezone.utc))
         manager._dispatcher = SimpleNamespace(
             submit_gtc_stop=Mock(return_value=SimpleNamespace(id="stop-2"))
@@ -856,21 +887,22 @@ class AllocatorTests(unittest.TestCase):
             ambiguous_add_baseline_qty=5,
         )
         manager._positions[pos.symbol] = pos
-        recovered = SimpleNamespace(id="add-1", status="filled")
+        recovered = SimpleNamespace(id="add-1", status="canceled", filled_qty=0)
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=recovered)
-        fake_broker.get_order = Mock(return_value=SimpleNamespace(
-            status="canceled", filled_qty=0
-        ))
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, recovered)
+        )
+        fake_broker.get_order = Mock(return_value=_qhm_stop("canceled"))
         fake_broker.cancel_order = Mock(return_value=True)
         with patch.dict(sys.modules, {"execution.broker": fake_broker}):
-            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol, []))
         self.assertEqual(pos.stop_order_id, "stop-2")
         self.assertEqual(pos.ambiguous_add_client_order_id, "QH-NVDA-test")
         self.assertEqual(pos.state, HoldState.PENDING_STOP_REPLACE)
 
     def test_qhm_strict_qty_rejects_short_broker_truth(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager.broker = SimpleNamespace(
             get_position=Mock(return_value=SimpleNamespace(
@@ -883,6 +915,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_post_cancel_read_failure_attempts_conservative_stop(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager.broker = SimpleNamespace()
         manager._positions = {}
@@ -900,15 +933,15 @@ class AllocatorTests(unittest.TestCase):
             ambiguous_add_baseline_qty=5,
         )
         manager._positions[pos.symbol] = pos
-        recovered = SimpleNamespace(id="add-1", status="filled")
+        recovered = SimpleNamespace(id="add-1", status="canceled", filled_qty=0)
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=recovered)
-        fake_broker.get_order = Mock(return_value=SimpleNamespace(
-            status="canceled", filled_qty=0
-        ))
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, recovered)
+        )
+        fake_broker.get_order = Mock(return_value=_qhm_stop("canceled"))
         fake_broker.cancel_order = Mock(return_value=True)
         with patch.dict(sys.modules, {"execution.broker": fake_broker}):
-            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol, []))
         manager._dispatcher.submit_gtc_stop.assert_called_once()
         self.assertEqual(pos.stop_order_id, "stop-fallback")
         self.assertEqual(pos.ambiguous_add_client_order_id, "QH-NVDA-test")
@@ -916,6 +949,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_restart_re_adopts_live_final_stop(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager._positions = {}
         manager._strict_resync_qty = Mock(return_value=5)
@@ -930,15 +964,17 @@ class AllocatorTests(unittest.TestCase):
             ambiguous_add_baseline_qty=5,
         )
         manager._positions[pos.symbol] = pos
-        recovered = SimpleNamespace(id="add-1", status="filled")
+        recovered = SimpleNamespace(id="add-1", status="canceled", filled_qty=0)
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=recovered)
-        fake_broker.get_order = Mock(return_value=SimpleNamespace(
-            status="canceled", filled_qty=0
-        ))
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, recovered)
+        )
+        fake_broker.get_order = Mock(
+            return_value=_qhm_stop("canceled", order_id="stale-stop")
+        )
         fake_broker.cancel_order = Mock()
         with patch.dict(sys.modules, {"execution.broker": fake_broker}):
-            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol, []))
         fake_broker.cancel_order.assert_not_called()
         self.assertEqual(pos.stop_order_id, "stop-2")
         self.assertIsNone(pos.ambiguous_add_client_order_id)
@@ -946,6 +982,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_final_stop_failure_pages_and_retains_recovery(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager.broker = SimpleNamespace()
         manager._positions = {}
@@ -961,21 +998,22 @@ class AllocatorTests(unittest.TestCase):
             ambiguous_add_baseline_qty=5,
         )
         manager._positions[pos.symbol] = pos
-        recovered = SimpleNamespace(id="add-1", status="filled")
+        recovered = SimpleNamespace(id="add-1", status="canceled", filled_qty=0)
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=recovered)
-        fake_broker.get_order = Mock(return_value=SimpleNamespace(
-            status="canceled", filled_qty=0
-        ))
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, recovered)
+        )
+        fake_broker.get_order = Mock(return_value=_qhm_stop("canceled"))
         fake_broker.cancel_order = Mock(return_value=True)
         with patch.dict(sys.modules, {"execution.broker": fake_broker}):
-            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol, []))
         manager._alert.assert_called_once()
         self.assertEqual(pos.ambiguous_add_client_order_id, "QH-NVDA-test")
         self.assertEqual(pos.state, HoldState.PENDING_STOP_REPLACE)
 
     def test_qhm_covering_stop_requires_exact_symbol(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager._get_open_orders = Mock(return_value=[SimpleNamespace(
             id="stop-msft", symbol="MSFT", side="sell", type="stop",
             status="new", client_order_id="QH-MSFT-test", qty=10,
@@ -985,6 +1023,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_covering_stop_uses_stable_remaining_quantity(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         pos = HoldPosition("NVDA", "long", 0.2, qty_filled=5)
         base = dict(
             symbol="NVDA", side="sell", type="stop",
@@ -1008,6 +1047,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_strict_qty_uses_owner_ledger_not_broker_net(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager._now_et = Mock(return_value=datetime.now(timezone.utc))
         manager.broker = SimpleNamespace(get_position=Mock(return_value=SimpleNamespace(
@@ -1025,6 +1065,7 @@ class AllocatorTests(unittest.TestCase):
 
     def test_qhm_ambiguous_cancel_uses_terminal_late_fill(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager._positions = {}
         manager._strict_resync_qty = Mock(return_value=7)
@@ -1042,21 +1083,24 @@ class AllocatorTests(unittest.TestCase):
         manager._positions[pos.symbol] = pos
         initial = SimpleNamespace(id="add-1", status="new", filled_qty=0)
         terminal = SimpleNamespace(id="add-1", status="canceled", filled_qty=2)
-        stop_before = SimpleNamespace(id="stop-5", status="accepted", filled_qty=0)
-        stop_terminal = SimpleNamespace(id="stop-5", status="canceled", filled_qty=0)
+        stop_before = _qhm_stop("accepted", order_id="stop-5")
+        stop_terminal = _qhm_stop("canceled", order_id="stop-5")
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=initial)
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, initial)
+        )
         fake_broker.get_order = Mock(
             side_effect=[terminal, stop_before, stop_terminal]
         )
         fake_broker.cancel_order = Mock(return_value=True)
         with patch.dict(sys.modules, {"execution.broker": fake_broker}):
-            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol, []))
         manager._strict_resync_qty.assert_called_once_with(pos, 7, 5)
         self.assertEqual(pos.stop_order_id, "stop-7")
 
     def test_qhm_provisional_stop_fill_reduces_final_owner_stop(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager.broker = SimpleNamespace()
         manager._positions = {}
@@ -1075,14 +1119,16 @@ class AllocatorTests(unittest.TestCase):
         )
         manager._positions[pos.symbol] = pos
         add = SimpleNamespace(id="add-1", status="filled", filled_qty=2)
-        stop_open = SimpleNamespace(id="stop-5", status="accepted", filled_qty=0)
-        stop_done = SimpleNamespace(id="stop-5", status="canceled", filled_qty=3)
+        stop_open = _qhm_stop("accepted", order_id="stop-5")
+        stop_done = _qhm_stop("canceled", filled_qty=3, order_id="stop-5")
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=add)
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, add)
+        )
         fake_broker.get_order = Mock(side_effect=[stop_open, stop_done])
         fake_broker.cancel_order = Mock(return_value=True)
         with patch.dict(sys.modules, {"execution.broker": fake_broker}):
-            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol, []))
         self.assertEqual(
             manager._strict_resync_qty.call_args_list[-1].args[1:], (4, 2)
         )
@@ -1091,8 +1137,44 @@ class AllocatorTests(unittest.TestCase):
         self.assertEqual(pos.stop_order_id, "stop-4")
         self.assertEqual(pos.state, HoldState.ACTIVE)
 
+    def test_qhm_post_cancel_foreign_terminal_cannot_reduce_owner_baseline(self):
+        manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
+        manager.dry_run = False
+        manager.broker = SimpleNamespace()
+        manager._positions = {}
+        manager._strict_resync_qty = Mock(return_value=5)
+        manager._live_covering_qhm_stop = Mock(return_value=None)
+        manager._save_state = Mock(return_value=True)
+        manager._dispatcher = SimpleNamespace(submit_gtc_stop=Mock())
+        pos = HoldPosition(
+            "NVDA", "long", 0.2, state=HoldState.PENDING_STOP_REPLACE,
+            qty_filled=5, stop_price=90.0, stop_order_id="stop-5",
+            ambiguous_add_client_order_id="QH-NVDA-test",
+            ambiguous_add_baseline_qty=5,
+        )
+        manager._positions[pos.symbol] = pos
+        add = SimpleNamespace(id="add-1", status="canceled", filled_qty=0)
+        stop_before = _qhm_stop("accepted", order_id="stop-5")
+        foreign_terminal = _qhm_stop(
+            "canceled", filled_qty=2, order_id="stop-5"
+        )
+        foreign_terminal.symbol = "AAPL"
+        foreign_terminal.client_order_id = "QH-AAPL-s-test"
+        fake_broker = ModuleType("execution.broker")
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, add)
+        )
+        fake_broker.get_order = Mock(side_effect=[stop_before, foreign_terminal])
+        fake_broker.cancel_order = Mock(return_value=True)
+        with patch.dict(sys.modules, {"execution.broker": fake_broker}):
+            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol, []))
+        self.assertEqual(pos.ambiguous_add_baseline_qty, 5)
+        manager._dispatcher.submit_gtc_stop.assert_not_called()
+
     def test_qhm_preexisting_provisional_stop_fill_is_subtracted(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager.broker = SimpleNamespace(get_position=Mock(return_value=SimpleNamespace(
             qty=10, side="long", avg_entry_price=100.0,
@@ -1112,14 +1194,16 @@ class AllocatorTests(unittest.TestCase):
         )
         manager._positions[pos.symbol] = pos
         add = SimpleNamespace(id="add-1", status="filled", filled_qty=2)
-        stop_before = SimpleNamespace(
-            id="stop-provisional", status="partially_filled", filled_qty=2
+        stop_before = _qhm_stop(
+            "partially_filled", filled_qty=2, order_id="stop-provisional"
         )
-        stop_terminal = SimpleNamespace(
-            id="stop-provisional", status="canceled", filled_qty=2
+        stop_terminal = _qhm_stop(
+            "canceled", filled_qty=2, order_id="stop-provisional"
         )
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=add)
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, add)
+        )
         fake_broker.get_order = Mock(side_effect=[stop_before, stop_terminal])
         fake_broker.cancel_order = Mock(return_value=True)
         fake_ownership = ModuleType("execution.ownership_guard")
@@ -1129,13 +1213,14 @@ class AllocatorTests(unittest.TestCase):
             "execution.broker": fake_broker,
             "execution.ownership_guard": fake_ownership,
         }):
-            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol, []))
         submitted = manager._dispatcher.submit_gtc_stop.call_args.args
         self.assertEqual(submitted[2], 5)
         self.assertEqual(pos.stop_order_id, "stop-final-5")
 
     def test_qhm_failed_final_stop_retry_keeps_adjusted_baseline(self):
         manager = object.__new__(QuarterlyHoldManager)
+        _prep_qhm_manager(manager)
         manager.dry_run = False
         manager.broker = SimpleNamespace(get_position=Mock(return_value=SimpleNamespace(
             qty=10, side="long", avg_entry_price=100.0,
@@ -1156,14 +1241,16 @@ class AllocatorTests(unittest.TestCase):
         )
         manager._positions[pos.symbol] = pos
         add = SimpleNamespace(id="add-1", status="filled", filled_qty=2)
-        stop_before = SimpleNamespace(
-            id="stop-provisional", status="partially_filled", filled_qty=2
+        stop_before = _qhm_stop(
+            "partially_filled", filled_qty=2, order_id="stop-provisional"
         )
-        stop_terminal = SimpleNamespace(
-            id="stop-provisional", status="canceled", filled_qty=2
+        stop_terminal = _qhm_stop(
+            "canceled", filled_qty=2, order_id="stop-provisional"
         )
         fake_broker = ModuleType("execution.broker")
-        fake_broker.get_order_by_client_order_id = Mock(return_value=add)
+        fake_broker.get_order_by_client_order_id = Mock(
+            side_effect=_lookup_only(pos.ambiguous_add_client_order_id, add)
+        )
         fake_broker.get_order = Mock(side_effect=[stop_before, stop_terminal])
         fake_broker.cancel_order = Mock(return_value=True)
         fake_ownership = ModuleType("execution.ownership_guard")
@@ -1174,9 +1261,9 @@ class AllocatorTests(unittest.TestCase):
             "execution.ownership_guard": fake_ownership,
         }
         with patch.dict(sys.modules, modules):
-            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertFalse(manager.resubmit_stop_if_needed(pos.symbol, []))
             self.assertEqual(pos.ambiguous_add_baseline_qty, 3)
-            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol))
+            self.assertTrue(manager.resubmit_stop_if_needed(pos.symbol, []))
         submitted = manager._dispatcher.submit_gtc_stop.call_args.args
         self.assertEqual(submitted[2], 5)
         self.assertEqual(pos.stop_order_id, "stop-retry-5")
