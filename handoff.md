@@ -8,6 +8,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-11 night, Claude signed) — unreadable Day share count: retry + own-share close (#599, deployed)
+
+A non-Day close on a co-held stock retries an unreadable Day count 3x (~2 s; a recovered count is double-read), then
+sells only min(own recorded shares, |net|); every fallback pages; events cohold_claim_unreadable; OCI cron weekdays
+8:15 PM ET runs scripts/cohold_claim_eod.py (Slack summary). Swing callers only; QHM/movers unchanged. Deployed,
+unexercised. #597 (Day lots never held over) also live; Day runner cron */2 * * * *.
+
+**⏩ EXACT NEXT ACTION:** Track B keep/merge/retire recommendation (BGG first). Monday 10/12 close: first post-live
+evaluator run (22:15 UTC) + the 8:15 PM ET cohold summary line; work any post-live issues. Post-live engine increment 2.
+
 ## ⏩ LATEST (2026-10-11 evening, Claude signed) — Day lots never held over (#597, deployed)
 
 After-hours exit escalates from 7:30 PM ET, keeps working in Alpaca's overnight session (feed=overnight quotes), and a
