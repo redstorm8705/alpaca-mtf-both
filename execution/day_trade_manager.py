@@ -2075,6 +2075,9 @@ def _bracket_protection(symbol: str, order, filled_qty: int, requested_qty: int)
         return False
 
     if complete:
+        # RUNTIME: this runs in the Day runner process (run_day_tier.py, a cron job every 2 min) right after the entry
+        # fill — NOT the main bot's trading thread (check_exits never waits on it). The poll is bounded (8 x 0.25 s
+        # = ~2 s), the same pattern as _confirm_fill / _await_entry_terminal's polls in this function's caller.
         for _ in range(8):                   # legs activate on the complete fill; allow ~2 s to read it
             st = _leg_status(stop_id)
             if st in _BRACKET_LEG_LIVE or st in _BRACKET_LEG_EXITED:
