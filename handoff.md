@@ -8,6 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-11, Claude signed) — same-direction co-hold LIVE in config (#589 bracket, #590 lift)
+
+CEO rule shipped: the Day tier may trade a stock another tier holds in the SAME direction (config
+DAYTRADE_NO_COHOLD=False; kill flag True). Entry is an Alpaca bracket; a wash reject routes to the 2x/inverse ETF.
+Guards: #577-#587 (design record logs/design_records/same_direction_cohold_2026-10-10.md; detail in tb_audit_log).
+
+**⏩ EXACT NEXT ACTION:** Monday 10/12 post-live audit of the first co-hold trade (bracket accepted vs wash-rejected,
+combined-notional per-name cap, Day vs other-tier stop clustering) plus #562-#590. Then: M2 (defer other tiers' adds
+while a Day lot is open), P3 (overnight Day lot claim), Track-B wash -> ETF retry; QHM stop-qty reconcile (Codex
+branch); nightly autonomous_review fix.
+
 ## ⏩ LATEST (2026-10-10 evening, Claude signed) — co-hold guards #577-#585 deployed (OCI at 884f70d)
 
 Same-direction co-hold (CEO rule) build: design record logs/design_records/same_direction_cohold_2026-10-10.md;
