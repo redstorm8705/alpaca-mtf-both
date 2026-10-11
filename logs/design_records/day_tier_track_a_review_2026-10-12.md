@@ -33,8 +33,11 @@ Data: day_tier_events.jsonl (OCI) joined to Alpaca fills by order id; working da
   FADE fills (-4.9R saved, dollar result a coin flip, loses the two best winners) and 12 unfilled setups that
   simulated +6.0R. Not recommended.
 - C2 (widen + shrink, whole shares, 1-share floor): FADE -12.68R / -$12.75 vs -6.82R simulated structural; the
-  1-share floor added $14.11 of dollar risk across 7 trades. **The same applies to the shipped `_room_stop` on 1-share
-  names: widening raises dollar risk instead of holding it constant** (the 10/06 CEO "must trade" order). Decision for
-  Rafael, with the board's view.
+  1-share floor added $14.11 of dollar risk across 7 trades. That floor is the replay's assumption only: verified at
+  source (2026-10-12), live sizing is `safe_qty = max(0, min(int(risk_qty), int(notional_qty)))` with `risk_qty =
+  floor(risk_basis × risk_pct / stop_distance)` (execution/day_trade_manager.py ~L497-500), and a qty below
+  `_min_entry_qty` skips the entry. So a widened stop on a 1-share name either fits the per-trade risk budget (1% of
+  start-of-day equity, 2% on the 10/10 max-size path) or the trade is skipped — dollar risk never exceeds the cap. Not
+  a defect; no CEO decision needed.
 - C3 RIDE time stop (exit if not +0.5R within N 5m bars): N=3 +0.95R / -$3.61 vs -2.59R / -$52.62 simulated baseline;
   N3 > N6 > N12 holds under leave-one-out; n=8 — a hypothesis. Next: board + a wider replay (all RIDE triggers).

@@ -15,11 +15,11 @@ stop (out-of-sample: blocked shorts -0.171R n=340; the wide-stop subset -0.017R 
 -0.30R@20 / -0.15R@40 (manual). No exempt short has traded yet. Out-of-sample: H1/H2 NOT CONFIRMED; all Track B
 shorts and longs were negative OOS — Track B's core signal needs its own review. Track A review:
 logs/design_records/day_tier_track_a_review_2026-10-12.md (RIDE time stop promising on n=8; 1-share room-stop widening
-raises dollar risk — a CEO decision).
+was checked: live sizing caps it at the per-trade risk budget, not a defect).
 
 **⏩ EXACT NEXT ACTION:** Monday 10/12 close: post-live evaluator (22:15 UTC), cohold summary (8:15 PM ET),
 [track-b-wait] lines, any exempt-short / reserve lines. Then board on: Track B core-signal review; RIDE time stop
-(wider replay first); the 1-share dollar-risk question (to Rafael with the board's view).
+(wider replay first).
 
 ## ⏩ LATEST (2026-10-12, Claude signed) — Track B fixes live (#603)
 
