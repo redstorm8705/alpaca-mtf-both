@@ -129,7 +129,7 @@ class StopProtectionInvariant(unittest.TestCase):
         s, m = self._run(open_orders=[], position=_position("long", 3, 90.0), trade=_trade(stop=95.0), cover_fill=88.75)
         self.assertEqual(len(s["covered"]), 1)
         self.assertEqual(len(s["placed"]), 0)
-        m["close"].assert_called_once_with("X")
+        m["close"].assert_called_once_with("X", own_qty=3, own_side="long")
         m["fill"].assert_called_once()
         self.assertEqual(m["tracker"].exits[0][1], 88.75, "cover must book the fetched fill, not market")
         self.assertEqual(m["tracker"].exits[0][2], "stop_protect_cover")
