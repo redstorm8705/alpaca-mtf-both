@@ -107,3 +107,6 @@ MSFT 5 opposite-direction).
   board Harris+Taleb 2-0.
 - T3 built 2026-10-10 (branch claude/cohold-t3): stop_protection safety-net stop sized to net minus the Day claim.
   The other Swing stop sites are tracker-sized. Board Harris+Taleb, cold-2nd x2.
+- D3 built 2026-10-11 (branch claude/cohold-d3): bracket entry for same-direction co-holds; dormant until the guard
+  lifts. Board Harris+Taleb, cold-2nd x3. Replay (research/day_tier_cohold_replay.py, 10/07-10/09 skips): 11 signals,
+  8 same-direction (EWY 7, MSFT 1), 3 opposite (UBER); 1 replayable lot (EWY -0.06R).

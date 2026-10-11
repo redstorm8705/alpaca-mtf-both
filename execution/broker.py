@@ -342,14 +342,18 @@ def get_order_by_client_order_id(client_order_id: str):
         return None
 
 
-def get_order(order_id: str):
+def get_order(order_id: str, nested: bool = False):
     """
     Fetch a specific order by ID.
     Used at startup to check whether an overnight GTC stop was triggered.
+    `nested=True` returns a bracket/OCO parent with its child legs under `.legs` (co-hold D3).
     Returns None on failure.
     """
     client = _get_trading_client()
     try:
+        if nested:
+            from alpaca.trading.requests import GetOrderByIdRequest
+            return client.get_order_by_id(order_id, filter=GetOrderByIdRequest(nested=True))
         return client.get_order_by_id(order_id)
     except Exception as e:
         logger.warning(f"get_order({order_id}) failed: {e}")
@@ -679,6 +683,99 @@ def submit_limit_order(
                 logger.error(f"[{symbol}] submit_limit_order failed after 3 attempts: {e}")
                 return None
     return None  # exhausted retries without exception path firing
+
+
+# Returned by submit_bracket_entry when Alpaca rejects the entry under its wash-trade rule (an opposite-side
+# market/stop order rests on the symbol). Identity-compared; never an order object.
+WASH_REJECTED = object()
+
+
+def submit_bracket_entry(
+    symbol: str,
+    qty: int,
+    side: str,                 # "buy" (long entry) or "sell" (short entry)
+    limit_price: float,
+    take_profit_price: float,
+    stop_price: float,
+    tier: str = "daytrade",
+    client_order_id: str | None = None,
+) -> object:
+    """Submit a DAY marketable-limit ENTRY as an Alpaca BRACKET (entry + take-profit LIMIT + protective STOP-MARKET).
+    Co-hold D3 (board Harris/Taleb + Gro + GAI, 2026-10-10): the Day tier's plain limit entry on a stock another tier
+    holds in the SAME direction is rejected by Alpaca's wash-trade rule (that tier's resting reducing stop is an
+    opposite-side stop order). Alpaca names bracket/OCO orders as exceptions (docs user-protection).
+
+    Alpaca bracket rules (docs orders-at-alpaca, read 2026-10-11): the two exit legs activate only once the entry is
+    COMPLETELY filled; cancelling any order of the group cancels the rest; the stop must be at least $0.01 beyond the
+    entry limit; extended hours unsupported; TIF day/gtc. Geometry: long stop < limit < take-profit; short
+    take-profit < limit < stop.
+
+    Returns the order object (its `.legs` carry the take-profit and stop leg ids — Alpaca-generated, untagged),
+    WASH_REJECTED when the wash-trade rule still rejects it (the caller then routes to its ETF fallback), or None on
+    any other failure. Never raises."""
+    try:
+        if qty <= 0:
+            logger.warning(f"[{symbol}] bracket entry rejected: qty={qty}")
+            return None
+        _lim, _tp, _stop = round(limit_price, 2), round(take_profit_price, 2), round(stop_price, 2)
+        if not all(0 < v < 99_999 for v in (_lim, _tp, _stop)):
+            logger.warning(f"[{symbol}] bracket entry rejected: bad prices lim={_lim} tp={_tp} stop={_stop}")
+            return None
+        _lc, _tc, _sc = (int(round(v * 100)) for v in (_lim, _tp, _stop))   # whole cents (no float drift)
+        if side == "buy":
+            order_side, geom_ok = OrderSide.BUY, (_sc <= _lc - 1) and (_tc > _lc)
+        elif side == "sell":
+            order_side, geom_ok = OrderSide.SELL, (_sc >= _lc + 1) and (_tc < _lc)
+        else:
+            logger.warning(f"[{symbol}] bracket entry rejected: bad side {side!r}")
+            return None
+        if not geom_ok:
+            logger.warning(f"[{symbol}] bracket entry rejected: invalid geometry for {side} "
+                           f"(limit={_lim}, tp={_tp}, stop={_stop})")
+            return None
+        client = _get_trading_client()
+        _idem_id = client_order_id or _make_idem_id(tier, symbol, side)
+        order_data = LimitOrderRequest(
+            symbol=symbol,
+            qty=qty,
+            side=order_side,
+            limit_price=_lim,
+            time_in_force=TimeInForce.DAY,
+            order_class=OrderClass.BRACKET,
+            take_profit=TakeProfitRequest(limit_price=_tp),
+            stop_loss=StopLossRequest(stop_price=_stop),   # stop_price only = protective MARKET stop
+            client_order_id=_idem_id,
+        )
+        for _attempt in range(3):
+            try:
+                order = client.submit_order(order_data)
+                logger.info(f"[{symbol}] BRACKET ENTRY {side.upper()} {qty} @ ${_lim:.2f} (TP ${_tp:.2f} / "
+                            f"STOP ${_stop:.2f}) | Order ID: {order.id}")  # type: ignore[union-attr]
+                return order
+            except Exception as e:
+                err = str(e)
+                if "40910000" in err or "duplicate client order" in err.lower():
+                    logger.warning(f"[{symbol}] Duplicate client_order_id on bracket entry retry (attempt "
+                                   f"{_attempt + 1}) — order may already be live. idem_id={_idem_id}")
+                    return None
+                if _is_wash_trade_reject(err):
+                    logger.error(f"[{symbol}] BRACKET ENTRY rejected — WASH-TRADE rule (an opposite-side "
+                                 f"market/stop order rests on {symbol}): {e}")
+                    return WASH_REJECTED
+                if not _is_retryable(err):
+                    logger.error(f"[{symbol}] submit_bracket_entry failed (non-retryable): {e}")
+                    return None
+                if _attempt < 2:
+                    logger.warning(f"[{symbol}] submit_bracket_entry attempt {_attempt + 1}/3 failed (retryable): "
+                                   f"{e} — retrying in 1s")
+                    time.sleep(1)
+                else:
+                    logger.error(f"[{symbol}] submit_bracket_entry failed after 3 attempts: {e}")
+                    return None
+        return None
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[{symbol}] submit_bracket_entry raised: {e}")
+        return None
 
 
 def submit_oco_exit(
