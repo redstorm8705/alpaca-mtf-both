@@ -1,0 +1,18 @@
+{
+  "change": "weekly-postmortem-tier-split",
+  "tier": 1,
+  "paths": [
+    "weekly_postmortem.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/wtp_cron.log",
+      "pattern": "change=weekly-postmortem-tier-split Canonical WTP:"
+    }
+  ],
+  "expected_rate": "once on the first successful Saturday or Sunday weekly post-mortem run",
+  "window_sessions": 2,
+  "window_reason": "The report has one scheduled run per weekend; two sessions cover the Saturday run and Sunday retry without waiting five trading days for a weekly job.",
+  "reversal": "the weekly tier sum differs from realized cash, a co-held lifecycle is attributed to the wrong tier, or an open partial is counted in W/L",
+  "verification": "tests/test_weekly_postmortem_truth.py"
+}

@@ -16,6 +16,7 @@ Read-only — no execution imports, no order calls, no shared state.
 
 import json
 import logging
+import math
 import os
 import re
 import ssl
@@ -28,6 +29,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from gai_client import GAI_MODEL_LADDER  # single source of truth for the live Gemini model ladder
+from tier_names import TIER_IDS, TierId, canonical_tier, tier_label
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -54,6 +56,8 @@ LOGS_DIR        = BASE_DIR / "logs"
 TRADE_EVENTS    = LOGS_DIR / "trade_events.jsonl"
 POSTMORTEM_DIR  = BASE_DIR / "data" / "state" / "postmortem"
 EARNINGS_CACHE  = BASE_DIR / "data" / "cache" / "earnings_week.json"
+
+_TIER_ZERO = {tier: 0.0 for tier in TIER_IDS}
 
 try:
     import certifi as _certifi
@@ -380,14 +384,216 @@ def _aggregate_by_position(trades: list[dict]) -> list[dict]:
     return out
 
 
+def _canonical_integrity_errors(figures) -> list[str]:
+    """Return every condition that makes canonical weekly figures unsafe to publish."""
+    errors = []
+    if not figures.available:
+        errors.append("the canonical Alpaca ledger was unavailable")
+    if figures.unmatched_closes:
+        errors.append(f"{len(figures.unmatched_closes)} unmatched closing fill(s)")
+    if figures.missing_order_joins:
+        errors.append(f"{len(figures.missing_order_joins)} missing fill-to-order join(s)")
+    if figures.missing_close_identities:
+        errors.append(f"{len(figures.missing_close_identities)} missing close identity(ies)")
+    if not isinstance(figures.invariant, dict) or figures.invariant.get("ok") is not True:
+        errors.append("the account equity reconciliation invariant did not pass")
+    return errors
+
+
+def _week_ledger_view(round_trips: list[dict], monday: date, friday: date) -> tuple[list[dict], dict]:
+    """Build the weekly accounting and completed-lifecycle views from canonical FIFO rows.
+
+    Weekly realized cash is attributed by each closing fill's PT date.  W/L is a separate
+    performance layer: only an entry lifecycle whose final close lands in this week is counted,
+    and its P&L includes every partial close in that lifecycle.  A still-open lifecycle can
+    contribute real weekly cash, but can never masquerade as a completed winner.
+    """
+    start, end = monday.isoformat(), friday.isoformat()
+    groups: dict[tuple, list[dict]] = {}
+    weekly_realized = 0.0
+    weekly_by_tier = dict(_TIER_ZERO)
+
+    relevant_ids: set[str] = set()
+    expected_signature: dict[str, tuple[str, str, str]] = {}
+
+    def _identity_time(row: dict) -> tuple[str, str, str, datetime, datetime, date]:
+        """Validate immutable broker identity and chronology before week selection."""
+        symbol = row.get("symbol")
+        direction = row.get("direction")
+        entry_id = row.get("entry_order_id")
+        if not isinstance(symbol, str) or not symbol.strip():
+            raise ValueError("weekly lifecycle symbol is missing")
+        if symbol != symbol.strip():
+            raise ValueError("weekly lifecycle symbol has surrounding whitespace")
+        if direction not in ("long", "short"):
+            raise ValueError(f"weekly lifecycle direction is invalid for {symbol}: {direction!r}")
+        if not isinstance(entry_id, str) or not entry_id:
+            raise ValueError(f"weekly entry order identity is missing for {symbol}")
+        if entry_id != entry_id.strip():
+            raise ValueError(f"weekly entry order identity has surrounding whitespace for {symbol}")
+        entry_raw = row.get("entry_time")
+        exit_raw = row.get("exit_time")
+        exit_date_raw = row.get("exit_date")
+        if not isinstance(entry_raw, str):
+            raise ValueError(f"weekly lifecycle time is invalid for {symbol}")
+        if not isinstance(exit_raw, str):
+            raise ValueError(f"weekly lifecycle time is invalid for {symbol}")
+        if not isinstance(exit_date_raw, str):
+            raise ValueError(f"weekly lifecycle time is invalid for {symbol}")
+        try:
+            entry_time = _parse_alpaca_ts(entry_raw)
+            exit_time = _parse_alpaca_ts(exit_raw)
+            exit_day = date.fromisoformat(exit_date_raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"weekly lifecycle time is invalid for {symbol}") from exc
+        if entry_time > exit_time:
+            raise ValueError(f"weekly lifecycle entry occurs after exit for {symbol}")
+        if exit_time.astimezone(PT).date() != exit_day:
+            raise ValueError(f"weekly exit date/time disagree for {symbol}")
+        return symbol, direction, entry_id, entry_time, exit_time, exit_day
+
+    def _validated(row: dict) -> tuple[str, str, str, datetime, TierId, int, float]:
+        symbol, direction, entry_id, entry_time, _exit_time, _exit_day = _identity_time(row)
+        try:
+            tier = canonical_tier(row.get("tier"))
+        except ValueError as exc:
+            raise ValueError(
+                f"weekly tier attribution is incomplete for {symbol}: {row.get('tier')!r}"
+            ) from exc
+        qty = row.get("qty")
+        if isinstance(qty, bool) or not isinstance(qty, int) or qty <= 0:
+            raise ValueError(f"weekly lifecycle quantity is invalid for {symbol}: {qty!r}")
+        complete = row.get("lifecycle_complete")
+        if not isinstance(complete, bool):
+            raise ValueError(
+                f"weekly lifecycle completion state is invalid for {symbol}: {complete!r}"
+            )
+        for name in ("entry_price", "exit_price", "pnl"):
+            value = row.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"weekly {name} is invalid for {symbol}: {value!r}")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"weekly {name} is non-finite for {symbol}: {value!r}")
+            if name != "pnl" and float(value) <= 0:
+                raise ValueError(f"weekly {name} is not positive for {symbol}: {value!r}")
+        return symbol, direction, entry_id, entry_time, tier, qty, float(row["pnl"])
+
+    for row in round_trips:
+        symbol, direction, entry_id, _entry_time, _exit_time, exit_day = _identity_time(row)
+        if not (monday <= exit_day <= friday):
+            continue
+        symbol, direction, entry_id, _entry_time, tier, _qty, _pnl = _validated(row)
+        signature = (symbol, direction, tier)
+        if entry_id in expected_signature and expected_signature[entry_id] != signature:
+            raise ValueError(f"weekly entry identity has conflicting ownership: {entry_id}")
+        expected_signature[entry_id] = signature
+        relevant_ids.add(entry_id)
+
+    for row in round_trips:
+        raw_entry_id = row.get("entry_order_id")
+        if raw_entry_id not in relevant_ids:
+            continue
+        symbol, direction, entry_id, entry_time, tier, _qty, pnl = _validated(row)
+        if expected_signature[entry_id] != (symbol, direction, tier):
+            raise ValueError(f"weekly entry identity has conflicting ownership: {entry_id}")
+        item = dict(row)
+        item["tier"] = tier
+        item["_entry_dt"] = entry_time
+        item["_exit_dt"] = _parse_alpaca_ts(item["exit_time"])
+        key = (symbol, entry_id, direction, tier)
+        groups.setdefault(key, []).append(item)
+        item_exit_day = str(item.get("exit_date") or "")
+        if start <= item_exit_day <= end:
+            weekly_realized += pnl
+            weekly_by_tier[tier] += pnl
+
+    trades: list[dict] = []
+    partial_open_lifecycles = 0
+    partial_open_weekly_pnl = 0.0
+    partial_open_by_tier = dict(_TIER_ZERO)
+    for (_sym, _identity, _direction, tier), rows in groups.items():
+        rows.sort(key=lambda row: row["_exit_dt"])
+        weekly_rows = [
+            row for row in rows
+            if start <= str(row.get("exit_date") or "") <= end
+        ]
+        if not weekly_rows:
+            continue
+        complete = all(row["lifecycle_complete"] for row in rows)
+        if not complete:
+            value = sum(float(row.get("pnl") or 0.0) for row in weekly_rows)
+            partial_open_lifecycles += 1
+            partial_open_weekly_pnl += value
+            partial_open_by_tier[tier] += value
+            continue
+        final_instant = rows[-1]["_exit_dt"]
+        final_ids = {
+            str(row.get("exit_order_id") or "")
+            for row in rows
+            if row["_exit_dt"] == final_instant
+        }
+        if len(final_ids) != 1:
+            raise ValueError(f"weekly final exit identity is ambiguous for {_sym}")
+        final = rows[-1]
+        final_day = str(final.get("exit_date") or "")
+        if not (start <= final_day <= end):
+            continue
+        qty = sum(int(row.get("qty") or 0) for row in rows)
+        if qty <= 0:
+            raise ValueError(f"weekly lifecycle quantity is invalid for {_sym}: {qty}")
+        entry_value = sum(float(row["entry_price"]) * int(row["qty"]) for row in rows)
+        exit_value = sum(float(row["exit_price"]) * int(row["qty"]) for row in rows)
+        trade = _mk_trade(
+            _sym,
+            _direction,
+            entry_value / qty,
+            exit_value / qty,
+            qty,
+            min(rows, key=lambda row: row["_entry_dt"])["entry_time"],
+            final["exit_time"],
+            sum(float(row.get("pnl") or 0.0) for row in rows),
+        )
+        trade.update({
+            "exit_date": date.fromisoformat(final_day),
+            "tier": tier,
+            "entry_order_id": final.get("entry_order_id") or _identity,
+            "final_exit_order_id": str(final.get("exit_order_id") or ""),
+            "week_realized_pnl": round(
+                sum(float(row.get("pnl") or 0.0) for row in weekly_rows), 2
+            ),
+            "_unmatched": False,
+        })
+        trades.append(trade)
+
+    trades.sort(key=lambda trade: str(trade.get("exit_time") or ""))
+    _weekly_by_tier_rounded = {
+        tier: round(weekly_by_tier[tier], 2) for tier in TIER_IDS
+    }
+    accounting = {
+        "weekly_realized": round(weekly_realized, 2),
+        "weekly_by_tier": _weekly_by_tier_rounded,
+        "partial_open_lifecycles": partial_open_lifecycles,
+        "partial_open_weekly_pnl": round(partial_open_weekly_pnl, 2),
+        "partial_open_by_tier": {
+            tier: round(partial_open_by_tier[tier], 2) for tier in TIER_IDS
+        },
+    }
+    _tier_total = sum(_weekly_by_tier_rounded[tier] for tier in TIER_IDS)
+    if round(_tier_total, 2) != accounting["weekly_realized"]:
+        raise ValueError("weekly tier split does not reconcile to weekly realized P&L")
+    return trades, accounting
+
+
 def _enrich_metadata_from_events(trades: list[dict], monday: date, friday: date) -> None:
-    """Best-effort: fills carry no score/MRI/exit_reason, so pull those from trade_events.jsonl by
-    matching each reconstructed trade to the nearest exit event for that symbol (same ET day). Pure
-    metadata — never touches the authoritative entry/exit/pnl from fills. Silent no-op if the log is
-    missing/unreadable (the report still renders with authoritative prices, just '?' metadata)."""
+    """Best-effort metadata join using exact broker order identity only.
+
+    Same-symbol co-holds make nearest-time/day matching unsafe: a Day stop and a Swing exit may land
+    seconds apart. Missing exact identity leaves metadata unknown rather than borrowing another tier's
+    score, MRI, or exit reason. Prices, P&L, and tier attribution always remain broker-sourced.
+    """
     if not TRADE_EVENTS.exists():
         return
-    by_symbol: dict[str, list[dict]] = {}
+    by_order: dict[str, list[dict]] = {}
     try:
         with open(TRADE_EVENTS, encoding="utf-8") as fh:
             for raw in fh:
@@ -400,44 +606,30 @@ def _enrich_metadata_from_events(trades: list[dict], monday: date, friday: date)
                     continue
                 if ev.get("event") not in ("exit", "partial_exit", "stop_hit"):
                     continue
-                sym = ev.get("symbol", "")
-                if sym:
-                    by_symbol.setdefault(sym, []).append(ev)
+                for key in ("order_id", "exit_order_id", "stop_order_id"):
+                    oid = str(ev.get(key) or "")
+                    if oid:
+                        by_order.setdefault(oid, []).append(ev)
     except Exception as e:
         logger.warning(f"metadata enrich: could not read trade_events: {e}")
         return
     for t in trades:
-        cands = by_symbol.get(t["symbol"], [])
-        if not cands:
-            continue
-        try:
-            exit_dt = _parse_alpaca_ts(t["exit_time"])
-        except Exception:
-            continue
-        # exit_dt (from the Alpaca fill) is tz-AWARE (UTC). trade_events ts is ISO-8601 in PT and
-        # often tz-NAIVE — subtracting aware from naive raises TypeError, which previously silently
-        # dropped EVERY match (score/MRI/reason all '?'). Localize a naive event ts to PT first.
-        # Match by SAME ET CALENDAR DAY as the fill exit, NOT a 24h window: a 24h window would paste
-        # an ADJACENT day's metadata onto a trade whose own exit event is missing — precisely the
-        # event-log gap this feature exists to cover (data-integrity board T2, 2026-07-26). Among the
-        # same-day candidates, the nearest-in-time one wins.
-        exit_et_date = exit_dt.astimezone(ET).date()
-        best, best_gap = None, None
-        for ev in cands:
-            try:
-                ev_ts = datetime.fromisoformat(ev.get("ts", ""))
-                if ev_ts.tzinfo is None:
-                    ev_ts = ev_ts.replace(tzinfo=PT)
-                if ev_ts.astimezone(ET).date() != exit_et_date:
-                    continue
-                gap = abs((ev_ts - exit_dt).total_seconds())
-            except Exception:
-                continue
-            if best_gap is None or gap < best_gap:
-                best, best_gap = ev, gap
-        if best is not None:
-            t["score"]       = best.get("score", "?")
-            t["mri_level"]   = best.get("mri_level", "?")
+        final_id = str(t.get("final_exit_order_id") or "")
+        matches = [
+            event for event in by_order.get(final_id, [])
+            if event.get("symbol") == t.get("symbol")
+        ]
+        if matches:
+            def _event_time(event: dict) -> datetime:
+                try:
+                    value = datetime.fromisoformat(str(event.get("ts") or ""))
+                    return value if value.tzinfo else value.replace(tzinfo=PT)
+                except (TypeError, ValueError):
+                    return datetime.min.replace(tzinfo=timezone.utc)
+
+            best = max(matches, key=_event_time)
+            t["score"] = best.get("score", "?")
+            t["mri_level"] = best.get("mri_level", "?")
             t["exit_reason"] = best.get("reason", "") or t["exit_reason"]
 
 
@@ -615,17 +807,18 @@ def _build_wtp_table(
     friday_closes: dict[str, float],
     weekly_closes: dict[str, list[float]],
     earnings_cache: dict,
+    accounting: "dict | None" = None,
 ) -> tuple[str, str, dict]:
     """
     Returns (full_table_md, slack_compact, stats_dict).
-    full_table_md: all 15 columns — goes to the .md report + the Gemini prompt.
+    full_table_md: all 16 columns — goes to the .md report + the Gemini prompt.
     slack_compact: a mobile-friendly one-liner per trade for the Slack post (the old wide
     9-col markdown table wrapped into unreadable soup on phones — Rafael 2026-08-30).
     """
     full_header = (
-        "| Symbol | Dir | Entry$ | Exit$ | P&L | Exit Reason | Score | MRI | "
+        "| Tier | Symbol | Dir | Entry$ | Exit$ | Lifecycle P&L | Exit Reason | Score | MRI | "
         "Earnings | TQI | Hold | R-Mult | Stage | Fri Close | Δ/share Exit→Fri* |\n"
-        "|--------|-----|--------|-------|-----|-------------|-------|-----|"
+        "|------|--------|-----|--------|-------|---------------|-------------|-------|-----|"
         "----------|-----|------|--------|-------|------------|-------------|\n"
     )
     full_rows  = []
@@ -642,6 +835,8 @@ def _build_wtp_table(
         score  = t.get("score", "?")
         mri    = t.get("mri_level", "?")
         size   = t.get("size", 1)
+        tier   = canonical_tier(t.get("tier", "swing"))
+        tier_s = tier_label(tier)
 
         pm     = _load_postmortem(sym, t["exit_date"])
         tqi    = pm.get("tqi_score", "?")
@@ -676,24 +871,30 @@ def _build_wtp_table(
         })
 
         full_rows.append(
-            f"| {sym} | {dir_s} | {entry_s} | {exit_s} | {pnl_s} | {rsn_s} | "
+            f"| {tier_s} | {sym} | {dir_s} | {entry_s} | {exit_s} | {pnl_s} | {rsn_s} | "
             f"{score} | {mri} | {earn_s} | {tqi} | {hold_s} | {r_s} | "
             f"{stage} | {wkly_s} | {delta_s} |"
         )
         # Mobile-friendly monospace row per trade. Drops the ambiguous long/short arrow (dir_s) that
         # read as a win/loss marker next to P&L; an empty exit-reason renders as "—" (not a dangling
-        # "· ·"); rows are sorted worst→best on return so the biggest loss sits on top. The full 15-col
+        # "· ·"); rows are sorted worst→best on return so the biggest loss sits on top. The full 16-col
         # table (with direction) stays in the .md report + Gemini prompt. This is deliberately a
         # PER-SHARE Friday diagnostic, not dollars "left on the table": these rows mix horizons,
         # partial lots and positions whose runners remained open, so summing it creates a false total.
         _rsn = rsn_s or "—"
         _sk  = pnl if pnl is not None else float("inf")   # unmatched (P&L '?') sort last
         slack_rows.append(
-            (_sk, f"{sym:<5} {pnl_s:>8}  {_rsn:<12} {stage:<8} (Fri Δ/sh {delta_s})")
+            (_sk, f"{tier_s:<5} {sym:<5} {pnl_s:>8}  {_rsn:<12} "
+                  f"{stage:<8} (Fri Δ/sh {delta_s})")
         )
 
+    _accounting = accounting or {}
+    _weekly_realized = _accounting.get("weekly_realized")
+    if _weekly_realized is None:
+        _weekly_realized = round(total_pnl, 2)
     stats = {
-        "total_pnl":    round(total_pnl, 2),
+        "total_pnl":    round(float(_weekly_realized), 2),
+        "completed_lifecycle_pnl": round(total_pnl, 2),
         "count":        len(trades),
         "winners":      sum(1 for t in trades if (t.get("pnl") or 0) > 0),
         "losers":       sum(1 for t in trades if (t.get("pnl") or 0) < 0),
@@ -702,6 +903,10 @@ def _build_wtp_table(
         # rows whose OPENING fill predates the 90-day lookback → entry/P&L unknown ('?'),
         # excluded from total_pnl. Surfaced so the total is never silently understated.
         "unmatched":    sum(1 for t in trades if t.get("_unmatched")),
+        "weekly_by_tier": _accounting.get("weekly_by_tier", {}),
+        "partial_open_lifecycles": _accounting.get("partial_open_lifecycles", 0),
+        "partial_open_weekly_pnl": _accounting.get("partial_open_weekly_pnl", 0.0),
+        "partial_open_by_tier": _accounting.get("partial_open_by_tier", {}),
     }
     full_table = full_header + "\n".join(full_rows)
     slack_rows.sort(key=lambda r: r[0])   # worst (most negative P&L) first; unmatched ('?') last
@@ -711,7 +916,7 @@ def _build_wtp_table(
 
 def _build_gemini_prompt(week_str: str, full_table: str, trades: list[dict], stats: dict) -> str:
     details = "\n".join(
-        f"  {t['symbol']} | {t['direction']} | entry={t.get('entry_price')} "
+        f"  {tier_label(t.get('tier'))} | {t['symbol']} | {t['direction']} | entry={t.get('entry_price')} "
         f"exit={t.get('exit_price')} pnl={t.get('pnl')} size={t.get('size')} | "
         f"reason={t.get('exit_reason','')} | stage={t.get('_stage','')} | "
         f"earnings={t.get('_earn',False)} | mri={t.get('mri_level','')} | "
@@ -720,12 +925,11 @@ def _build_gemini_prompt(week_str: str, full_table: str, trades: list[dict], sta
         for t in trades
     )
     pnl_sign = "+" if stats["total_pnl"] >= 0 else ""
-    return f"""You are an adversarial performance auditor for a PDT-constrained paper-trading
-algorithmic bot running on Alpaca Markets. The bot uses a 12-point confluence scoring
-system with a 5-minute run cycle.
+    return f"""You are an adversarial performance auditor for a four-tier paper-trading
+algorithmic bot running on Alpaca Markets. The tiers are Day, Swing, QHM, and F6.
 
 Week reviewed: {week_str}
-Total P&L: {pnl_sign}${stats['total_pnl']} | Trades: {stats['count']} |
+Weekly realized cash P&L: {pnl_sign}${stats['total_pnl']} | Completed lifecycles: {stats['count']} |
 Winners: {stats['winners']} | Losers: {stats['losers']} |
 Earnings-adjacent entries: {stats['earnings_cnt']} |
 Positive Friday per-share diagnostics: {stats['positive_friday_diagnostics']}
@@ -736,8 +940,9 @@ WEEKLY TRADE POST-MORTEM (WTP) TABLE
 {full_table}
 
 Column definitions:
+  Tier              — entry-order owner: Day, Swing, QHM, or F6
   Entry$ / Exit$   — actual fill prices from Alpaca fills API (authoritative)
-  P&L              — dollars for full position (all lots)
+  Lifecycle P&L    — dollars across every partial close in the fully closed entry lifecycle
   Exit Reason      — bot's internal exit classification (shortened)
   Score            — 12-pt confluence score at entry (9+ = valid)
   MRI              — Macro Risk Index at entry (NORMAL/ELEVATED/STRESSED/HIGH/CRITICAL)
@@ -752,8 +957,10 @@ Column definitions:
                      summed. Rows can mix same-day and multi-day horizons, partial exits, and open
                      runners. A positive value does not prove the exit was wrong.
 
-Missing fields shown as '?' are UNKNOWN, never zero. Do not infer a failed score gate from missing
-metadata. Do not compare strategy quality across rows unless their tier and horizon are proven.
+The weekly realized cash total is based only on close fills booked this week. A lifecycle row may
+include a partial close from an earlier week, so lifecycle rows do not have to sum to weekly cash.
+Open lifecycles with partial exits contribute weekly cash but are excluded from W/L. Missing fields
+shown as '?' are UNKNOWN, never zero. Do not infer a failed score gate from missing metadata.
 
 ═══════════════════════════════════════════
 TRADE DETAIL (raw)
@@ -858,15 +1065,27 @@ def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
     # Earnings-adjacent only surfaces when non-zero (0 was pure noise). Per-trade rows go in a
     # monospace code block (aligned columns, worst→best) so they never render as wrapped soup.
     _earn_seg = f"  ·  earnings-adj `{stats['earnings_cnt']}`" if stats.get("earnings_cnt") else ""
+    _tier_bits = []
+    for _tier in TIER_IDS:
+        _value = float((stats.get("weekly_by_tier") or {}).get(_tier, 0.0))
+        _tier_bits.append(f"{tier_label(_tier)} `{_value:+.2f}`")
+    _tier_line = " · ".join(_tier_bits)
+    _partial = ""
+    if stats.get("partial_open_lifecycles"):
+        _partial = (
+            f"\nOpen partials `{stats['partial_open_lifecycles']}` · realized this week "
+            f"`${stats['partial_open_weekly_pnl']:+.2f}` · excluded from W/L"
+        )
     _rows = f"_worst → best_\n```\n{slack_lines}\n```\n" if slack_lines.strip() else ""
     msg = (
         _warn
         + f":bar_chart: *Weekly Post-Mortem — {week_str}*\n"
-        f"P&L (Alpaca-FIFO): `{_pnl_disp}`  ·  "
-        f"W/L `{stats['winners']}/{stats['losers']}`  ·  "
+        f"Realized cash (Alpaca-FIFO): `{_pnl_disp}`  ·  "
+        f"completed W/L `{stats['winners']}/{stats['losers']}`  ·  "
         f"Fri-positive diagnostics `{stats['positive_friday_diagnostics']}`{_earn_seg}{_unm}\n"
+        f"{_tier_line}{_partial}\n"
         f"{_rows}"
-        f"_Full 15-col table + Gemini analysis: `logs/{report_path.name}`_"
+        f"_Full 16-col table + Gemini analysis: `logs/{report_path.name}`_"
     )
     _slack_raw(msg)
 
@@ -884,42 +1103,52 @@ def main() -> None:
 
     logger.info(f"=== Weekly Trade Post-Mortem: {week_str} ===")
 
-    # Authoritative source (Part B): reconstruct closed round-trips from Alpaca fills (FIFO), so
-    # Entry$/Exit$/P&L are real and complete even when trade_events.jsonl lacks an `entry` event.
-    # Fall back to the event log ONLY when the fills FETCH itself returns nothing (keys unset / API
-    # down) — a successful fetch with zero in-week closes is a genuine no-trade week, not a failure.
-    logger.info("Reconstructing week's closed trades from Alpaca fills (FIFO)...")
-    fills, fills_complete = _fetch_fills_range(monday - timedelta(days=_FILLS_LOOKBACK_DAYS), friday)
-    fallback_note = ""   # "" when authoritative; a loud warning string when we degraded
-    if fills_complete:
-        raw    = _reconstruct_closed_trades(fills, monday, friday)
-        trades = _aggregate_by_position(raw)
-        _enrich_metadata_from_events(trades, monday, friday)
-        logger.info(f"Fills reconstruction (authoritative): {len(raw)} fill-level round-trip(s) → "
-                    f"{len(trades)} position-level row(s) in-week.")
-    else:
-        # A PARTIAL fills read (keys unset / API failure / page cap) must NEVER be presented as an
-        # authoritative 'no-trade week' — fills are fetched oldest-first, so a mid-pagination failure
-        # returns only OLD fills with zero in-week trades (data-integrity board T1, 2026-07-26). Fall
-        # back to the event log and SAY SO: these are the less-reliable tracker estimate, not Alpaca
-        # -FIFO truth. (Also covers keys-unset / genuine API-down.)
-        fallback_note = ("⚠️ **Alpaca fills fetch was INCOMPLETE** (keys unset / API or pagination "
-                         "failure) — figures below are the `trade_events.jsonl` estimate, NOT "
-                         "authoritative Alpaca-FIFO P&L. Investigate before trusting this week's totals.")
-        logger.warning("Fills fetch incomplete — falling back to trade_events.jsonl (non-authoritative).")
-        trades = _load_trades_for_week(monday, friday)
+    # Same-direction co-holds make symbol/date FIFO unsafe. One canonical fills+orders snapshot
+    # supplies both realized P&L and exact entry-tier ownership. If the join is incomplete, publish
+    # no figures: an unattributed dollar must never be guessed into one of the four tiers.
+    logger.info("Building canonical fills+orders FIFO snapshot...")
+    from reporting.report_figures import build_report_figures
+    figures = build_report_figures()
+    integrity_errors = _canonical_integrity_errors(figures)
+    if integrity_errors:
+        reason = "; ".join(integrity_errors)
+        report_path.write_text(
+            f"# Weekly Trade Post-Mortem — {week_str}\n\n"
+            f"> **UNAVAILABLE:** Canonical tier accounting failed closed: {reason}.\n",
+            encoding="utf-8",
+        )
+        _slack_raw(
+            f":rotating_light: *Weekly Post-Mortem unavailable — {week_str}*\n"
+            f"Canonical tier accounting failed closed: {reason}. No P&L or W/L was published."
+        )
+        logger.error("WTP unavailable: %s", reason)
+        return
 
-    if not trades:
+    try:
+        trades, accounting = _week_ledger_view(figures.round_trips, monday, friday)
+    except (TypeError, ValueError, KeyError) as exc:
+        report_path.write_text(
+            f"# Weekly Trade Post-Mortem — {week_str}\n\n"
+            f"> **UNAVAILABLE:** Canonical tier/lifecycle accounting failed: {exc}.\n",
+            encoding="utf-8",
+        )
+        _slack_raw(
+            f":rotating_light: *Weekly Post-Mortem unavailable — {week_str}*\n"
+            f"Canonical tier/lifecycle accounting failed: {exc}. No metrics were published."
+        )
+        logger.error("WTP tier/lifecycle accounting failed: %s", exc)
+        return
+    fallback_note = ""
+    _enrich_metadata_from_events(trades, monday, friday)
+    logger.info(
+        "change=weekly-postmortem-tier-split Canonical WTP: %d completed lifecycle(s), "
+        "weekly realized $%.2f, %d open partial(s).",
+        len(trades), accounting["weekly_realized"], accounting["partial_open_lifecycles"],
+    )
+
+    if not trades and not accounting["partial_open_lifecycles"] and not accounting["weekly_realized"]:
         logger.warning(f"No closed trades found for {week_str}.")
-        _warn_body = (f"> {fallback_note}\n\n" if fallback_note else "")
-        report_path.write_text(f"# WTP {week_str}\n\n{_warn_body}No trades closed this week.\n")
-        # If this "no trades" is the result of an INCOMPLETE fills fetch (not a genuine quiet week),
-        # the operator must hear it on Slack — otherwise the alarm lives only in the report file and
-        # a partial read is indistinguishable from a real no-trade week (cold-2nd T2, 2026-07-26).
-        if fallback_note:
-            _slack_raw(f":warning: *Weekly Trade Post-Mortem — {week_str}*\n{fallback_note}\n"
-                       "The fallback source also resolved 0 trades — this week's data is UNVERIFIED; "
-                       "do NOT read it as a genuine no-trade week. Investigate the fills fetch.")
+        report_path.write_text(f"# WTP {week_str}\n\nNo realized closes this week.\n")
         return
 
     symbols = sorted({t["symbol"] for t in trades})
@@ -936,7 +1165,7 @@ def main() -> None:
 
     logger.info("Building WTP table...")
     full_table, slack_lines, stats = _build_wtp_table(
-        trades, friday_closes, weekly_closes, earnings_cache
+        trades, friday_closes, weekly_closes, earnings_cache, accounting
     )
 
     if GEMINI_API_KEY:
@@ -950,13 +1179,11 @@ def main() -> None:
     pnl_sign = "+" if stats["total_pnl"] >= 0 else ""
     ts_pt    = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
 
-    _pnl_label  = "trade_events estimate — NOT authoritative" if fallback_note else "Alpaca-FIFO authoritative"
+    _pnl_label = "canonical Alpaca fills+orders FIFO"
     _sources_ln = (
-        "_Sources: **Alpaca fills API (FIFO — authoritative Entry$/Exit$/P&L)** · Alpaca T1 bars · "
-        "FMP earnings cache · trade\\_events.jsonl (score/MRI/reason metadata only)_"
-        if not fallback_note else
-        "_Sources: **trade\\_events.jsonl (tracker ESTIMATE — fills fetch failed, NOT authoritative)** · "
-        "Alpaca T1 bars · FMP earnings cache_"
+        "_Sources: **one canonical Alpaca fills+orders FIFO snapshot** "
+        "(authoritative tier/Entry$/Exit$/P&L) · Alpaca T1 bars · FMP earnings cache · "
+        "trade\\_events.jsonl (score/MRI/reason metadata only)_"
     )
     report = "\n".join([
         f"# Weekly Trade Post-Mortem — {week_str}",
@@ -964,15 +1191,20 @@ def main() -> None:
         (f"\n> {fallback_note}\n" if fallback_note else ""),
         "",
         "## Summary",
-        f"- **Week P&L ({_pnl_label}):** `{pnl_sign}${stats['total_pnl']}`"
-        + (f"  _(excludes {stats['unmatched']} row(s) opened before the 90-day lookback — entry unknown)_"
-           if stats.get("unmatched") else ""),
-        f"- **Trades:** {stats['count']} ({stats['winners']}W / {stats['losers']}L)",
+        f"- **Weekly realized cash P&L ({_pnl_label}):** `{pnl_sign}${stats['total_pnl']}`",
+        "- **By entry tier:** " + " · ".join(
+            f"{tier_label(tier)} `{stats['weekly_by_tier'].get(tier, 0.0):+.2f}`"
+            for tier in TIER_IDS
+        ),
+        f"- **Completed lifecycles:** {stats['count']} ({stats['winners']}W / {stats['losers']}L); "
+        f"full-lifecycle P&L `{stats['completed_lifecycle_pnl']:+.2f}`",
+        f"- **Open partial lifecycles:** {stats['partial_open_lifecycles']}; realized this week "
+        f"`{stats['partial_open_weekly_pnl']:+.2f}` (included in cash P&L, excluded from W/L)",
         f"- **Earnings-adjacent entries:** {stats['earnings_cnt']}",
         (f"- **Friday comparison:** {stats['positive_friday_diagnostics']} positive per-share diagnostic(s); "
          "not summed into dollars because the rows mix horizons, partial exits, and retained runners."),
         "",
-        "## Trade Overview (full)",
+        "## Completed Lifecycle Overview",
         ("_* Δ/share Exit→Fri is a per-share diagnostic only. It is not quantity-adjusted dollars "
          "left on the table, and a positive value does not by itself prove an exit error._"),
         full_table,
