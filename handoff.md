@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-11 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-11 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,23 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-11, OpenAI Codex signed) — canonical weekly tier/lifecycle truth live (#608)
+
+The weekly post-mortem now consumes the canonical Alpaca fills+orders FIFO snapshot once and reports two
+separate truths: realized cash by closing-fill week and completed entry-order lifecycle W/L. Every dollar is
+attributed to Day, Swing, QHM, or F6; same-symbol co-holds stay separate. Open partials remain realized cash but
+cannot count as completed wins/losses. Exact final-exit order identity is required for metadata. Malformed values,
+ownership conflicts, padded identities, chronology errors, ambiguous final exits, or a failed account-equity
+invariant make the report unavailable rather than guessed. PR #608 merged as `2d30aaa`; OCI `DEPLOY_OK:2d30aaa`,
+23 tests passed on-box, four services active, live read-only replay reconciled 453 close legs to +$7.36 (Day +$3.01,
+Swing -$0.10, QHM +$4.45, F6 $0.00). The scheduled production path remains unexercised until the next eligible
+weekend report run.
+
+**⏩ EXACT NEXT ACTION:** post-live evaluator must confirm the `change=weekly-postmortem-tier-split Canonical WTP:`
+line within the recorded two-session weekend window. Codex queue then resumes with the F6 shared-symbol go-live
+audit after Claude's bracket-add prerequisite lands; Entry Lab step 2 and exit redesign follow without duplicating
+Claude's Confluence 2.0 entry work.
 
 ## ⏩ LATEST (2026-10-12, Claude signed) — Track B exemption narrowed (#605); Track A review
 
