@@ -1973,6 +1973,130 @@ def _mint_coid(symbol: str, direction: str) -> str:
         return f"DT-{symbol}-{side1}-{epoch}-{uniq}"
 
 
+def _bracket_take_profit(trigger: dict, direction: str, limit_px: float, stop_px: float) -> "float | None":
+    """Co-hold D3: the bracket's take-profit, priced off the ENTRY LIMIT with the post-fill OCO's target rule — a
+    FADE pin target (trigger['target']) still on the profit side of the limit, else DAYTRADE_RIDE_TARGET_R x the
+    limit->stop distance. None for a no-target trigger or an unusable geometry. Never raises."""
+    try:
+        if trigger.get("no_target") is True:
+            return None
+        dist = abs(float(limit_px) - float(stop_px))
+        if not (math.isfinite(dist) and dist > 0):
+            return None
+        tp = None
+        raw = trigger.get("target")
+        if raw is not None:
+            t = float(raw)
+            if math.isfinite(t) and t > 0 and ((direction == "long" and t > limit_px)
+                                               or (direction == "short" and t < limit_px)):
+                tp = t
+        if tp is None:
+            r = float(_cfg("DAYTRADE_RIDE_TARGET_R", 2.0))
+            tp = limit_px + r * dist if direction == "long" else limit_px - r * dist
+        tp = round(tp, 2)
+        ok = (tp > limit_px) if direction == "long" else (0 < tp < limit_px)
+        return tp if ok else None
+    except (TypeError, ValueError):
+        return None
+
+
+_BRACKET_LEG_LIVE = frozenset({"new", "accepted", "held", "pending_new", "accepted_for_bidding", "pending_replace"})
+_BRACKET_LEG_EXITED = frozenset({"filled", "partially_filled"})
+
+
+def _bracket_leg_ids(order) -> "tuple[str, str]":
+    """(stop_leg_id, take_profit_leg_id) from a bracket parent's `.legs`. Never raises."""
+    stop_id = tp_id = ""
+    try:
+        for leg in (getattr(order, "legs", None) or []):
+            raw = getattr(leg, "order_type", None) or getattr(leg, "type", "")
+            lt = str(getattr(raw, "value", raw) or "").lower()
+            lid = str(getattr(leg, "id", "") or "")
+            if lid and "stop" in lt:
+                stop_id = lid
+            elif lid and "limit" in lt:
+                tp_id = lid
+    except Exception:  # noqa: BLE001
+        pass
+    return stop_id, tp_id
+
+
+def _leg_status(order_id: str) -> str:
+    """Lower-case status of an order ('' when unreadable). An order with ANY filled shares reads "partially_filled"
+    or "filled" whatever its status (cold-2nd 2026-10-11: a partly filled leg that was then cancelled reads
+    "canceled" with filled_qty > 0 — it is an exit, never "nothing in force"). Never raises."""
+    from execution import broker
+    try:
+        o = broker.get_order(order_id) if order_id else None
+        if o is None:
+            return ""
+        st = getattr(o, "status", "")
+        st = str(getattr(st, "value", st) or "").lower()
+        try:
+            fq = float(getattr(o, "filled_qty", 0) or 0)
+        except (TypeError, ValueError):
+            return ""                       # unreadable fill quantity -> unknown
+        if fq > 0 and st not in ("filled", "partially_filled"):
+            return "partially_filled"
+        return st
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _bracket_protection(symbol: str, order, filled_qty: int, requested_qty: int) -> "tuple[str, str, str]":
+    """Co-hold D3: is the bracket's protection in force after the entry? Returns (status, stop_leg_id, tp_leg_id):
+    "live"    — a COMPLETE fill and the stop leg reads live, OR either leg already FILLED (an exit happened; the
+                reconcile heal books it from stop_order_id / tp_order_id);
+    "gone"    — nothing of the bracket is in force and no leg filled (a partial fill cancelled the group, or both legs
+                are confirmed cancelled) -> the caller places the normal post-fill exit;
+    "unknown" — legs that could not be confirmed live, filled or cancelled -> the caller halts (never two exits).
+    A FILLED leg is never read as "gone" (board 2026-10-11: cancel_stop_confirmed counts a filled order as
+    terminal, so a take-profit filling seconds after the entry would otherwise put a second exit on shares that are
+    gone — selling the other tier's lot). Leg ids come from the submit response's `.legs`, else a nested re-read of
+    the parent. Never raises."""
+    from execution import broker
+    stop_id, tp_id = _bracket_leg_ids(order)
+    if not stop_id:
+        try:
+            _parent = broker.get_order(str(getattr(order, "id", "") or ""), nested=True)
+            stop_id, tp_id = _bracket_leg_ids(_parent)
+        except Exception:  # noqa: BLE001
+            pass
+    complete = filled_qty >= requested_qty
+    if not stop_id:
+        return "unknown", stop_id, tp_id     # no provable leg state (cold-2nd: never "gone" without proof)
+
+    def _any_leg_exited() -> "bool | None":
+        sts = [_leg_status(i) for i in (stop_id, tp_id) if i]
+        if any(st in _BRACKET_LEG_EXITED for st in sts):
+            return True
+        if any((not st) or st in ("replaced", "pending_replace", "pending_cancel") for st in sts):
+            return None                     # unreadable or superseded -> cannot prove nothing filled
+        return False
+
+    if complete:
+        # RUNTIME: this runs in the Day runner process (run_day_tier.py, a cron job every 2 min) right after the entry
+        # fill — NOT the main bot's trading thread (check_exits never waits on it). The poll is bounded (8 x 0.25 s
+        # = ~2 s), the same pattern as _confirm_fill / _await_entry_terminal's polls in this function's caller.
+        for _ in range(8):                   # legs activate on the complete fill; allow ~2 s to read it
+            st = _leg_status(stop_id)
+            if st in _BRACKET_LEG_LIVE or st in _BRACKET_LEG_EXITED:
+                return "live", stop_id, tp_id
+            if st in ("canceled", "cancelled", "expired", "rejected", "done_for_day"):
+                break
+            time.sleep(0.25)
+    # Not provably live: cancel both legs, then prove none of them filled before the caller places a fresh exit.
+    for lid in (tp_id, stop_id):
+        if lid and not broker.cancel_stop_confirmed(symbol, lid):
+            return "unknown", stop_id, tp_id
+    exited = _any_leg_exited()
+    if exited is True:
+        return ("live" if complete else "unknown"), stop_id, tp_id
+    if exited is None:
+        return "unknown", stop_id, tp_id
+    return "gone", stop_id, tp_id
+
+
 def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                 bar_id: str, equity: float, decision_id: str = "", min_qty: int = 1) -> bool:
     """Place ONE day-tier entry (Track A, or Track B when size["track"]=="B" — exposure-capped at wire time)
@@ -2165,6 +2289,10 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         # (str(enum).lower() renders 'positionside.long', never == 'long' — cold-2nd T2).
         existing = pos_by_sym.get(symbol)
         was_flat = existing is None
+        # CO-HOLD D3 (2026-10-10, CEO rule; board Harris/Taleb + Gro + GAI): with DAYTRADE_NO_COHOLD lifted, a
+        # SAME-direction position held by another tier is allowed; the entry then goes in as a BRACKET (Alpaca's
+        # wash-trade exception) and that tier's own exits are bounded to its shares (#579/#581/#583/#584/#585/#587).
+        cohold = False
         if existing is not None:
             if (getattr(existing, "side", None) == "long") != (direction == "long"):
                 logger.info("[%s] day-tier entry skipped — existing %s position opposite our %s "
@@ -2181,7 +2309,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                             "(no co-hold until the per-tier ownership guard ships)", symbol,
                             getattr(existing, "side", "?"))
                 return False
-        if _cfg("DAYTRADE_NO_COHOLD", True) is not False:
+            cohold = True
+        if _cfg("DAYTRADE_NO_COHOLD", True) is not False or not cohold:
             # ...nor while ANOTHER tier has a pending order on the symbol (an entry about to create a co-hold;
             # masked-loss seat 2026-10-07). Our own day-tier orders were cleared by the "already active" check.
             # open_orders is the SAME pre-submit book read validated above (None -> return False): no new API call.
@@ -2190,6 +2319,9 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                       if str(getattr(o, "symbol", "") or "") == symbol
                       and _tier_of(getattr(o, "client_order_id", None)) != "daytrade"]
             if _other:
+                # With the guard lifted this still applies to a FLAT symbol: another tier's pending order there may
+                # be an entry about to open the opposite side (a co-held same-direction position's own stops/targets
+                # are expected and do not block).
                 logger.info("[%s] day-tier entry skipped — another tier has %d open order(s) on this symbol "
                             "(no co-hold)", symbol, len(_other))
                 return False
@@ -2266,12 +2398,24 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         size = {**size, "shares": qty, "notional": round(qty * limit_px, 2),
                 "wire_cap_reason": why}
 
+        # CO-HOLD D3: a bracket needs its take-profit up front — the same target rule as the post-fill OCO, priced
+        # off the entry limit (a FADE pin target still on the profit side of the limit, else DAYTRADE_RIDE_TARGET_R x
+        # the limit->stop distance). A no-target trigger (Track M) cannot use a bracket -> skip (ETF route).
+        bracket_tp: "float | None" = None
+        if cohold:
+            bracket_tp = _bracket_take_profit(trigger, direction, limit_px, stop_px)
+            if bracket_tp is None:
+                _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "cohold_no_bracket", "wired": int(qty), "min": _min_q}
+                logger.info("[%s] day-tier co-hold entry skipped — no valid bracket take-profit (no-target trigger "
+                            "or inverted geometry)", symbol)
+                return False
+
         # B3: mint the coid + WRITE the idempotency record BEFORE submit — and FAIL CLOSED if the
         # write does not persist (Finding C: a swallowed write let the same ENTER re-fire → double).
         coid = _mint_coid(symbol, direction)
         state[key] = {"bar_id": bar_id, "coid": coid, "state": "submitting", "symbol": symbol,
                       "side": direction, "ts": datetime.now(PT).isoformat(), "qty": qty, "stop_px": stop_px,
-                      "track": _track}
+                      "track": _track, **({"cohold_bracket": True} if cohold else {})}
         if not _save_state(state):
             _page(f"[{symbol}] day-tier entry ABORTED — could not persist the idempotency record "
                   f"(B3). Not submitting (a re-fire could double the position).")
@@ -2289,10 +2433,20 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             # as open risk in the daily dollar budget for the rest of the day (cold-2nd 2026-10-04).
             _retire_unsubmitted(state, key)
             return False
-        order = broker.submit_limit_order(
-            symbol, qty, order_side, limit_px, tier="daytrade",
-            client_order_id=live_order_id(_capital.lease),
-        )
+        if cohold and bracket_tp is not None:
+            order = broker.submit_bracket_entry(
+                symbol, qty, order_side, limit_px, bracket_tp, stop_px, tier="daytrade",
+                client_order_id=live_order_id(_capital.lease),
+            )
+            if order is broker.WASH_REJECTED:
+                # Alpaca still applied its wash-trade rule: no order exists. The runner routes to the ETF fallback.
+                _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "cohold_wash", "wired": int(qty), "min": _min_q}
+                order = None
+        else:
+            order = broker.submit_limit_order(
+                symbol, qty, order_side, limit_px, tier="daytrade",
+                client_order_id=live_order_id(_capital.lease),
+            )
         if order is None:
             order = live_release(_capital.lease, "submit_none")
         elif not live_bind(_capital.lease, order):
@@ -2371,6 +2525,33 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                                trade_id=entry_coid, stop=stop_px)
         state[key].update(state="filled", fill_qty=filled_qty_i, fill_px=fill_px)
         _save_state(state)
+
+        if cohold and bracket_tp is not None:
+            # CO-HOLD D3: a COMPLETE fill activates the bracket's own take-profit + stop legs -> they ARE the
+            # protection. A partial fill: the remainder cancel above cancelled the whole group (Alpaca cancels the
+            # rest of a bracket when any order is cancelled), so the normal post-fill OCO below protects the filled
+            # shares (OCO is also a wash-trade exception).
+            _bstatus, _bstop, _btp = _bracket_protection(symbol, order, filled_qty_i, qty)
+            if _bstatus == "live":
+                state[key].update(state="protected", stop_order_id=_bstop, tp_order_id=_btp, oco_order_id=_btp)
+                _save_state(state)
+                protected = True
+                day_tier_logger.log_stop_placed(entry_coid, symbol, stop_order_id=_bstop, stop_price=stop_px)
+                try:
+                    day_tier_logger.log_target_placed(entry_coid, symbol, tp_order_id=_btp,
+                                                      target_price=round(float(bracket_tp), 2))
+                except Exception:  # noqa: BLE001 — target logging is best-effort; protection gates safety
+                    pass
+                logger.info("[%s] day-tier PROTECTED (co-hold bracket): %d sh @ fill %.2f, stop %.2f, target %.2f",
+                            symbol, filled_qty_i, fill_px, stop_px, float(bracket_tp))
+                return True
+            if _bstatus == "unknown":
+                state[key].update(stop_order_id=_bstop, tp_order_id=_btp, oco_order_id=_btp)
+                _save_state(state)
+                _halt_unresolved_exit(symbol, "Co-hold bracket legs could not be confirmed live or cancelled; no "
+                                              "second exit is placed until reconciliation proves the order state.")
+                return False
+            # "gone": no bracket leg is in force (partial fill, or legs confirmed cancelled) -> normal path below.
 
         # Rebuild the intended target from the ACTUAL fill, then validate both exit legs around
         # that fill. META/AAPL on 2026-09-23 proved that valid pre-submit geometry can become
