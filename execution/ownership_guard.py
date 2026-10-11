@@ -880,6 +880,76 @@ def apply_authorized_tier_reduction(
         )
         return False
 
+def apply_authorized_tier_fill_reduction(
+    symbol: str,
+    tier: str,
+    filled_qty: float,
+    fresh_net: float,
+    source: str,
+) -> bool:
+    """Apply an exact, strategy-owned fill to a protected claim, including co-holds.
+
+    Unlike ``apply_authorized_tier_reduction`` this path does not infer tier ownership
+    from the broker's net position.  The caller supplies the filled quantity from its
+    exact registered order.  The write is accepted only when the broker net equals the
+    complete ledger total less that fill, which proves no unrelated concurrent delta
+    is being attributed to this tier.
+    """
+    sym = str(symbol).upper()
+    if tier not in _PROTECTED_TIERS:
+        return False
+    try:
+        fill = float(filled_qty)
+        net = float(fresh_net)
+    except (TypeError, ValueError):
+        return False
+    import math
+
+    if (not math.isfinite(fill) or not fill.is_integer() or fill <= 0
+            or not math.isfinite(net) or net < -_QTY_EPS):
+        return False
+    try:
+        with _ledger_write_lock(timeout_s=1.5):
+            ledger = load_ledger()
+            ent = ledger.get("positions", {}).get(sym)
+            if not ent:
+                return False
+            tiers = ent.get("tiers", {})
+            current = float(tiers.get(tier, {}).get("qty", 0.0) or 0.0)
+            ledger_total = sum(
+                float(tiers.get(name, {}).get("qty", 0.0) or 0.0)
+                for name in _TIERS
+            )
+            # State save can fail after the ledger commit.  The exact registered
+            # order id makes the reduction replay-safe across that split write.
+            if (str(tiers.get(tier, {}).get("last_fill_id") or "") == source
+                    and abs(ledger_total - net) <= _QTY_EPS):
+                return True
+            if fill > current + _QTY_EPS:
+                return False
+            expected_net = ledger_total - fill
+            if abs(expected_net - net) > _QTY_EPS:
+                logger.critical(
+                    "authorized fill reduction refused for %s: ledger=%g fill=%g "
+                    "expects net=%g, broker net=%g",
+                    sym, ledger_total, fill, expected_net, net,
+                )
+                return False
+            tiers[tier]["qty"] = round(current - fill, 6)
+            tiers[tier]["last_fill_id"] = source
+            ent["alpaca_net_qty"] = round(net, 6)
+            ent["drift"] = round(net - expected_net, 6)
+            save_ledger(ledger)
+            logger.warning(
+                "authorized exact fill reduction: %s/%s %g→%g fill=%g net=%g src=%s",
+                sym, tier, current, current - fill, fill, net, source,
+            )
+            return True
+    except Exception as exc:
+        logger.critical(
+            "authorized exact fill reduction failed for %s/%s: %s", sym, tier, exc
+        )
+        return False
 
 # ── Heal / audit tool — full replay, refuse to shrink a protected floor ────────
 def _fill_time_key(f: dict) -> str:

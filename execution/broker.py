@@ -989,6 +989,7 @@ def submit_gtc_stop_order(
     tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
     *,
     allow_cancel_blocking: bool = True,
+    client_order_id: str | None = None,
 ) -> object:
     """
     Submit a GTC stop-market order for overnight position protection.
@@ -1039,13 +1040,14 @@ def submit_gtc_stop_order(
 
     client     = _get_trading_client()
     order_side = OrderSide.SELL if side == "sell" else OrderSide.BUY
+    _idem_id = client_order_id or _make_idem_id(tier, symbol, side)
     order_data = StopOrderRequest(
         symbol=symbol,
         qty=qty,
         side=order_side,
         stop_price=round(stop_price, 2),
         time_in_force=TimeInForce.GTC,
-        client_order_id=_make_idem_id(tier, symbol, side),
+        client_order_id=_idem_id,
     )
 
     try:
@@ -1191,7 +1193,7 @@ def submit_gtc_stop_order(
                         side=order_side,
                         stop_price=round(stop_price, 2),
                         time_in_force=TimeInForce.GTC,
-                        client_order_id=_make_idem_id(tier, symbol, side),
+                        client_order_id=_idem_id,
                     )
                     order = client.submit_order(_corrected)
                     if order:   # submit_order raises on failure; guard mirrors submit_market_order
@@ -1241,7 +1243,10 @@ def submit_gtc_stop_order(
                             side=order_side,
                             stop_price=round(stop_price, 2),
                             time_in_force=TimeInForce.GTC,
-                            client_order_id=_make_idem_id(tier, symbol, side),
+                            # Preserve the caller's durable recovery intent.  A
+                            # timeout after this internal retry must resolve to
+                            # the same broker order, not create a second stop.
+                            client_order_id=_idem_id,
                         ))
                         if _rem:
                             logger.warning(
