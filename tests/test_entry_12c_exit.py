@@ -33,7 +33,7 @@ class Exit12c(unittest.TestCase):
         out, tracker, risk, _c, close, fill_fn, mkt = self._run()
         self.assertEqual(out, "exited")
         self.slack.assert_not_called()
-        close.assert_called_once_with("EWY")
+        close.assert_called_once_with("EWY", own_qty=1, own_side="short")
         mkt.assert_not_called()                                   # no plain market order any more
         tracker.record_exit.assert_called_once()
         self.assertEqual(tracker.record_exit.call_args.args[:2], ("EWY", 180.10))

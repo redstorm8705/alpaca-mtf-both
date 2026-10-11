@@ -1,0 +1,9 @@
+{
+  "change": "cohold-claim-eod",
+  "tier": 1,
+  "paths": ["execution/broker.py", "execution/exit_logic.py", "execution/stop_protection.py", "execution/entry_logic.py", "execution/gtc_manager.py", "scripts/cohold_claim_eod.py"],
+  "proof": [{"log": "logs/cohold_claim_eod_cron.log", "pattern": "\\[cohold-claim-eod\\] \\d{4}-\\d{2}-\\d{2}: "}],
+  "expected_rate": "one line every weekday at 8:15 PM ET (usually 'no unreadable Day share counts today'); the bounded own-share close itself only runs when the Day count is unreadable (never seen in production so far)",
+  "window_sessions": 5,
+  "reversal": "no daily line (the cron is missing or the job crashes), a cohold_claim_unreadable event whose sold size exceeds the tier's own record or the net, or a co-held close that sold Day-tier shares while the Day count was unreadable"
+}

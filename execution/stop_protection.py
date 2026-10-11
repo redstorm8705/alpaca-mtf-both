@@ -53,6 +53,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from execution.broker import (
+    trade_own_qty,
     PROTECTION_ALREADY_HELD,
     PROTECTION_UNKNOWN,
     close_position,
@@ -730,7 +731,7 @@ def _skip_unknown(symbol: str, summary: dict, reason: str) -> None:
 def _cover(symbol, trade, mkt_px, intended, direction, tracker, risk, summary, now_mono) -> None:
     """Cover a breached-naked position at market and book the ACTUAL fill (RC-4)."""
     cov_ts = time.time()
-    if not close_position(symbol):
+    if not close_position(symbol, own_qty=trade_own_qty(trade), own_side=direction):
         # "cover failed" RECURS every cycle (a rejected close_position keeps the position
         # breached-naked, so the breach path re-enters _cover next cycle) — throttle it at the
         # tight naked tier (exec-risk). The post-cover pages below are one-shot (position goes

@@ -39,6 +39,7 @@ from data.premarket import calculate_atr
 from data.sectors import SECTOR_MAP as _SECTOR_MAP
 from events.handlers import get_halt_entries as _get_halt_entries
 from execution.broker import (
+    trade_own_qty,
     close_position,
     get_account,
     get_open_orders,
@@ -308,7 +309,7 @@ def _exit_on_opposite_signal(symbol: str, trade: dict, tracker, risk, mri) -> st
         logger.warning(f"[{symbol}] #12c GTC stop cancel not confirmed — exit retried next scan.")
         return "cancel_unconfirmed"
     _ts = time.time()
-    if not close_position(symbol):
+    if not close_position(symbol, own_qty=trade_own_qty(trade), own_side=trade.get("direction")):
         logger.critical(f"[{symbol}] #12c close_position FAILED — position still open; exit retried next scan. "
                         f"Verify the protective stop in Alpaca.")
         # close_position's 40310000 retry cancels every open order on the symbol (incl. the RTH DAY stop),

@@ -566,6 +566,102 @@ class CoholdBoundedClose(unittest.TestCase):
             self.assertTrue(bk._cohold_bounded_close("EWY", "intraday"))
 
 
+class CoholdUnreadableClaim(unittest.TestCase):
+    """Design record cohold_unreadable_claim_retry_2026-10-11.md: an unreadable Day share count is retried (3 reads),
+    then only the tier's OWN recorded shares are sold, min(own_qty, |net|); leftovers page."""
+
+    def setUp(self):
+        bk._COHOLD_PAGED.clear()
+
+    def _run(self, net, own_qty, own_side="long", claims=None, after=None, pcp_ok=True, snap_ok=False):
+        pos = None if net == 0 else types.SimpleNamespace(qty=str(net), side="long" if net > 0 else "short")
+        pos2 = None if after in (None, 0) else types.SimpleNamespace(qty=str(after))
+        slack, ev = mock.Mock(), mock.Mock()
+        pcp = mock.Mock(return_value=pcp_ok)
+        raw = mock.Mock(return_value=True)
+        snap = (mock.Mock(return_value=types.SimpleNamespace(errors=[], claimed_qty=lambda s, t: 0.0)) if snap_ok
+                else mock.Mock(side_effect=RuntimeError("log down")))
+        ps = [mock.patch.object(bk, "_day_tier_claim", side_effect=list(claims or [None, None, None])),
+              mock.patch.object(bk, "get_open_position", side_effect=[pos, pos2]),
+              mock.patch.object(bk, "partial_close_position", pcp),
+              mock.patch.object(bk, "_raw_close_position", raw),
+              mock.patch.object(bk.time, "sleep"),
+              mock.patch("execution.ownership_snapshot.build_ownership_snapshot", snap),
+              mock.patch.dict(sys.modules, {"alerts": types.SimpleNamespace(send_slack=slack),
+                                            "trade_logger": types.SimpleNamespace(log_event=ev)})]
+        for p in ps:
+            p.start()
+        try:
+            out = bk.close_position("EWY", tier="intraday", own_qty=own_qty, own_side=own_side)
+        finally:
+            for p in reversed(ps):
+                p.stop()
+        return out, pcp, raw, slack, ev
+
+    def test_sells_only_its_own_shares(self):
+        out, pcp, raw, slack, ev = self._run(net=10, own_qty=4, after=6)
+        self.assertTrue(out)
+        pcp.assert_called_once_with("EWY", 4, tier="intraday", position_side="long", _cohold_checked=True)
+        raw.assert_not_called()
+        slack.assert_called_once()                         # 6 shares remain with the count unknown -> page
+        self.assertEqual(ev.call_args.kwargs["outcome"], "bounded_own_close")
+        self.assertEqual(ev.call_args.kwargs["attempts"], 3)
+
+    def test_own_book_larger_than_net_never_oversells(self):
+        out, pcp, raw, slack, ev = self._run(net=3, own_qty=8)
+        pcp.assert_not_called()
+        raw.assert_called_once()                           # min(8, 3) = the whole net -> the normal close of 3
+        slack.assert_called_once()                         # every fallback to a full close pages
+        self.assertEqual(ev.call_args.kwargs["outcome"], "own_covers_net_full_close")
+
+    def test_short_lot(self):
+        out, pcp, raw, _s, _e = self._run(net=-9, own_qty=2, own_side="short", after=-7)
+        pcp.assert_called_once_with("EWY", 2, tier="intraday", position_side="short", _cohold_checked=True)
+
+    def test_side_mismatch_keeps_full_close_and_pages(self):
+        out, pcp, raw, slack, _e = self._run(net=-5, own_qty=2, own_side="long")
+        pcp.assert_not_called()
+        raw.assert_called_once()
+        slack.assert_called_once()
+
+    def test_no_own_qty_keeps_full_close_and_pages(self):
+        out, pcp, raw, slack, ev = self._run(net=10, own_qty=None)
+        raw.assert_called_once()
+        slack.assert_called_once()
+        self.assertEqual(ev.call_args.kwargs["outcome"], "no_own_qty_full_close")
+
+    def test_retry_recovers_the_claim(self):
+        out, pcp, raw, slack, ev = self._run(net=10, own_qty=4, claims=[None, 3.0, 3.0])
+        pcp.assert_called_once_with("EWY", 7, tier="intraday", position_side="long", _cohold_checked=True)
+        self.assertEqual(ev.call_args.kwargs["outcome"], "recovered_on_retry")
+
+    def test_recovered_claim_is_double_read(self):
+        # The Day stop (3 sh) fills after the recovered read: net is now 7, all Swing's -> full close of 7, never a
+        # partial of 4 that leaves 3 Swing shares with no stop (adversarial review 2026-10-11).
+        out, pcp, raw, slack, ev = self._run(net=7, own_qty=7, claims=[None, 3.0, 0.0, 0.0])
+        pcp.assert_not_called()
+        raw.assert_called_once()
+
+    def test_failed_bounded_close_pages_no_stop(self):
+        out, pcp, raw, slack, _e = self._run(net=10, own_qty=4, pcp_ok=False, after=10)
+        self.assertFalse(out)
+        self.assertIn("NO broker stop", slack.call_args.args[0])
+
+    def test_already_flat(self):
+        out, pcp, raw, _s, _e = self._run(net=0, own_qty=4)
+        self.assertTrue(out)
+        pcp.assert_not_called()
+        raw.assert_not_called()
+
+    def test_trade_own_qty(self):
+        self.assertEqual(bk.trade_own_qty({"qty": 5, "qty_remaining": 2}), 2)
+        self.assertEqual(bk.trade_own_qty({"qty": "3"}), 3)
+        self.assertIsNone(bk.trade_own_qty({"qty": None}))
+        self.assertIsNone(bk.trade_own_qty({"qty": 0}))
+        self.assertIsNone(bk.trade_own_qty(None))
+        self.assertIsNone(bk.trade_own_qty({"qty": float("inf")}))
+
+
 class PartialCloseCoholdBound(unittest.TestCase):
     """Co-hold P2 (2026-10-10): a non-Day partial never sells more than |net| minus the Day tier's claim."""
 

@@ -47,7 +47,7 @@ def _run(direction="long", stop=335.24, mkt=331.85, fill=335.24, unverified=True
 class BreachAlert(unittest.TestCase):
     def test_unverified_fill_never_pages_zero_pnl(self):
         sent, close, tr = _run(unverified=True)
-        close.assert_called_once_with("AAPL")
+        close.assert_called_once_with("AAPL", own_qty=4, own_side="long")
         self.assertEqual(len(sent), 1)
         self.assertIn("gap-down", sent[0])
         self.assertIn("pending reconciliation", sent[0])

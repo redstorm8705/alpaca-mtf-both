@@ -33,6 +33,7 @@ from data.alpaca_data import get_latest_quote, get_latest_trade
 from data.fetcher import fetch_bars
 from data.live_price import DELAYED_FEED_AGE_S, live_price_or
 from execution.broker import (
+    trade_own_qty,
     PROTECTION_ALREADY_HELD,
     PROTECTION_UNKNOWN,
     cancel_order,
@@ -1402,7 +1403,7 @@ def check_exits(
                                 f"[{symbol}] OVERNIGHT BREAKEVEN: GTC cancel unconfirmed — "
                                 f"proceeding immediately (hard-stop semantics, board Option D)."
                             )
-                        success = close_position(symbol)
+                        success = close_position(symbol, own_qty=trade_own_qty(trade), own_side=direction)
                         _entry_time = trade.get("entry_time", "")
                         _UTC = ZoneInfo("UTC")
                         try:
@@ -1565,7 +1566,7 @@ def check_exits(
                     f"proceeding to prevent exposure. Verify GTC manually."
                 )
             _ti_ts  = time.time()
-            success = close_position(symbol)
+            success = close_position(symbol, own_qty=trade_own_qty(trade), own_side=direction)
             if success:
                 _ti_fill = _fetch_actual_fill_price(
                     symbol, trade, poll_secs=0.3, submitted_after=_ti_ts
@@ -1664,7 +1665,7 @@ def check_exits(
                         f"proceeding to prevent unlimited loss. Verify GTC manually."
                     )
                 _hs_ts  = time.time()
-                success = close_position(symbol)
+                success = close_position(symbol, own_qty=trade_own_qty(trade), own_side=direction)
                 if success:
                     _hs_fill = _fetch_actual_fill_price(
                         symbol, trade, poll_secs=0.3, submitted_after=_hs_ts
@@ -1747,7 +1748,7 @@ def check_exits(
                         continue
                 _tgt_ts = time.time()
                 try:
-                    success = close_position(symbol)
+                    success = close_position(symbol, own_qty=trade_own_qty(trade), own_side=direction)
                 except Exception as _te:
                     logger.warning(
                         f"[{symbol}] close_position raised during target exit: {_te}"
@@ -2005,7 +2006,7 @@ def check_exits(
                         f"(defer {_sig_defer}/6) — retrying next scan."
                     )
                     continue
-            success = close_position(symbol)
+            success = close_position(symbol, own_qty=trade_own_qty(trade), own_side=direction)
             if not success:
                 try:
                     _ap_pos = get_open_position(symbol)

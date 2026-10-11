@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from alerts import send_slack
 from execution.broker import (
+    trade_own_qty,
     cancel_order,
     close_position,
     get_open_orders,
@@ -187,7 +188,7 @@ def submit_rth_day_stops(tracker, risk=None) -> None:
                         f"vs market ${_mkt:.2f} — covering now (market close); no valid stop placeable."
                     )
                     _cov_ts = time.time()
-                    if close_position(sym):
+                    if close_position(sym, own_qty=trade_own_qty(t), own_side=_dir):
                         _cov_fill = fetch_actual_fill_price(sym, t, poll_secs=1.0,
                                                             submitted_after=_cov_ts)
                         _cov_pnl = tracker.record_exit(sym, _cov_fill, reason="stop_breach_cover")
