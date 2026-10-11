@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-10 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-11 (Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,18 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-11 evening, Claude signed) — Day lots never held over (#597, deployed)
+
+After-hours exit escalates from 7:30 PM ET, keeps working in Alpaca's overnight session (feed=overnight quotes), and a
+lot still open at the regular open is flattened at market. OCI Day runner cron is now `*/2 * * * *` (idle ticks return
+early; first idle line seen 2026-10-11 18:14 PT). Deployed, unexercised for an actual held-over lot. Design record
+logs/design_records/day_overnight_exit_coverage_2026-10-11.md.
+
+**⏩ EXACT NEXT ACTION:** build the unreadable-Day-count bounded close (BGG consensus in
+logs/design_records/cohold_unreadable_claim_retry_2026-10-11.md: callers pass own qty+side, 3 reads in ~3 s, then sell
+min(own,|net|), no deferral, trade_events + EOD summary). Then Track B keep/merge/retire (BGG); Monday close: first
+post-live evaluator run.
 
 ## ⏩ LATEST (2026-10-11 later, Claude signed) — post-live audit engine live (#592)
 
