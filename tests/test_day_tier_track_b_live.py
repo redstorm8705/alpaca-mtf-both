@@ -702,6 +702,70 @@ class DurableTrackStamp(unittest.TestCase):
         self.assertEqual(opened["DT-OLD"]["track"], "A")
 
 
+class TrackBReservation(unittest.TestCase):
+    """F2 (board Thorp/LdP + GAI 2026-10-12): while a Track B mover is live today, a Track A entry leaves Track B's
+    unused budget free inside the shared Day gross cap; total cap unchanged; Track B itself is not reduced."""
+
+    def _room(self, why):
+        import re
+        return float(re.search(r"day_gross:\$(-?[0-9.]+)", why).group(1))
+
+    def _q(self, track="A", reserve_b=True, open_trades=None):
+        return dtm._bounded_entry_qty(1, 70.0, 69.0, 2500.0, open_trades or {}, {}, 4000.0, 0.0, 0.30, [],
+                                      risk_equity=2500.0, symbol="UBER", track=track, track_budget=131.25,
+                                      reserve_b=reserve_b)
+
+    def test_track_a_room_leaves_the_b_budget(self):
+        _, why_off = self._q(reserve_b=False)
+        _, why_on = self._q(reserve_b=True)
+        self.assertAlmostEqual(self._room(why_off) - self._room(why_on), 131.25, places=2)
+        self.assertIn("track-B reserve", why_on)
+
+    def test_open_b_notional_shrinks_the_reserve(self):
+        ot = {"DT-B": {"symbol": "PLTU", "track": "B", "fill_qty": 1, "entry_price": 100.0}}
+        _, why_off = self._q(reserve_b=False, open_trades=ot)
+        _, why_on = self._q(reserve_b=True, open_trades=ot)
+        self.assertAlmostEqual(self._room(why_off) - self._room(why_on), 31.25, places=2)
+
+    def test_track_b_entry_is_not_reduced(self):
+        _, why_off = self._q(track="B", reserve_b=False)
+        _, why_on = self._q(track="B", reserve_b=True)
+        self.assertEqual(self._room(why_off), self._room(why_on))
+
+    def test_reserve_active_only_while_a_mover_is_live(self):
+        day = datetime.now(ET).strftime("%Y%m%d")
+        now = datetime.now(ET).timestamp()
+        live = {dtm._TRACK_B_LIVE_KEY: {"date": day, "symbols": ["MU"], "last": {"MU": now - 60}}}
+        stale = {dtm._TRACK_B_LIVE_KEY: {"date": day, "symbols": ["MU"], "last": {"MU": now - 3600}}}
+        with mock.patch.object(config, "DAYTRADE_TRACK_B_ENABLED", True):
+            self.assertFalse(dtm._track_b_reserve_active(stale))                # stopped passing -> released
+            self.assertFalse(dtm._track_b_reserve_active(
+                {dtm._TRACK_B_LIVE_KEY: {"date": day, "symbols": ["MU"]}}))   # no pass time -> not live
+        with mock.patch.object(config, "DAYTRADE_TRACK_B_ENABLED", True):
+            self.assertTrue(dtm._track_b_reserve_active(live))
+            used = {**live, dtm._TRACK_B_SIGNAL_KEY: {"date": day, "symbols": ["MU"]}}
+            self.assertFalse(dtm._track_b_reserve_active(used))                 # shot used -> released
+            self.assertFalse(dtm._track_b_reserve_active({dtm._TRACK_B_LIVE_KEY: {"date": "20200101", "symbols": ["MU"]}}))
+            self.assertFalse(dtm._track_b_reserve_active({}))                   # no mover today
+            with mock.patch.object(config, "DAYTRADE_TRACK_B_RESERVE", False):
+                self.assertFalse(dtm._track_b_reserve_active(live))           # kill flag
+        with mock.patch.object(config, "DAYTRADE_TRACK_B_ENABLED", False):
+            self.assertFalse(dtm._track_b_reserve_active(live))
+
+    def test_mark_live_refreshes_the_pass_time(self):
+        st: dict = {}
+        with mock.patch.object(dtm, "_load_state", side_effect=lambda: st), \
+                mock.patch.object(dtm, "_save_state", side_effect=lambda x: st.update(x) or True):
+            dtm.mark_track_b_live("MU")
+            first = st[dtm._TRACK_B_LIVE_KEY]["last"]["MU"]
+            dtm.mark_track_b_live("MU", "COIN")
+        self.assertEqual(st[dtm._TRACK_B_LIVE_KEY]["symbols"], ["MU", "COIN"])
+        self.assertGreaterEqual(st[dtm._TRACK_B_LIVE_KEY]["last"]["MU"], first)
+
+    def test_signal_key_matches_the_runner(self):
+        self.assertEqual(dtm._TRACK_B_SIGNAL_KEY, run_day_tier._SIGNAL_DAY_KEY)
+
+
 class RunnerWindowGate(unittest.TestCase):
     """Outside the window the runner does NO Track-B fetch; inside it routes an ENTER to place_entry(track B)."""
 
@@ -749,6 +813,36 @@ class RunnerWindowGate(unittest.TestCase):
             rm.return_value.check_kill_switch.return_value = False
             result = run_day_tier.run_tick()
         return result, bsf, pe
+
+    def _short_tick(self, exempt, wd_ok=False):
+        extra = [mock.patch.object(run_day_tier, "_watch_day_ok", return_value=(wd_ok, "watch day not confirmed (test)")),
+                 mock.patch.object(config, "DAYTRADE_TRACK_B_WATCHDAY_EXEMPT", exempt),
+                 mock.patch.object(run_day_tier, "_record_counter_trend_intent", return_value="DID-1"),
+                 mock.patch.object(run_day_tier, "_log_direction_skip")]
+        return self._tick(True, extra=extra, mom_over={"direction": "short", "entry_ref": 70.0,
+                                                       "structural_level": 71.0}, side="LONG")
+
+    def test_track_b_short_is_exempt_from_the_watch_day_rule(self):
+        result, _bsf, pe = self._short_tick(exempt=True)
+        pe.assert_called_once()
+        trig = pe.call_args.args[2]
+        self.assertTrue(trig.get("watch_day_exempt_b"))
+        self.assertNotIn("watch_day", trig)                  # kept out of the watch-day rule's own test
+
+    def test_exempt_flag_off_restores_the_watch_day_skip(self):
+        result, _bsf, pe = self._short_tick(exempt=False)
+        pe.assert_not_called()
+
+    def test_confirmed_watch_day_short_keeps_the_watch_day_tag(self):
+        result, _bsf, pe = self._short_tick(exempt=True, wd_ok=True)
+        trig = pe.call_args.args[2]
+        self.assertTrue(trig.get("watch_day"))
+        self.assertNotIn("watch_day_exempt_b", trig)
+
+    def test_screened_mover_is_marked_live(self):
+        with mock.patch("execution.day_trade_manager.mark_track_b_live") as mk:
+            self._tick(True, extra=[])
+        mk.assert_called_with("UBER")
 
     def test_outside_window_fetches_nothing(self):
         result, bsf, pe = self._tick(False)

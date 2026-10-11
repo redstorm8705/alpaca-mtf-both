@@ -1,0 +1,21 @@
+{
+  "change": "track-b-fixes",
+  "tier": 1,
+  "paths": [
+    "config.py",
+    "execution/day_trade_manager.py",
+    "run_day_tier.py",
+    "strategy/day_tier_alignment.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/day_tier_runner_cron.log",
+      "pattern": "track-B short exempt from the watch-day rule|track-B reserve \\$[0-9.]+ held from day_gross"
+    }
+  ],
+  "expected_rate": "an exempt Track B short ~0.45/day in the replay (live Track B signals were 7 in 12 sessions, so fewer); the reserve line on Track A entries while a mover is live (mover days ~2-4 h)",
+  "window_sessions": 10,
+  "window_reason": "both events depend on gap movers and Track A entries coinciding; ten sessions without either means the wiring is broken",
+  "reversal": "exempt Track B shorts: mean R from Alpaca fills after costs < -0.60R after 20 or < -0.25R at the 40-trade check; any Track B entry reduced by the reserve; any Track A room increased by it",
+  "baseline_exempt_reason": "both proof lines are new strings added by this change ('track-B short exempt from the watch-day rule', 'track-B reserve $X held from day_gross'); the baseline check confirms zero existing matches"
+}

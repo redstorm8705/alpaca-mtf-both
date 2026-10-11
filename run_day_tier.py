@@ -1227,6 +1227,7 @@ def run_tick() -> dict:
             track_b_note = "import_error"
         b_today: set = set()
         b_waits: dict = {}   # screened movers that did not trigger -> the trigger's wait_code (logged once per tick)
+        b_live: list = []    # screened movers this tick -> one state write (dtm.mark_track_b_live) after the loop
         b_day = datetime.now(ET).strftime("%Y%m%d")
         prev_session = None
         if track_b_window and time.monotonic() - _tick_t0 > _TRACK_B_TICK_BUDGET_S:
@@ -1266,6 +1267,7 @@ def run_tick() -> dict:
                 screen = tb.screen_mover(sym, frame, prior_close, avg_vol, now_et)
                 if not screen.get("is_mover"):
                     continue
+                b_live.append(sym)   # Track B reservation (F2): saved once after the loop
                 mom = compute_momentum_trigger(sym, screen.get("gap_direction"), frame)
                 if mom.get("trigger") != "ENTER":
                     b_waits[sym] = str(mom.get("wait_code") or "?")
@@ -1293,11 +1295,20 @@ def run_tick() -> dict:
                              "gate_reason": _gate_b["reason"]}
                 decision_b = {**decision_b, "side": _side_b}
                 _wd_ok_b, _wd_why_b = _watch_day_ok(sym, _side_b, trigger_b.get("direction"))
-                if not _wd_ok_b:
-                    _log_direction_skip(sym, decision_b, trigger_b, _wd_why_b, bar_id)
-                    continue
-                if trigger_b.get("counter_trend") and str(trigger_b.get("direction")) == "short":
-                    trigger_b = {**trigger_b, "watch_day": True, "watch_day_reason": _wd_why_b}
+                _b_short_ct = bool(trigger_b.get("counter_trend")) and str(trigger_b.get("direction")) == "short"
+                if (not _wd_ok_b and _b_short_ct
+                        and getattr(config, "DAYTRADE_TRACK_B_WATCHDAY_EXEMPT", False) is True):
+                    # F1 (board Thorp/LdP + GAI 2026-10-12): a Track B breakdown short is exempt from the watch-day rule
+                    # (replay: blocked shorts mean -0.044R, t -0.37). Tagged and kept OUT of the watch-day rule's own
+                    # ~100-short test; pre-registered reversal in config. A CONFIRMED watch day keeps the old path below.
+                    logger.info("[%s] track-B short exempt from the watch-day rule (%s)", sym, _wd_why_b)
+                    trigger_b = {**trigger_b, "watch_day_exempt_b": True, "watch_day_reason": _wd_why_b}
+                else:
+                    if not _wd_ok_b:
+                        _log_direction_skip(sym, decision_b, trigger_b, _wd_why_b, bar_id)
+                        continue
+                    if _b_short_ct:
+                        trigger_b = {**trigger_b, "watch_day": True, "watch_day_reason": _wd_why_b}
                 size_b = compute_day_tier_size(sym, decision_b, trigger_b.get("entry_ref"), equity,
                                                buying_power=buying_power, track="B")
                 # LEVERAGED PIVOT (Rafael CEO directive 2026-10-06; strategy/day_tier_leverage.py): a Track-B LONG trades
@@ -1415,6 +1426,8 @@ def run_tick() -> dict:
                 calls_used += per_entry_est
             except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick
                 logger.warning("[%s] track-B entry loop error (non-fatal): %s", sym, e)
+        if b_live:
+            dtm.mark_track_b_live(*b_live)
         if b_waits:
             # Decision explainability (board Simons/Brandt + GAI 2026-10-11): why each screened mover did not trigger.
             logger.info("[track-b-wait] screened movers not triggered: %s",

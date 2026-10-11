@@ -403,6 +403,16 @@ class CounterTrendReversal(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("3 consecutive", why)
 
+    def test_track_b_shorts_do_not_dilute_track_a_fades(self):
+        # cold-2nd 2026-10-12: fade -10, Track B exempt short +30, fade -10, fade -10 -> Track A's own record is
+        # cumulative -30 / 3 losses -> disabled; counting the B win would have kept fades on.
+        b = _ct_trade("bshort", 30.0, "2026-10-05T10:30")
+        b[0]["decision"] = {"track": "B"}
+        ev = (_ct_trade("a", -10.0, "2026-10-05T10:00") + b + _ct_trade("c", -10.0, "2026-10-05T11:00")
+              + _ct_trade("d", -10.0, "2026-10-05T12:00"))
+        ok, why = al.counter_trend_fades_ok(ev)
+        self.assertFalse(ok)
+
     def test_a_win_resets_the_streak(self):
         ev = (_ct_trade("a", -1.0, "2026-10-05T09:00") + _ct_trade("b", -1.0, "2026-10-05T10:00")
               + _ct_trade("c", 2.0, "2026-10-05T11:00"))
