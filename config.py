@@ -879,6 +879,13 @@ DAYTRADE_MAX_API_CALLS_PER_RUN = 60
 DAYTRADE_STOP_RETRIES        = 2      # retry an UNCONFIRMED protective stop this many MORE times before flattening
 DAYTRADE_STOP_RETRY_WAIT_S   = 1.0    # backoff (s) between stop-placement retries
 DAYTRADE_ENTRY_SLIPPAGE_PCT  = 0.002  # PROV:daytier-v2-2026-08-29  marketable-limit crosses the quote by this frac (caps worst fill vs a naked market order)
+# SAME-DIRECTION CO-HOLD (CEO rule, repeated 2026-10-10: the Day tier may trade a stock another tier holds as long as it
+# is the same direction). False = the interim no-co-hold guard (2026-10-07) is LIFTED for same-direction holders: the
+# entry goes in as an Alpaca bracket (wash-trade exception) and a wash reject routes to the 2x/inverse ETF. Opposite-
+# direction holders stay blocked. Prerequisites shipped: #577/#578 (tier-scoped cancels, lot side), #579 (close bound),
+# #581 (reconcile), #583 (fill pricing), #584 (partial bound), #585 (cancel scope), #587 (safety-net stop), #589 (bracket).
+# Kill flag: True restores the guard. Design record logs/design_records/same_direction_cohold_2026-10-10.md.
+DAYTRADE_NO_COHOLD = False
 DAYTRADE_STOP_BUFFER_PCT     = 0.001  # PROV:daytier-v2-2026-08-29  buffer beyond the broken wall for a RIDE stop
 DAYTRADE_RIDE_TARGET_R       = 2.0    # PROV:daytier-bracket-2026-09-19 — RIDE take-profit = entry ± this × (entry→stop
                                       # distance), profit-side. FADE uses the GEX pin as the target; RIDE has no pin, so

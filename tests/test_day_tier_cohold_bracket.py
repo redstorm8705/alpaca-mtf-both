@@ -256,5 +256,59 @@ class PlaceEntryCohold(unittest.TestCase):
         halt.assert_called_once()
 
 
+class CoholdLift(unittest.TestCase):
+    """The lift (config.DAYTRADE_NO_COHOLD = False): the runner lets a SAME-direction co-hold reach the stock path; an
+    opposite holder keeps the ETF route / skip; a bracket wash reject routes to the ETF."""
+
+    def test_cohold_ok_same_direction_only(self):
+        import run_day_tier as rdt
+        with mock.patch("config.DAYTRADE_NO_COHOLD", False, create=True):
+            self.assertTrue(rdt._cohold_ok("EWY", "short", {"EWY": -1.0}))
+            self.assertTrue(rdt._cohold_ok("NVDA", "long", {"NVDA": 7.0}))
+            self.assertFalse(rdt._cohold_ok("UBER", "short", {"UBER": 1.0}))     # opposite -> blocked
+            self.assertFalse(rdt._cohold_ok("NVDA", "long", None))                # unreadable -> blocked
+            self.assertFalse(rdt._cohold_ok("NVDA", "long", {"NVDA": 0.0}))
+        with mock.patch("config.DAYTRADE_NO_COHOLD", True, create=True):
+            self.assertFalse(rdt._cohold_ok("NVDA", "long", {"NVDA": 7.0}))      # guard on
+
+    def test_config_lifts_the_guard(self):
+        import config
+        self.assertIs(getattr(config, "DAYTRADE_NO_COHOLD", True), False)
+
+    def test_foreign_signed_qty(self):
+        import run_day_tier as rdt
+        snap = SimpleNamespace(errors=(), broker_qty={"NVDA": 10.0, "EWY": -1.0},
+                               claimed_qty=lambda s, t: 3.0 if s == "NVDA" else 0.0,
+                               foreign_symbols=lambda t: frozenset({"NVDA", "EWY"}))
+        with mock.patch("execution.ownership_snapshot.build_ownership_snapshot", return_value=snap):
+            self.assertEqual(rdt._foreign_signed_qty(), {"NVDA": 7.0, "EWY": -1.0})
+        bad = SimpleNamespace(errors=("daytrade_log:ValueError",), broker_qty={}, claimed_qty=lambda s, t: 0.0,
+                              foreign_symbols=lambda t: frozenset())
+        with mock.patch("execution.ownership_snapshot.build_ownership_snapshot", return_value=bad):
+            self.assertIsNone(rdt._foreign_signed_qty())
+
+    def test_wash_reject_routes_to_the_etf(self):
+        import run_day_tier as rdt
+        calls, skips = [], {}
+
+        class _Fake:
+            def place_entry(self, sym, decision, trigger, size, *, bar_id, equity, min_qty=1, **kw):
+                calls.append(sym)
+                if sym == "NVDA":
+                    skips[sym] = {"reason": "cohold_wash", "wired": 5, "min": min_qty}
+                    return False
+                return True
+
+            def last_entry_skip(self, sym):
+                return skips.get(sym)
+
+        route = (({}, {"direction": "long", "symbol": "NVDL"}, {"size_ok": True, "shares": 5}, "NVDL"), "ok")
+        with mock.patch.object(rdt, "_bull_pivot", return_value=route):
+            ok, sym, _d, tries = rdt._place_affordable(
+                _Fake(), "NVDA", {}, {"trigger": "ENTER", "direction": "long", "entry_ref": 100.0}, {"size_ok": True},
+                bar_id="b", equity=2500.0, buying_power=9000.0, held={"NVDA"}, track="A", exposure={})
+        self.assertEqual((ok, sym, calls), (True, "NVDL", ["NVDA", "NVDL"]))
+
+
 if __name__ == "__main__":
     unittest.main()
