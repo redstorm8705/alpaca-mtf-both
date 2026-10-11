@@ -1,0 +1,17 @@
+{
+  "change": "pr549-cover-reject-no-short-ban",
+  "tier": 1,
+  "paths": [
+    "execution/broker.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "market order rejected \\(40310000, not a short"
+    }
+  ],
+  "expected_rate": "only when a buy-to-cover market order is rejected 40310000; rare",
+  "window_sessions": 10,
+  "reversal": "a stock is barred from shorting after a rejected buy-to-cover (the EWY 10/08 symptom)",
+  "baseline_exempt_reason": "PR #549 shipped 2026-10-09, before the post-live engine; its own log text is the proof"
+}
