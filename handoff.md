@@ -8,6 +8,18 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-11 late, Claude signed) — Track B review: KEEP; WAIT-reason logging live (#601)
+
+BGG (Simons+Brandt + GAI): keep Track B separate (1 of 27 Day fills; 911 screen passes -> 7 signals; misses: watch-day
+3, Day gross cap used by Track A 2, one-share minimum 1). #601 logs `[track-b-wait]` per tick. Record:
+logs/design_records/day_tier_track_b_review_2026-10-11.md. Also live tonight: #597 overnight Day exit, #599 own-share
+close on an unreadable Day count.
+
+**⏩ EXACT NEXT ACTION:** finish the replay of Track B shorts vs the watch-day rule
+(research/day_tier_trackb_watchday_replay.py, in progress); then bring both risk-path fixes (watch-day exemption for
+Track B shorts, reserve Track B's 35% slice in the Day gross cap) through the board gate. Monday close: first post-live
+evaluator run.
+
 ## ⏩ LATEST (2026-10-11 night, Claude signed) — unreadable Day share count: retry + own-share close (#599, deployed)
 
 A non-Day close on a co-held stock retries an unreadable Day count 3x (~2 s; a recovered count is double-read), then
