@@ -442,6 +442,59 @@ def _logevidence_ok(relpath: str, ref: str):
         f"If it does NOT: record_exemption.py {relpath} --reason \"<why>\".")
 
 
+def _runs_in_production(relpath: str) -> bool:
+    """Code that RUNS on the production server — the post-live engine's scope, identical to post_live_due.py's
+    is_bot_code: a .py / .sh outside tests / research / docs / logs / tooling, or config.py / requirements.txt. Tests
+    and docs have no production run to prove, so they carry no expectation."""
+    p = relpath.strip()
+    if not p or p.startswith(("tests/", "research/", "docs/", "logs/", ".claude/", ".github/")):
+        return False
+    return p.endswith((".py", ".sh")) or p in ("config.py", "requirements.txt")
+
+
+def _expectation_ok(relpath: str, ref_tmpl: str):
+    """Post-live engine increment 1 (design record post_live_engine_2026-10-11.md; board + Gro + GAI): a gated
+    BOT-CODE change must ship with a POST-LIVE EXPECTATION — a record under logs/post_live/expect/ naming the unique
+    production proof that it ran, what it should change, and its reversal criterion — registered by
+    record_expectation.py. The marker binds BOTH the code file's content sha and the expectation record's content sha
+    at the same ref, so the record is frozen at ship time (editing it after seeing live results invalidates the
+    marker) and it must ship in the same commit/push range as the code. Fail closed on anything unreadable."""
+    ref = ref_tmpl.format(relpath)
+    cur = _content_sha(ref)
+    if not cur:
+        return False, "FAIL-CLOSED: cannot read content for the expectation check"
+    mpath = os.path.join(MARKER_DIR, relpath.replace("/", "__") + ".expect.json")
+    if not os.path.exists(mpath):
+        return False, ("no post-live expectation. Write logs/post_live/expect/<change>.json, git add it, then: "
+                       f"record_expectation.py logs/post_live/expect/<change>.json --covers {relpath}")
+    try:
+        m = json.load(open(mpath))
+    except Exception as e:  # noqa: BLE001
+        return False, f"expectation marker unreadable: {e}"
+    if m.get("sha256") != cur:
+        return False, "content changed since the expectation was recorded — re-run record_expectation.py"
+    exp = str(m.get("expect_path") or "")
+    if not exp.startswith("logs/post_live/expect/") or ".." in exp.split("/"):
+        return False, "expectation marker names no record under logs/post_live/expect/"
+    exp_sha = _content_sha(ref_tmpl.format(exp))
+    if not exp_sha:
+        return False, f"expectation record {exp} is not in this commit/push (it must ship with the code)"
+    # One record per change (cold-2nd round 2): the record must be NEW on this branch — absent from origin/main. A
+    # record already on main dates its watch window from that old merge, so reusing it would leave this change
+    # unevaluated. Branch-relative (not commit-relative) so a change may take several commits. Fail closed if the
+    # main ref cannot be read.
+    ok_ref, _ = _git(["rev-parse", "--verify", "--quiet", "origin/main"])
+    if not ok_ref:
+        return False, "FAIL-CLOSED: cannot read origin/main to confirm the expectation record is new (git fetch first)"
+    on_main, _ = _git(["cat-file", "-e", f"origin/main:{exp}"])
+    if on_main:
+        return False, (f"expectation record {exp} is already on main (a previous change's record) — this change needs "
+                       f"its own new record")
+    if exp_sha != m.get("expect_sha256"):
+        return False, f"expectation record {exp} changed since it was recorded — re-run record_expectation.py"
+    return True, "ok (post-live expectation recorded)"
+
+
 def _added_lines(range_args, relpath):
     """Set of NEW-file line numbers this diff ADDS/MODIFIES for `relpath` (the '+' lines),
     so the dynamic gate is DIFF-SCOPED — only new/changed thresholds are checked and
@@ -684,6 +737,19 @@ def _changed_gated(range_args, ref_tmpl):
             dyn_good, dyn_why = _dynamic_ok(f, ref_tmpl.format(f), range_args)
             if not dyn_good:
                 fails.append(f"  - {f}: [DYNAMIC] {dyn_why}")
+    # Post-live engine increment 1: EVERY shipped file that runs in production needs a frozen post-live expectation —
+    # checked over all shipped files, not only the gated directories (cold-2nd F4: state/, reporting/, monitoring/ are
+    # imported by main.py / run_day_tier.py but are outside GATED_DIRS).
+    for _s, f, _o in files:
+        if _runs_in_production(f):
+            # A file whose shipped content is identical to origin/main's is not this branch's change (e.g. it arrived
+            # by merging main into the branch); its own change carried its record (cold-2nd round 3).
+            _cur = _content_sha(ref_tmpl.format(f))
+            if _cur and _cur == _content_sha(f"origin/main:{f}"):
+                continue
+            ex_good, ex_why = _expectation_ok(f, ref_tmpl)
+            if not ex_good:
+                fails.append(f"  - {f}: [POST-LIVE] {ex_why}")
     return (fails, [f for _, f, _o in gated])
 
 

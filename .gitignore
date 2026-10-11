@@ -54,6 +54,11 @@ trade_events.jsonl
 logs/*
 # Whitelisted docs for CCR agent context:
 !logs/tb_audit_log.md
+# Post-live engine (2026-10-11): expectation records ship with each change; evaluator results stay untracked
+# (a tracked file written on OCI would break `git pull --ff-only`).
+!logs/post_live/
+logs/post_live/*
+!logs/post_live/expect/
 !logs/qhm_v2_design_2026-07-11.md
 !logs/overnight_work_order_2026-07-12.md
 !logs/bot_improvements.md
