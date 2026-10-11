@@ -1,0 +1,9 @@
+{
+  "change": "foreign-stop-defer",
+  "tier": 1,
+  "paths": ["execution/foreign_stop_guard.py", "execution/entry_logic.py", "execution/swing_breakout_manager.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "\\[foreign-stop-defer\\] \\[[A-Z.]+\\] intraday entry deferred"}],
+  "expected_rate": "only when a Swing or breakout entry signal fires on a stock where another tier's opposite-side stop rests (mostly a same-session Day lot); can be zero for several sessions",
+  "window_sessions": 10,
+  "reversal": "an entry deferred while no foreign opposite-side stop rested on the symbol (a false block), or a Swing/breakout entry still rejected by Alpaca's wash rule after this change, or a block lasting beyond one session without its daily page"
+}

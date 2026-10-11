@@ -567,6 +567,15 @@ class SwingBreakoutManager:
             _log("skip", symbol, reason="buying power", bp=buying_power, sizing=why, signal=sig)
             return False
         stop_px = round(ask - float(_cfg("SWING_BREAKOUT_STOP_ATR", 2.5)) * sig["atr"], 2)
+        # FOREIGN-STOP DEFER (Option A, design record cohold_buys_vs_foreign_stops_2026-10-11.md): Alpaca rejects this
+        # buy while another tier's sell stop rests on the symbol (wash rule) -> defer this scan, logged.
+        from execution.foreign_stop_guard import clear_deferral, foreign_opposite_stop, note_deferral
+        _fstop = foreign_opposite_stop(symbol, "buy", TIER)
+        if _fstop is not None:
+            note_deferral(symbol, TIER, _fstop)
+            _log("skip", symbol, reason="foreign stop resting (wash rule) — deferred", sizing=why, signal=sig)
+            return False
+        clear_deferral(symbol, TIER)
         from execution.tier_capital_allocator import live_admit, live_bind, live_order_id, live_release
         capital = live_admit("swing", TIER, symbol, "buy", int(qty), limit,
                              stop_price=stop_px, risk_price_bound=limit)
