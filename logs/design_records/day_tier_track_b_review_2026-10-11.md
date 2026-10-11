@@ -81,3 +81,26 @@ Replay: research/day_tier_trackb_watchday_replay.py, logs/trackb_watchday_replay
   signals than live did in 9/24-10/09 (it uses today's settings throughout; 23 extras live never screened), so the
   115-short sample may differ from what live trades; the F1 reversal is a manual review (no code computes it) —
   count exempt shorts by the `watch_day_exempt_b` tag, not by "counter-trend short".
+
+## F1 narrowed (2026-10-12, before any exempt short traded; board Thorp + López de Prado + GAI, after a tie-break)
+Out-of-sample replay (research/day_tier_trackb_oos_replay.py, logs/trackb_oos_replay_2026-10-11.json; 2023-10-02..
+2025-09-30, 15 names, same frozen rules): the watch-day-blocked Track B shorts averaged -0.171R (n=340, t -2.59).
+First round split 2-1 (Thorp, GAI: switch off; López de Prado: change). Counter-evidence, verified at source: the live
+bot never trades a too-tight stop — place_entry widens it (`_room_stop`, execution/day_trade_manager.py ~L2429) — while
+the replay kept the tight stop. Split of the 340: structural stop already >= 1.5x ATR(5m) (replay = live behaviour)
+n=245, -0.017R (in-sample n=74, -0.002R); stop too tight n=95, -0.569R (t -4.74), no evidence for the widened version.
+All three then ruled CHANGE:
+- The exemption applies only when place_entry's room stop KEEPS the structural stop (it already has the room by every
+  measure _room_stop applies: limit and last trade, the 1.5x ATR(5m) floor, the real-time room); an exempt short the
+  room stop would widen is skipped, never widened. (Cold-2nd + adversarial: a first version measured from the limit
+  only, ~0.2% looser for a short, and would have let ~41 of the 95 tight-stop trades through at about -0.60R.)
+- Reversal tightened: mean R from Alpaca fills after costs < -0.30R after 20 exempt shorts or < -0.15R at 40.
+- Watch: the wide-stop subset was -0.137R in 2025 (n=83).
+- Adversarial check of the live rule (next-open as the later-tick proxy): kept n=242, -0.043R; leak 6 trades (-1.14R),
+  lost 9 (-0.078R). Reversal power (bootstrap): a flat population trips -0.30R@20 14% / -0.15R@40 25%; a -0.17R
+  population 32% / 56% — re-check at 80 exempt shorts. Known limits: with ATR unreadable the room stop falls back to
+  0.5% of price (no replay evidence for that case); a skipped exempt short is re-evaluated on later ticks of the bar.
+Not risk-path (narrows F1). F2 (the Track B reservation) and the fade-rule fix stay.
+Out-of-sample for the by-product findings: H1 (no-clear-side shorts) and H2 (with-trend longs) NOT CONFIRMED.
+Flag for the forward pass: all Track B shorts (-0.096R) and longs (-0.078R) were negative out-of-sample — Track B's core
+signal needs its own review.

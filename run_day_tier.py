@@ -1299,7 +1299,8 @@ def run_tick() -> dict:
                 if (not _wd_ok_b and _b_short_ct
                         and getattr(config, "DAYTRADE_TRACK_B_WATCHDAY_EXEMPT", False) is True):
                     # F1 (board Thorp/LdP + GAI 2026-10-12): a Track B breakdown short is exempt from the watch-day rule
-                    # (replay: blocked shorts mean -0.044R, t -0.37). Tagged and kept OUT of the watch-day rule's own
+                    # (scoped 2026-10-12 to shorts whose structural stop already has the room — place_entry skips the rest; replay
+                    # of that subset: -0.017R out-of-sample n=245). Tagged and kept OUT of the watch-day rule's own
                     # ~100-short test; pre-registered reversal in config. A CONFIRMED watch day keeps the old path below.
                     logger.info("[%s] track-B short exempt from the watch-day rule (%s)", sym, _wd_why_b)
                     trigger_b = {**trigger_b, "watch_day_exempt_b": True, "watch_day_reason": _wd_why_b}

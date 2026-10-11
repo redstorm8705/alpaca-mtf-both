@@ -1,0 +1,11 @@
+{
+  "change": "track-b-exempt-scope",
+  "tier": 1,
+  "paths": ["config.py", "execution/day_trade_manager.py", "run_day_tier.py"],
+  "proof": [{"log": "logs/day_tier_runner_cron.log", "pattern": "track-B short exempt from the watch-day rule|track-B exempt short skipped"}],
+  "baseline_exempt_reason": "both strings are new log lines added by #603 and this change; the baseline check confirms zero existing matches",
+  "expected_rate": "only on a session with a Track B short against a LONG daily side and no confirmed watch day (replay ~0.45/day before the scope; live Track B signals were 7 in 12 sessions) — can be zero for several sessions",
+  "window_sessions": 10,
+  "window_reason": "the event needs a Track B breakdown short on a LONG-side symbol; ten sessions without one is still possible but worth a look",
+  "reversal": "an exempt short traded with a widened stop; or exempt shorts' mean R from Alpaca fills after costs < -0.30R after 20 or < -0.15R at 40"
+}

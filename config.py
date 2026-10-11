@@ -888,10 +888,12 @@ DAYTRADE_ENTRY_SLIPPAGE_PCT  = 0.002  # PROV:daytier-v2-2026-08-29  marketable-l
 DAYTRADE_NO_COHOLD = False
 # TRACK B fixes (board Thorp + López de Prado + GAI, 2026-10-12; design record
 # logs/design_records/day_tier_track_b_review_2026-10-11.md). Kill flags: False restores the old behaviour.
-# WATCHDAY_EXEMPT: a Track B breakdown short against a LONG daily side skips the watch-day rule (replay: 115 blocked
-# shorts, mean -0.044R, t -0.37). Pre-registered reversal: from Alpaca fills after costs, mean R < -0.60R after 20
-# exempt shorts or < -0.25R at the 40-trade check -> set False. Exempt shorts are tagged watch_day_exempt_b and are
-# NOT counted in the watch-day rule's own ~100-short test.
+# WATCHDAY_EXEMPT: a Track B breakdown short against a LONG daily side skips the watch-day rule, ONLY when its structural
+# stop already has 1.5x ATR(5m) of room (place_entry skips it otherwise; never widened). Replay of that subset: -0.017R
+# (n=245, out-of-sample 2023-10..2025-09) and -0.002R (n=74, in-sample); the tight-stop subset was -0.569R (n=95).
+# Pre-registered reversal (tightened 2026-10-12): from Alpaca fills after costs, mean R < -0.30R after 20 exempt shorts
+# or < -0.15R at the 40-trade check -> set False. Exempt shorts are tagged watch_day_exempt_b and are NOT counted in
+# the watch-day rule's own ~100-short test.
 DAYTRADE_TRACK_B_WATCHDAY_EXEMPT = True
 # RESERVE: while a Track B mover is live (passed the mover screen within the last ~6 minutes, daily shot unused), a Track A
 # entry's Day gross room also leaves Track B's unused budget free. Total Day cap unchanged; with no live mover A still

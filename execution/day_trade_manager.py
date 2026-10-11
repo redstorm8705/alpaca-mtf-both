@@ -2423,6 +2423,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             logger.warning("[%s] day-tier entry aborted — invalid marketable-limit price", symbol)
             return False
 
+        _struct_stop = float(stop_px)   # the structural stop, before any room widening (Track B exemption scope)
         # ROOM STOP (CEO order 2026-10-06 — replaces the skip-on-no-room gate for live entries): a structural stop
         # inside the volatility band is WIDENED to the minimum room (from the limit and the live touch) instead of
         # skipping the trade; wire-time sizing and the daily dollar budget then size to the wider stop.
@@ -2447,6 +2448,15 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                     logger.warning("[%s] day-tier invalidated-setup record not saved: %s", symbol, _ie)
             return False
         logger.info("[%s] day-tier %s", symbol, room_why)
+        # TRACK B WATCH-DAY EXEMPTION SCOPE (board Thorp + López de Prado + GAI, 2026-10-12, out-of-sample replay): an
+        # exempt Track B short trades only when the room stop KEPT its structural stop (the stop already had the room by
+        # every measure _room_stop applies: limit and last trade, the ATR(5m) floor, the real-time room). Those replayed at
+        # about zero edge (-0.017R, n=245); tight-stop ones replayed at -0.569R (n=95) and have no evidence for the widened
+        # version, so they are skipped, never widened (cold-2nd + adversarial: a limit-only check let widened ones through).
+        if trigger.get("watch_day_exempt_b") is True and abs(float(stop_px) - _struct_stop) > 0.005:
+            logger.info("[%s] track-B exempt short skipped — the room stop would widen %.2f -> %.2f (only exempt shorts "
+                        "whose structural stop already has the room trade)", symbol, _struct_stop, float(stop_px))
+            return False
 
         # Live book (fail-CLOSED) — used for BOTH the opposite-side guard and the B6 gross cap.
         try:
