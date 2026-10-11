@@ -1,0 +1,10 @@
+{
+  "change": "day-overnight-exit",
+  "tier": 1,
+  "paths": ["execution/day_trade_manager.py", "run_day_tier.py", "data/alpaca_data.py"],
+  "proof": [{"log": "logs/day_tier_runner_cron.log", "pattern": "\\[day-overnight-exit\\] closed-market tick idle"}],
+  "expected_rate": "every 2 minutes while the market is closed and no Day lot is open (the around-the-clock schedule); overnight exit orders only when a Day lot is held past 8 PM ET (rare)",
+  "window_sessions": 2,
+  "window_reason": "the idle proof fires dozens of times every night; two sessions without it means the schedule or the early exit is broken",
+  "reversal": "no idle-tick line overnight (the cron or early exit is broken), a Day lot still open after the regular open without the deadline flatten, or an overnight exit priced from a quote older than 5 minutes"
+}

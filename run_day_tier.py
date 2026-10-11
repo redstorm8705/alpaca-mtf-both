@@ -5,7 +5,7 @@ run_day_tier.py — Day-Tier 2-3 min EXECUTION runner (LIVE, behind config.DAYTR
 
 The fast execution loop the design calls for (§7 CADENCE: a 2-3 min EXECUTION loop for fill / re-peg
 / flat-by-close; the SIGNAL stays on the 15/30-min bar-close read the pipeline computes). Invoked by
-its OWN cron every ~2 min during RTH — a SEPARATE process from the 5-min main bot (so it never
+its OWN cron every ~2 min (around the clock; closed-market ticks with no Day lot return early) — a SEPARATE process from the 5-min main bot (so it never
 starves check_exits) and a fresh process EACH tick (so restart-safety = the normal loop mechanic).
 
 Graduates run_day_tier_shadow.py from logging-only to order-placing. Per tick (in order):
@@ -43,7 +43,7 @@ import logging
 import math
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -892,6 +892,39 @@ def _track_b_daily_context(symbol: str, now_et: datetime, prev_session: "str | N
         return None, None
 
 
+# An open lot is covered by _flatten_targets (durable log + state); these are the records that need the closed-market
+# tick on their own. "filled"/"protected" are left out: they never transition after the lot exits (see place_entry),
+# so a stale one would keep every overnight tick busy.
+_IDLE_BLOCKING_STATES = ("submitting", "submitted", "fill_unverified", "promote_pending")
+
+
+def _day_tier_idle(dtm) -> bool:
+    """True when the Day tier has nothing to work while the market is closed: no owned lot (open target or a booked-closed
+    lot whose exit order is still pending) and no unresolved state record. Reads only local files (no API call). Any
+    doubt -> False (the full closed-market tick runs). Never raises. (Overnight coverage 2026-10-11: the runner now runs
+    every 2 minutes around the clock, so an idle closed-market tick must stay cheap.)"""
+    try:
+        if dtm._flatten_targets():
+            return False
+        # Only records from the current or the previous weekday session count (bar_id starts with YYYYMMDD): an older
+        # crash-left "submitting" record is stale and must not keep every overnight tick busy (prod 2026-10-11: 14).
+        prev = datetime.now(ET).date() - timedelta(days=1)
+        while prev.weekday() >= 5:
+            prev -= timedelta(days=1)
+        floor = prev.strftime("%Y%m%d")
+        for k, v in dtm._load_state().items():
+            if not (k.startswith("entry::") and isinstance(v, dict)):
+                continue
+            if v.get("pending_exit_order_id"):
+                return False
+            if v.get("state") in _IDLE_BLOCKING_STATES and str(v.get("bar_id") or "")[:8] >= floor:
+                return False
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("day-tier idle check failed (running the full tick): %s", e)
+        return False
+
+
 def run_tick() -> dict:
     """One execution tick. Returns a summary dict. Never raises for a per-symbol error."""
     _tick_t0 = time.monotonic()
@@ -908,6 +941,11 @@ def run_tick() -> dict:
 
     clock_state, mins_to_close = _clock_state()
     _clock_t0 = time.monotonic()   # the moment mins_to_close was measured (EOD deadline anchor — board Harris 2026-10-07)
+    if clock_state == "closed" and _day_tier_idle(dtm):
+        # Around-the-clock cron (overnight exit coverage, 2026-10-11): nothing to work -> no account read, no reconcile.
+        logger.info("[day-overnight-exit] closed-market tick idle (no Day lot or pending record)")
+        _touch_heartbeat("market_closed")
+        return {"skipped": "market_closed", "idle": True}
     try:
         _acct = broker.get_account()
         equity = float(getattr(_acct, "equity", 0.0) or 0.0)
@@ -938,8 +976,8 @@ def run_tick() -> dict:
         recon = dtm.reconcile_open_state(allow_flatten=False)
         _touch_heartbeat("market_closed")
         return {"skipped": "market_closed", "promotion": promo, "after_hours_exit": ah, "reconcile": recon}
-    # An after-hours exit still unfilled at the open keeps being re-priced at the touch (it never touches a stop or
-    # places a new exit in regular hours); then reconcile — never leave a naked day-tier position across the cron's
+    # An after-hours exit still unfilled at the open is cancelled (confirmed) and the lot flattened at market (the
+    # deadline, design record day_overnight_exit_coverage_2026-10-11.md); then reconcile — never leave a naked day-tier position across the cron's
     # process boundary.
     dtm.after_hours_exit(only_pending=True)
     # In the last 2 s before the close a market close could land after 4:00 (queued for the open) — no flatten then.

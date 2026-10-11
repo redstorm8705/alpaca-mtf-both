@@ -61,9 +61,10 @@ import json
 import logging
 import math
 import os
+import re
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -1561,13 +1562,14 @@ def force_flat_all(reason: str = "eod_force_flat", deadline: "float | None" = No
     return n
 
 
-def _ah_exit_price(symbol: str, close_side: str, step: float = 0.0) -> "tuple[float | None, str]":
+def _ah_exit_price(symbol: str, close_side: str, step: float = 0.0, cap: float = 0.02) -> "tuple[float | None, str]":
     """After-hours exit price (CEO 2026-10-07: "fill at whatever the bid is"): the live IEX bid for a sell, the ask
     for a buy; with no usable quote, the latest trade -/+ DAYTRADE_AH_FALLBACK_PCT. `step` (0..0.02) moves the price
     that fraction further through the touch after unfilled ticks (board Harris 2026-10-07: an unchanging IEX quote can
-    leave the order unfilled). (None, why) when no price exists. Never raises."""
+    leave the order unfilled), up to `cap` (2%; 4% from 7:30 PM ET and overnight — board Harris/Peterffy 2026-10-11).
+    (None, why) when no price exists. Never raises."""
     try:
-        step = max(0.0, min(float(step), 0.02))
+        step = max(0.0, min(float(step), float(cap)))
         px, why = _ah_touch_price(symbol, close_side)
         if px is None or step <= 0:
             return px, why
@@ -1577,17 +1579,58 @@ def _ah_exit_price(symbol: str, close_side: str, step: float = 0.0) -> "tuple[fl
         return None, f"price read failed: {e!r}"
 
 
+_AH_OVERNIGHT_QUOTE_MAX_AGE_S = 300.0   # PROV:day-overnight-exit-2026-10-11 board Harris: reject an overnight quote older than ~5 min
+
+
+def _utc_ts(raw: object) -> "datetime | None":
+    """An Alpaca RFC-3339 UTC timestamp ('...Z', up to nanoseconds) as an aware UTC datetime; None if unparseable.
+    Python 3.10 fromisoformat takes at most 6 fractional digits and no 'Z'. Never raises."""
+    try:
+        m = re.match(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]00:00)?$", str(raw or "").strip())
+        if not m:
+            return None
+        frac = (m.group(2) or "")[1:7].ljust(6, "0")   # py3.10 fromisoformat needs exactly 6 digits (cold-2nd N1)
+        return datetime.fromisoformat(f"{m.group(1)}.{frac}").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _overnight_session(now_et: "datetime | None" = None) -> bool:
+    """True during Alpaca's 24/5 overnight session: 8:00 PM-4:00 AM ET, Sunday night to Thursday night (it opens
+    Sunday 8 PM and closes Friday 4 AM — cold-2nd N3: no weekend churn). Holidays are not modelled (a lot is then
+    re-priced against a stale quote until the next session; the open deadline still applies). Never raises."""
+    try:
+        n = now_et or _now_et()
+        hm = n.hour * 60 + n.minute
+        wd = n.weekday()                          # Mon=0 .. Sun=6
+        return (hm >= 20 * 60 and wd in (6, 0, 1, 2, 3)) or (hm < 4 * 60 and wd in (0, 1, 2, 3, 4))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _ah_touch_price(symbol: str, close_side: str) -> "tuple[float | None, str]":
-    """The bid (sell) / ask (buy), else latest trade -/+ DAYTRADE_AH_FALLBACK_PCT. Never raises."""
+    """The bid (sell) / ask (buy), else latest trade -/+ DAYTRADE_AH_FALLBACK_PCT. During the overnight session (8 PM-
+    4 AM ET) the quote comes from Alpaca's `overnight` feed (BOATS, real-time indicative) and is used only when its own
+    timestamp is under _AH_OVERNIGHT_QUOTE_MAX_AGE_S old; otherwise the trade fallback, logged (board Harris/Peterffy +
+    GAI 2026-10-11). Never raises."""
     try:
         from data.alpaca_data import get_latest_quote, get_latest_trade
-        q = get_latest_quote(symbol) or {}
+        if _overnight_session():
+            q = get_latest_quote(symbol, feed="overnight") or {}
+            _qt = _utc_ts(q.get("ts"))
+            _age = (datetime.now(timezone.utc) - _qt).total_seconds() if _qt is not None else float("inf")
+            if not (0 <= _age <= _AH_OVERNIGHT_QUOTE_MAX_AGE_S):
+                logger.warning("[%s] overnight quote unusable (age %s s) — trade fallback", symbol,
+                               "n/a" if _age == float("inf") else f"{_age:.0f}")
+                q = {}
+        else:
+            q = get_latest_quote(symbol) or {}
         bid, ask = float(q.get("bid") or 0.0), float(q.get("ask") or 0.0)
         if close_side == "sell" and math.isfinite(bid) and bid > 0 and (ask <= 0 or bid <= ask):
             return round(bid, 2), f"bid {bid:.2f}"
         if close_side == "buy" and math.isfinite(ask) and ask > 0 and (bid <= 0 or bid <= ask):
             return round(ask, 2), f"ask {ask:.2f}"
-        lt = get_latest_trade(symbol)
+        lt = get_latest_trade(symbol, feed="overnight") if _overnight_session() else get_latest_trade(symbol)
         f = float(_cfg("DAYTRADE_AH_FALLBACK_PCT", 0.01))
         if lt is not None and math.isfinite(float(lt)) and float(lt) > 0:
             px = float(lt) * (1.0 - f if close_side == "sell" else 1.0 + f)
@@ -1677,13 +1720,25 @@ def after_hours_exit(only_pending: bool = False) -> dict:
     the touch moves away, until it fills. Run by the runner whenever the market is closed (after hours and pre-
     market). Never a market order after hours (Alpaca queues those for the next open). Never touches another tier's
     shares (net side + own recorded qty). `only_pending=True` (regular hours): manage ONLY lots that already carry an
-    after-hours exit order (one still unfilled at the open keeps being re-priced at the touch); such a lot has no stop
+    after-hours exit order (one still unfilled at the open is cancelled, then flattened at market); such a lot has no stop
     (cancelled at the 3:58 exit) and no other day-tier order can exist on its symbol (place_entry blocks re-entry
     while it is open). Returns a summary. Never raises."""
     if not _enabled():
         return {"enabled": False}
     from execution import broker
     summary = {"checked": 0, "placed": 0, "repriced": 0, "closed": 0, "waiting": 0, "skipped": 0}
+    # Overnight coverage (design record day_overnight_exit_coverage_2026-10-11.md; board Harris/Peterffy + GAI): from
+    # 7:30 PM ET every unfilled tick re-prices and the step cap rises to 4%; the overnight session (8 PM-4 AM ET) keeps
+    # working the exit at the same cap; at the regular open a still-open lot is flattened at market (deadline).
+    _n_et = _now_et()
+    _hm = _n_et.hour * 60 + _n_et.minute
+    _wd = _n_et.weekday()
+    _escalate = (19 * 60 + 30) <= _hm < 20 * 60 and _wd <= 4
+    _overnight = _overnight_session(_n_et)
+    # No session at all from Friday 8 PM to Sunday 8 PM ET (cold-2nd round 2): a resting exit is left as it is instead
+    # of being cancelled and re-placed against Friday's quote all weekend.
+    _no_session = (_wd == 4 and _hm >= 20 * 60) or _wd == 5 or (_wd == 6 and _hm < 20 * 60)
+    _cap = 0.04 if (_escalate or _overnight) else 0.02
     try:
         for sym, tgt in _flatten_targets().items():
             trade_id = str(tgt.get("trade_id") or "")
@@ -1741,6 +1796,15 @@ def after_hours_exit(only_pending: bool = False) -> dict:
                                  f"shares. Manual check.")
                 continue
             close_side = "sell" if side == "long" else "buy"
+            if _escalate:
+                _page_once_today(sym, f"ah_1930_{trade_id}",
+                                 f"[{sym}] day-tier lot still open at 7:30 PM ET — the after-hours exit now re-prices "
+                                 f"every tick, up to 4% through the bid/ask, to fill before 8 PM.", stamp="trade")
+            elif _overnight and _hm >= 20 * 60 and _hm < 20 * 60 + 15:
+                _page_once_today(sym, f"ah_2000_{trade_id}",
+                                 f"[{sym}] day-tier lot still open at 8 PM ET — the exit keeps working in Alpaca's "
+                                 f"overnight session (limit orders, BOATS); flattened at the regular open otherwise.",
+                                 stamp="trade")
             rec = _entry_record(trade_id)
             pending = str((rec or {}).get("pending_exit_order_id") or "")
             _stale_inc = 0   # 1 when this reprice is because the order sat unfilled (not because the touch moved)
@@ -1752,6 +1816,39 @@ def after_hours_exit(only_pending: bool = False) -> dict:
                 if res == "unreadable":
                     summary["waiting"] += 1
                     continue
+                if res in ("open", "terminal") and only_pending:
+                    # DEADLINE (board Peterffy 2026-10-11: "must be gone by X" needs an explicit action): a Day lot still
+                    # open at the regular open is flattened at market — cancel the after-hours limit (confirmed and its
+                    # fills booked first, never two exit orders at once), then a tier-scoped market close of what remains.
+                    # 'terminal' already (a cancel confirmed only on a later tick, or the limit ended on its own): go
+                    # straight to the market close — never a new after-hours limit in regular hours (adversarial review).
+                    if res == "open":
+                        broker.cancel_order(pending)
+                        for _ in range(5):
+                            time.sleep(1.0)
+                            res = _ah_account(tgt, pending, _pending_accounted(trade_id))
+                            if res in ("closed", "terminal", "unreadable"):
+                                break
+                    if res == "closed":
+                        summary["closed"] += 1
+                        continue
+                    if res != "terminal":
+                        summary["waiting"] += 1
+                        _page_once_today(sym, f"ah_deadline_{trade_id}",
+                                         f"[{sym}] day-tier lot still open at the regular open — its after-hours limit "
+                                         f"cancel is not confirmed yet; retrying each tick before the market close.")
+                        continue
+                    _dl = _flatten_targets().get(sym) or {}
+                    _dl_qty = int(_dl.get("qty") or 0)
+                    if _dl_qty >= 1 and _dl.get("trade_id") == trade_id:
+                        _ok = flatten_position(sym, _dl_qty, side, entry_price=float(_dl.get("entry_price") or 0.0),
+                                               trade_id=trade_id, order_id_hint=pending,
+                                               reason="ah_exit_open_deadline")
+                        summary["closed" if _ok else "skipped"] += 1
+                        _page_once_today(sym, f"ah_deadline_flat_{trade_id}",
+                                         f"[{sym}] day-tier lot held over to the regular open — flattened at market "
+                                         f"({_dl_qty} sh, {'confirmed' if _ok else 'NOT confirmed — check Alpaca'}).")
+                    continue
                 if res == "open":
                     o = broker.get_order(pending)
                     lim = float(getattr(o, "limit_price", 0) or 0) if o is not None else 0.0
@@ -1762,7 +1859,10 @@ def after_hours_exit(only_pending: bool = False) -> dict:
                     # queued for the next open) is replaced by the after-hours limit (board Taleb 2026-10-07).
                     stale_rth = str((rec or {}).get("pending_exit_kind") or "") != "after_hours"
                     ticks = int((rec or {}).get("pending_exit_open_ticks") or 0) + 1
-                    if not (away or stale_rth or ticks >= 2):
+                    if _no_session and not stale_rth:
+                        summary["waiting"] += 1      # weekend: keep the resting GTC exit; it works from Sunday 8 PM
+                        continue
+                    if not (away or stale_rth or ticks >= (1 if (_escalate or _overnight) else 2)):
                         _bump_pending_ticks(trade_id, ticks)
                         summary["waiting"] += 1
                         continue
@@ -1833,10 +1933,16 @@ def after_hours_exit(only_pending: bool = False) -> dict:
             if want < 1:
                 continue
             qty = min(held, want)
-            # Unfilled-only reprices step 0.5% further through the touch each (cap 2%); a reprice because the touch
-            # moved goes to the new touch at the current step.
+            # Unfilled-only reprices step 0.5% further through the touch each (cap 2%; 4% from 7:30 PM ET and
+            # overnight); a reprice because the touch moved goes to the new touch at the current step.
             _reprices = int((rec or {}).get("pending_exit_reprices") or 0) + _stale_inc
-            px, src = _ah_exit_price(sym, close_side, step=0.005 * _reprices)
+            px, src = _ah_exit_price(sym, close_side, step=0.005 * _reprices, cap=_cap)
+            if 0.005 * _reprices >= _cap:
+                # Keyed by cap level and trade (adversarial review): the 4% cap pages even after the 2% one did, and
+                # the page does not repeat after midnight.
+                _page_once_today(sym, f"ah_cap{int(round(_cap * 100))}_{trade_id}",
+                                 f"[{sym}] day-tier after-hours exit is at its {_cap:.0%} cap through the bid/ask and "
+                                 f"still unfilled — check the book; it keeps re-pricing.", stamp="trade")
             if px is None or not (math.isfinite(px) and px > 0):
                 summary["skipped"] += 1
                 _page_once_today(sym, "ah_exit_no_price",
@@ -1845,6 +1951,9 @@ def after_hours_exit(only_pending: bool = False) -> dict:
                 continue
             order = broker.submit_limit_order(sym, qty, close_side, px, extended_hours=True, tier="daytrade",
                                               time_in_force="gtc")
+            if _overnight:
+                logger.info("[%s] [day-overnight-exit] overnight-session exit order placed: %s %d @ %.2f (%s; paper fills "
+                            "overnight are simulated)", sym, close_side, qty, px, src)
             oid = str(getattr(order, "id", "") or "") if order is not None else ""
             if not oid:
                 summary["skipped"] += 1
@@ -3083,12 +3192,14 @@ def _foreign_stop_covers(symbol: str, side: str, qty: int, tiers_out: "list | No
         return False
 
 
-def _page_once_today(symbol: str, key: str, msg: str) -> None:
-    """Page at most once per symbol per ET day for `key` (state-file marker); the log still records every tick."""
+def _page_once_today(symbol: str, key: str, msg: str, stamp: "str | None" = None) -> None:
+    """Page at most once per symbol per ET day for `key` (state-file marker); the log still records every tick.
+    `stamp` replaces the ET day as the dedupe value: a fixed stamp ("trade") pages once per key ever, for keys that
+    already carry a trade_id and must not re-page at midnight (the overnight session crosses it)."""
     try:
         state = _load_state()
         k = f"_paged::{key}::{symbol}"
-        today = f"{_now_et():%Y%m%d}"
+        today = stamp or f"{_now_et():%Y%m%d}"
         if state.get(k) == today:
             logger.warning(msg)
             return

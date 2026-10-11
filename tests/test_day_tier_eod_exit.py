@@ -12,6 +12,10 @@ from unittest import mock
 import config
 from execution import day_trade_manager as dtm
 
+from datetime import datetime as _dt  # noqa: E402
+from zoneinfo import ZoneInfo as _ZI  # noqa: E402
+_FIVE_PM = _dt(2026, 10, 12, 17, 0, tzinfo=_ZI("America/New_York"))
+
 LONG = {"symbol": "EWY", "side": "long", "qty": 4, "entry_price": 180.0, "trade_id": "DT-L", "order_id": "O1"}
 SHORT = {"symbol": "AAPL", "side": "short", "qty": 3, "entry_price": 250.0, "trade_id": "DT-S", "order_id": "O2"}
 
@@ -188,6 +192,8 @@ class AfterHoursExit(unittest.TestCase):
             mock.patch.object(dtm, "_closed_in_log", return_value=False),
             mock.patch.object(dtm, "_page_once_today"),
             mock.patch.object(dtm.time, "sleep"),
+            # appended last (indexes above are used by tests): a fixed 5 PM ET clock — before the 7:30 PM escalation
+            mock.patch.object(dtm, "_now_et", return_value=getattr(self, "now_et", _FIVE_PM)),
         ]
 
     def _go(self, patches):
@@ -372,6 +378,149 @@ class AfterHoursPendingOnly(unittest.TestCase):
         self.assertEqual(self.submits, [])
 
 
+class OvernightCoverage(unittest.TestCase):
+    """Overnight exit coverage (2026-10-11; design record day_overnight_exit_coverage_2026-10-11.md)."""
+    _env = AfterHoursExit._env
+    _go = AfterHoursExit._go
+
+    def test_utc_ts_parser(self):
+        self.assertIsNotNone(dtm._utc_ts("2026-10-09T08:00:00.675507692Z"))
+        self.assertIsNotNone(dtm._utc_ts("2026-10-09T08:00:00Z"))
+        self.assertIsNone(dtm._utc_ts("not a time"))
+        self.assertIsNone(dtm._utc_ts(None))
+
+    def test_overnight_window(self):
+        et = _ZI("America/New_York")
+        self.assertTrue(dtm._overnight_session(_dt(2026, 10, 12, 20, 0, tzinfo=et)))
+        self.assertTrue(dtm._overnight_session(_dt(2026, 10, 13, 3, 59, tzinfo=et)))
+        self.assertFalse(dtm._overnight_session(_dt(2026, 10, 13, 4, 0, tzinfo=et)))
+        self.assertFalse(dtm._overnight_session(_dt(2026, 10, 12, 19, 59, tzinfo=et)))
+        self.assertFalse(dtm._overnight_session(_dt(2026, 10, 16, 20, 30, tzinfo=et)))   # Friday night: no session
+        self.assertFalse(dtm._overnight_session(_dt(2026, 10, 17, 2, 0, tzinfo=et)))     # Saturday early morning
+        self.assertTrue(dtm._overnight_session(_dt(2026, 10, 18, 20, 30, tzinfo=et)))    # Sunday night opens
+        self.assertTrue(dtm._overnight_session(_dt(2026, 10, 16, 3, 0, tzinfo=et)))      # Friday 3 AM (Thursday night)
+        self.assertIsNotNone(dtm._utc_ts("2026-10-09T08:00:00.6755Z"))                  # short fraction (N1)
+
+    def test_step_cap(self):
+        with mock.patch.object(dtm, "_ah_touch_price", return_value=(100.0, "bid 100.00")):
+            self.assertEqual(dtm._ah_exit_price("X", "sell", step=0.10)[0], 98.0)              # default cap 2%
+            self.assertEqual(dtm._ah_exit_price("X", "sell", step=0.10, cap=0.04)[0], 96.0)
+
+    def test_overnight_quote_uses_the_overnight_feed_and_rejects_a_stale_one(self):
+        from datetime import timedelta, timezone
+        fresh = (_dt.now(timezone.utc) - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        stale = (_dt.now(timezone.utc) - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        with mock.patch.object(dtm, "_overnight_session", return_value=True), \
+                mock.patch("data.alpaca_data.get_latest_quote", return_value={"bid": 99.0, "ask": 99.5, "ts": fresh}) as q, \
+                mock.patch("data.alpaca_data.get_latest_trade", return_value=100.0):
+            self.assertEqual(dtm._ah_touch_price("X", "sell")[0], 99.0)
+            self.assertEqual(q.call_args.kwargs.get("feed"), "overnight")
+        with mock.patch.object(dtm, "_overnight_session", return_value=True), \
+                mock.patch("data.alpaca_data.get_latest_quote", return_value={"bid": 99.0, "ask": 99.5, "ts": stale}), \
+                mock.patch("data.alpaca_data.get_latest_trade", return_value=100.0):
+            px, why = dtm._ah_touch_price("X", "sell")
+            self.assertEqual(px, 99.0)                                   # 100 - 1% trade fallback, not the stale bid
+            self.assertIn("no usable quote", why)
+
+    def test_escalation_reprices_every_tick_at_730pm(self):
+        self.now_et = _dt(2026, 10, 12, 19, 40, tzinfo=_ZI("America/New_York"))
+        state = {"coid": "DT-L", "symbol": "EWY", "pending_exit_order_id": "AH0", "pending_exit_accounted_qty": 0.0,
+                 "pending_exit_kind": "after_hours", "pending_exit_open_ticks": 0}
+        o = SimpleNamespace(filled_qty=0, filled_avg_price=0, status="new", limit_price=179.1)
+        canceled = SimpleNamespace(filled_qty=0, filled_avg_price=0, status="canceled", limit_price=179.1)
+        seq = iter([o, o, canceled, canceled, canceled, canceled])
+        ps = self._env(LONG, _pos("long", 4), {"bid": 179.1, "ask": 179.4}, state_rec=state)
+        ps[4] = mock.patch("execution.broker.get_order", side_effect=lambda oid: next(seq, canceled))
+        out, ms = self._go(ps)
+        self.assertEqual(out["repriced"], 1)                      # first unfilled tick already re-prices (was: 2 ticks)
+        keys = [c.args[1] for c in ms[17].call_args_list]
+        self.assertIn("ah_1930_DT-L", keys)
+
+    def test_weekend_leaves_the_resting_exit_alone(self):
+        self.now_et = _dt(2026, 10, 17, 12, 0, tzinfo=_ZI("America/New_York"))    # Saturday noon
+        state = {"coid": "DT-L", "symbol": "EWY", "pending_exit_order_id": "AH0", "pending_exit_accounted_qty": 0.0,
+                 "pending_exit_kind": "after_hours", "pending_exit_open_ticks": 5}
+        o = SimpleNamespace(filled_qty=0, filled_avg_price=0, status="new", limit_price=170.0)
+        out, ms = self._go(self._env(LONG, _pos("long", 4), {"bid": 179.1, "ask": 179.4}, state_rec=state,
+                                     orders={"AH0": o}))
+        self.assertEqual((out["waiting"], out["repriced"], self.submits), (1, 0, []))
+        ms[5].assert_not_called()                                    # no cancel
+
+    def test_open_deadline_flattens_at_market(self):
+        state = {"coid": "DT-L", "symbol": "EWY", "pending_exit_order_id": "AH0", "pending_exit_accounted_qty": 0.0,
+                 "pending_exit_kind": "after_hours"}
+        o = SimpleNamespace(filled_qty=0, filled_avg_price=0, status="new", limit_price=179.0)
+        canceled = SimpleNamespace(filled_qty=0, filled_avg_price=0, status="canceled", limit_price=179.0)
+        seq = iter([o, canceled, canceled])
+        ps = self._env(LONG, _pos("long", 4), {"bid": 179.2, "ask": 179.4}, state_rec=state)
+        ps[4] = mock.patch("execution.broker.get_order", side_effect=lambda oid: next(seq, canceled))
+        from contextlib import ExitStack
+        with ExitStack() as es:
+            ms = [es.enter_context(p) for p in ps]
+            fl = es.enter_context(mock.patch.object(dtm, "flatten_position", return_value=True))
+            dtm.after_hours_exit(only_pending=True)
+        ms[5].assert_called_with("AH0")                               # the after-hours limit is cancelled first
+        fl.assert_called_once()
+        self.assertEqual(fl.call_args.args[:3], ("EWY", 4, "long"))
+        self.assertEqual(fl.call_args.kwargs["reason"], "ah_exit_open_deadline")
+        self.assertEqual(self.submits, [])                            # no new limit in regular hours
+
+    def test_open_deadline_flattens_when_the_limit_is_already_terminal(self):
+        # The cancel confirmed only on a later tick (or the limit ended on its own): market close, no new limit.
+        state = {"coid": "DT-L", "symbol": "EWY", "pending_exit_order_id": "AH0", "pending_exit_accounted_qty": 0.0,
+                 "pending_exit_kind": "after_hours"}
+        canceled = SimpleNamespace(filled_qty=0, filled_avg_price=0, status="canceled", limit_price=179.0)
+        ps = self._env(LONG, _pos("long", 4), {"bid": 179.2, "ask": 179.4}, state_rec=state, orders={"AH0": canceled})
+        from contextlib import ExitStack
+        with ExitStack() as es:
+            ms = [es.enter_context(p) for p in ps]
+            fl = es.enter_context(mock.patch.object(dtm, "flatten_position", return_value=True))
+            dtm.after_hours_exit(only_pending=True)
+        ms[5].assert_not_called()
+        fl.assert_called_once()
+        self.assertEqual(self.submits, [])
+
+    def test_cap_page_is_keyed_by_cap_level_and_trade(self):
+        self.now_et = _dt(2026, 10, 14, 19, 45, tzinfo=_ZI("America/New_York"))   # Wednesday 7:45 PM
+        state = {"coid": LONG["trade_id"], "symbol": "EWY", "pending_exit_reprices": 8}
+        out, ms = self._go(self._env(LONG, _pos("long", 4), {"bid": 179.1, "ask": 179.4}, state_rec=state))
+        keys = [(c.args[1], c.kwargs.get("stamp")) for c in ms[17].call_args_list]
+        self.assertIn((f"ah_cap4_{LONG['trade_id']}", "trade"), keys)
+        self.assertIn((f"ah_1930_{LONG['trade_id']}", "trade"), keys)
+
+    def test_open_deadline_waits_when_the_cancel_is_unconfirmed(self):
+        state = {"coid": "DT-L", "symbol": "EWY", "pending_exit_order_id": "AH0", "pending_exit_accounted_qty": 0.0,
+                 "pending_exit_kind": "after_hours"}
+        o = SimpleNamespace(filled_qty=0, filled_avg_price=0, status="new", limit_price=179.0)
+        ps = self._env(LONG, _pos("long", 4), {"bid": 179.2, "ask": 179.4}, state_rec=state, orders={"AH0": o})
+        from contextlib import ExitStack
+        with ExitStack() as es:
+            [es.enter_context(p) for p in ps]
+            fl = es.enter_context(mock.patch.object(dtm, "flatten_position", return_value=True))
+            out = dtm.after_hours_exit(only_pending=True)
+        fl.assert_not_called()
+        self.assertEqual(out["waiting"], 1)
+
+
+class DayTierIdle(unittest.TestCase):
+    def test_idle_rules(self):
+        import run_day_tier as rdt
+        from datetime import timedelta
+        today = _dt.now(_ZI("America/New_York")).strftime("%Y%m%d")
+        old = (_dt.now(_ZI("America/New_York")) - timedelta(days=12)).strftime("%Y%m%d")
+        def run(targets, state):
+            fake = SimpleNamespace(_flatten_targets=lambda: targets, _load_state=lambda: state)
+            return rdt._day_tier_idle(fake)
+        self.assertTrue(run({}, {}))
+        self.assertFalse(run({"EWY": {}}, {}))
+        self.assertFalse(run({}, {"entry::X::b": {"state": "submitted", "bar_id": today + "-0930"}}))
+        self.assertTrue(run({}, {"entry::X::b": {"state": "submitting", "bar_id": old + "-0930"}}))   # stale
+        self.assertTrue(run({}, {"entry::X::b": {"state": "protected", "bar_id": today + "-0930"}}))
+        self.assertFalse(run({}, {"entry::X::b": {"state": "x", "pending_exit_order_id": "AH1"}}))
+        bad = SimpleNamespace(_flatten_targets=lambda: (_ for _ in ()).throw(RuntimeError("x")), _load_state=dict)
+        self.assertFalse(rdt._day_tier_idle(bad))
+
+
 class ReconcileClosedMarket(unittest.TestCase):
     def test_naked_lot_not_market_closed_when_closed(self):
         with mock.patch.object(dtm, "_enabled", return_value=True), \
@@ -409,9 +558,19 @@ class RunnerPhases(unittest.TestCase):
                 mock.patch.object(dtm, "reconcile_open_state", return_value={}) as rc, \
                 mock.patch.object(dtm, "force_flat_all", return_value=0) as ff, \
                 mock.patch.object(dtm, "tier_kill_check", return_value=False), \
-                mock.patch.object(rdt, "_touch_heartbeat"):
+                mock.patch.object(rdt, "_touch_heartbeat"), \
+                mock.patch.object(rdt, "_day_tier_idle", return_value=getattr(self, "idle", False)):
             out = rdt.run_tick()
         return out, ah, rc, ff
+
+    def test_idle_closed_tick_skips_everything(self):
+        self.idle = True
+        import run_day_tier as rdt
+        out, ah, rc, ff = self._tick("closed", None)
+        self.assertTrue(out.get("idle"))
+        ah.assert_not_called()
+        rc.assert_not_called()
+        self.assertTrue(rdt._IDLE_BLOCKING_STATES)
 
     def test_closed_runs_after_hours_exit_then_non_flattening_reconcile(self):
         out, ah, rc, ff = self._tick("closed", None)
