@@ -1226,6 +1226,7 @@ def run_tick() -> dict:
             track_b_window = False
             track_b_note = "import_error"
         b_today: set = set()
+        b_waits: dict = {}   # screened movers that did not trigger -> the trigger's wait_code (logged once per tick)
         b_day = datetime.now(ET).strftime("%Y%m%d")
         prev_session = None
         if track_b_window and time.monotonic() - _tick_t0 > _TRACK_B_TICK_BUDGET_S:
@@ -1267,6 +1268,7 @@ def run_tick() -> dict:
                     continue
                 mom = compute_momentum_trigger(sym, screen.get("gap_direction"), frame)
                 if mom.get("trigger") != "ENTER":
+                    b_waits[sym] = str(mom.get("wait_code") or "?")
                     continue
                 # The Track-B shot for this symbol is USED at the ENTER signal (before sizing / min-stop /
                 # caps), persisted so later ticks skip it — exactly the Rule-C replay's rule (exec seat R2).
@@ -1413,6 +1415,10 @@ def run_tick() -> dict:
                 calls_used += per_entry_est
             except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick
                 logger.warning("[%s] track-B entry loop error (non-fatal): %s", sym, e)
+        if b_waits:
+            # Decision explainability (board Simons/Brandt + GAI 2026-10-11): why each screened mover did not trigger.
+            logger.info("[track-b-wait] screened movers not triggered: %s",
+                        ", ".join(f"{k}={v}" for k, v in sorted(b_waits.items())))
 
     if capped:
         logger.warning("day-tier: per-tick API-call budget (%d, ~%d used) reached — deferred remaining "

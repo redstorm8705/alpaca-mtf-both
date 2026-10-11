@@ -1,0 +1,10 @@
+{
+  "change": "track-b-wait",
+  "tier": 1,
+  "paths": ["strategy/day_tier_momentum_trigger.py", "run_day_tier.py"],
+  "proof": [{"log": "logs/day_tier_runner_cron.log", "pattern": "\\[track-b-wait\\] screened movers not triggered: "}],
+  "expected_rate": "regular-hours ticks on days when a mover passes the screen (911 passes in 12 sessions, 712 of them in the last 3); zero on days with no screened mover (9/26, 9/29, 9/30, 10/06 had none)",
+  "window_sessions": 10,
+  "window_reason": "movers pass the screen on most sessions; three sessions with no line means the logging is broken",
+  "reversal": "no [track-b-wait] line on a session where the mover screen passed, a wait_code of '?' or 'error' dominating, or any change in which Track B signals ENTER versus before"
+}
