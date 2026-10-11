@@ -326,6 +326,11 @@ def counter_trend_fades_ok(events: "list[dict] | None" = None) -> "tuple[bool, s
         ct_decisions: set = set()
         ct_ids: set = set()
         for e in events:
+            # Track B momentum shorts are not fades and are not gated by this rule; counting them let a Track B win dilute
+            # Track A's fade losses (cold-2nd 2026-10-12). They have their own pre-registered reversal (config
+            # DAYTRADE_TRACK_B_WATCHDAY_EXEMPT).
+            if str((e.get("decision") or {}).get("track") or "").upper() == "B":
+                continue
             if e.get("event") == "decision" and (e.get("trigger") or {}).get("counter_trend"):
                 for k in ("decision_id", "trade_id"):
                     if e.get(k):

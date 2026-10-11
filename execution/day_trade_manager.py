@@ -290,6 +290,93 @@ def _pending_entry_gross(open_orders: list, positions_by_symbol: dict) -> tuple[
     return total, day
 
 
+_TRACK_B_LIVE_KEY = "_track_b_live_day"      # state: {"date": YYYYMMDD, "symbols": [...], "last": {sym: epoch s}}
+_TRACK_B_LIVE_FRESH_S = 360.0                # a mover is "live" while its last screen pass is within ~3 runner ticks
+_TRACK_B_SIGNAL_KEY = "_track_b_signal_day"  # written by run_day_tier._mark_track_b_signal (a symbol's daily shot used)
+
+
+def mark_track_b_live(*symbols: str) -> None:
+    """Record that `symbols` passed Track B's mover screen now (the Track B reservation, design record
+    day_tier_track_b_review_2026-10-11.md F2). The runner calls it ONCE per tick with every screened mover, so the
+    state file is saved once per tick (adversarial review: fewer writes racing the main bot's promotion writes to the
+    same file). Best-effort; never raises."""
+    if not symbols:
+        return
+    try:
+        day = f"{_now_et():%Y%m%d}"
+        st = _load_state()
+        m = st.get(_TRACK_B_LIVE_KEY)
+        syms = list(m["symbols"]) if (isinstance(m, dict) and m.get("date") == day
+                                      and isinstance(m.get("symbols"), list)) else []
+        last = dict(m.get("last") or {}) if (isinstance(m, dict) and m.get("date") == day
+                                             and isinstance(m.get("last"), dict)) else {}
+        now = _now_et().timestamp()
+        for symbol in symbols:
+            if symbol not in syms:
+                syms.append(symbol)
+            last[symbol] = now   # refreshed on every pass (adversarial review: a mover that stops passing releases)
+        st[_TRACK_B_LIVE_KEY] = {"date": day, "symbols": syms, "last": last}
+        if not _save_state(st):
+            logger.warning("track-B live marker write failed (%s)", ",".join(symbols))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("track-B live marker errored (%s): %s", ",".join(symbols), e)
+
+
+def _track_b_reserve_active(state: dict) -> bool:
+    """True while a Track B mover is live: a symbol passed the mover screen within the last _TRACK_B_LIVE_FRESH_S
+    seconds today and its daily shot (the signal marker) is unused. A mover that stopped passing releases the room
+    (adversarial review 2026-10-12: a once-a-day mark held Track A back from ~10:00 to the close on every mover day).
+    Unreadable -> False (Track A keeps today's room). Never raises."""
+    try:
+        if _cfg("DAYTRADE_TRACK_B_RESERVE", True) is not True or not _cfg("DAYTRADE_TRACK_B_ENABLED", False):
+            return False
+        day = f"{_now_et():%Y%m%d}"
+        live, used = (state or {}).get(_TRACK_B_LIVE_KEY), (state or {}).get(_TRACK_B_SIGNAL_KEY)
+        if not (isinstance(live, dict) and live.get("date") == day and isinstance(live.get("symbols"), list)):
+            return False
+        used_syms = set(used["symbols"]) if (isinstance(used, dict) and used.get("date") == day
+                                             and isinstance(used.get("symbols"), list)) else set()
+        _last = live.get("last")
+        last: dict = _last if isinstance(_last, dict) else {}
+        now = _now_et().timestamp()
+        for s in live["symbols"]:
+            _t = last.get(s)
+            if _t is None:
+                continue                                  # no pass time recorded -> not live
+            try:
+                age = now - float(_t)
+            except (TypeError, ValueError):
+                continue
+            if str(s) not in used_syms and 0 <= age <= _TRACK_B_LIVE_FRESH_S:
+                return True
+        return False
+    except Exception as e:  # noqa: BLE001
+        logger.warning("track-B reserve check failed (no reservation this entry): %s", e)
+        return False
+
+
+def _open_track_b_notional(open_trades: dict, extra_b_lots: "dict | None",
+                           positions_by_symbol: dict) -> "float | None":
+    """Open Track-B notional = own recorded qty x live price (entry price fallback), over the durable log's open set
+    plus any state-only lot. None when a value is unreadable. Never raises."""
+    try:
+        open_b = 0.0
+        for t in list(open_trades.values()) + list((extra_b_lots or {}).values()):
+            if str(t.get("track") or "A").upper() != "B":
+                continue
+            q = abs(float(t.get("fill_qty") or 0.0))
+            pos = positions_by_symbol.get(t.get("symbol"))
+            px = abs(float(getattr(pos, "current_price", 0.0) or 0.0)) if pos is not None else 0.0
+            if not (math.isfinite(px) and px > 0):
+                px = abs(float(t.get("entry_price") or 0.0))
+            if not (math.isfinite(q) and math.isfinite(px)):
+                return None
+            open_b += q * px
+        return open_b
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float, equity: float,
                        open_trades: dict, positions_by_symbol: dict, buying_power: float,
                        maintenance_margin: float, maintenance_rate: float,
@@ -297,6 +384,7 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
                        symbol: str = "", track: str = "A",
                        track_budget: float | None = None,
                        extra_b_lots: dict | None = None,
+                       reserve_b: bool = False,
                        risk_mult: float = 1.0,
                        max_size: bool = False) -> tuple[int, str]:
     """Clamp an entry to every live account/day-tier/risk budget. All bad inputs fail closed.
@@ -372,6 +460,19 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
             # this snapshot and our submit.
             "maintenance": (equity - maintenance_margin - cushion - pending_all) / maintenance_rate,
         }
+        b_reserve_note = ""
+        if reserve_b is True and str(track or "A").strip().upper() != "B":
+            # TRACK B RESERVATION (F2, board Thorp/LdP + GAI 2026-10-12): while a Track B mover is live today, a Track A
+            # entry leaves Track B's unused budget free inside the shared Day gross cap (10/07: A's open lots used the
+            # room and B's MU/COIN signals wired 0). Total Day cap unchanged. An unreadable open-B value reserves the
+            # whole B budget (A gets less, never more).
+            from strategy.day_tier_sizing import _DAYTIER_ALLOC_PCT, _TRACK_B_SHARE
+            _b_budget = equity * float(_DAYTIER_ALLOC_PCT) * float(_TRACK_B_SHARE)
+            _open_b = _open_track_b_notional(open_trades, extra_b_lots, positions_by_symbol)
+            _held = max(0.0, _b_budget - (_open_b if _open_b is not None else 0.0))
+            if math.isfinite(_held) and _held > 0:
+                rooms["day_gross"] -= _held
+                b_reserve_note = f"; track-B reserve ${_held:.2f} held from day_gross"
         if not is_deep:
             # THIN-NAME PER-NAME NOTIONAL CAP: bound a non-deep name's per-entry notional to its
             # wide-spread liquidation cost (same-symbol re-entry is blocked upstream, so this is a fresh
@@ -432,18 +533,10 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
             # Open Track-B notional = own recorded qty × live price (entry/stop price fallback), over the durable
             # log's open set PLUS any state-only lot (extra_b_lots) — over-counting a stale record is the
             # fail-closed direction (risk seat R2).
-            open_b = 0.0
-            for t in list(open_trades.values()) + list((extra_b_lots or {}).values()):
-                if str(t.get("track") or "A").upper() != "B":
-                    continue
-                q = abs(float(t.get("fill_qty") or 0.0))
-                pos = positions_by_symbol.get(t.get("symbol"))
-                px = abs(float(getattr(pos, "current_price", 0.0) or 0.0)) if pos is not None else 0.0
-                if not (math.isfinite(px) and px > 0):
-                    px = abs(float(t.get("entry_price") or 0.0))
-                if not (math.isfinite(q) and math.isfinite(px)):
-                    return 0, "open track-B notional unreadable — fail closed"
-                open_b += q * px
+            _ob = _open_track_b_notional(open_trades, extra_b_lots, positions_by_symbol)
+            if _ob is None:
+                return 0, "open track-B notional unreadable — fail closed"
+            open_b = _ob
             b_room_qty = math.floor(max(0.0, b_budget - open_b) / order_price)
             # CEO order 2026-10-06 ("the budget is never the reason a trade is skipped"): the Track-B budget may SHRINK
             # an entry but never below ONE share; every account room above (and the daily dollar budget in
@@ -457,7 +550,7 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         why = (f"requested {requested_qty} → risk-basis {risk_qty}sh "
                f"(risk {risk_pct:.2%}×${risk_basis:.0f}/stop ${stop_distance:.4f}) → wired {safe_qty}; rooms="
                + ",".join(f"{k}:${v:.2f}" for k, v in rooms.items())
-               + f"; notional cap={notional_qty}sh" + cash_note)
+               + f"; notional cap={notional_qty}sh" + cash_note + b_reserve_note)
         return safe_qty, why
     except Exception as e:
         return 0, f"entry-cap error (fail-closed): {e!r}"
@@ -2468,7 +2561,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                                       risk_equity=day_start_equity, symbol=symbol, track=_track,
                                       track_budget=size.get("budget"), extra_b_lots=_state_only,
                                       risk_mult=size.get("risk_mult", 1.0),
-                                      max_size=size.get("max_size") is True)
+                                      max_size=size.get("max_size") is True,
+                                      reserve_b=(_track != "B" and _track_b_reserve_active(state)))
         _min_q = _min_entry_qty(symbol, min_qty)
         if qty < _min_q:
             # Only a SIZE result routes to an ETF; a fail-closed zero (unreadable data / invalid limit — no "rooms=" in
