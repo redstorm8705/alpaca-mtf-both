@@ -8,6 +8,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-12, Claude signed) — Track B exemption narrowed (#605); Track A review
+
+#605: the Track B watch-day exemption now applies only when place_entry's room stop KEEPS the short's structural
+stop (out-of-sample: blocked shorts -0.171R n=340; the wide-stop subset -0.017R n=245; tight ones -0.569R). Reversal
+-0.30R@20 / -0.15R@40 (manual). No exempt short has traded yet. Out-of-sample: H1/H2 NOT CONFIRMED; all Track B
+shorts and longs were negative OOS — Track B's core signal needs its own review. Track A review:
+logs/design_records/day_tier_track_a_review_2026-10-12.md (RIDE time stop promising on n=8; 1-share room-stop widening
+raises dollar risk — a CEO decision).
+
+**⏩ EXACT NEXT ACTION:** Monday 10/12 close: post-live evaluator (22:15 UTC), cohold summary (8:15 PM ET),
+[track-b-wait] lines, any exempt-short / reserve lines. Then board on: Track B core-signal review; RIDE time stop
+(wider replay first); the 1-share dollar-risk question (to Rafael with the board's view).
+
 ## ⏩ LATEST (2026-10-12, Claude signed) — Track B fixes live (#603)
 
 Track B shorts with no confirmed watch day now trade (tag watch_day_exempt_b; reversal: mean R < -0.60R after 20 or
