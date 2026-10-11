@@ -1,6 +1,14 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+## 2026-10-11 — Weekly post-mortem canonical tier/lifecycle truth SHIPPED (#608, OpenAI Codex)
+
+- **Defect:** same-symbol co-holds could merge in the weekly report, realized partial exits could count as completed trades, and nearest-time metadata could borrow another tier's reason/score.
+- **Fix:** one canonical Alpaca fills+orders FIFO snapshot now supplies weekly realized cash by close date and completed lifecycle outcomes by exact entry order. Day/Swing/QHM/F6 totals must reconcile; open partials are cash-only; exact final-exit identity drives metadata. Invalid identity/value/time data, conflicting ownership, failed account reconciliation, or tied final exit identities fail closed.
+- **Gate:** five reject/fix review rounds closed historical-leg, metadata, malformed-value, identity-whitespace, chronology, mixed-offset, account-invariant, and final-exit-tie gaps. Cold-second PASS; adversarial claims PASS; Google AI Studio APPROVE; Groq Rafael-authorized waiver for exhausted daily quota; 23 relevant tests plus Python 3.10 compile, Ruff E/W/F/B, mypy, diff check, repository preship, and CI PASS. Reporting-only; no board seat required.
+- **Ship/deploy:** PR #608 merged as `2d30aaa`; OCI fast-forward `DEPLOY_OK:2d30aaa`, restart clean, four services active, 23 tests pass on-box. Read-only live replay: 453 close legs, zero unmatched/order/identity gaps, account invariant true, +$7.36 = Day +$3.01 + Swing -$0.10 + QHM +$4.45 + F6 $0.00. Scheduled production path remains deployed-unexercised pending its next weekend run.
+
+---
 ## 2026-09-26 — Day Tier post-fill geometry + weekly truth fix SHIPPED (ChatGPT/Codex)
 
 - **Observed defect:** 2026-09-23 fills could cross precomputed exit geometry (AAPL short filled below its target; META short filled beyond its stop). A bracket derived before execution could therefore become inverted or immediately marketable after the real fill. The weekly report also multiplied a per-share exit→Friday comparison by quantity and presented the mixed-horizon result as attributable “dollars left on the table.”

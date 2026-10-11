@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-11 16:55 PT]` **OpenAI Codex:** rebuilt the weekly post-mortem on the canonical FIFO ledger, separating weekly cash from completed lifecycle W/L and enforcing exact Day/Swing/QHM/F6 ownership for same-symbol co-holds. Five adversarial review rounds closed identity, chronology, metadata, and account-reconciliation gaps; OCI replay reconciled 453 legs to +$7.36. — PR #608 / `2d30aaa` — weekly report, truth tests, design and post-live records
+
 - `[2026-10-09 early PT]` **OpenAI Codex:** migrated the live ownership ledger to canonical schema v2 (`day`, `swing`, `qhm`, `forever_6`) behind strict dual-read compatibility, a shared/exclusive writer fence, hash-journaled apply, and compare-and-swap rollback. First live reconciliation preserved 43 symbols with zero drift; no Claude strategy or execution behavior was replaced. — PR #542 / `27a1dbc` — ownership guard/codec, migration tool, tests, design record
 
 - `[2026-10-08 late PT]` **OpenAI Codex:** extended Claude’s PR #526 tier-name foundation with canonical internal IDs and strict legacy-state adapters; ownership and reports now reject alias collisions and malformed attribution. Rebased over Claude PRs #522–#536, with no parallel registry or trading-logic replacement. — PR #535 / `cf0e190` — tier names, ownership snapshot, dashboard/monthly/shared HTML, tests, design record
