@@ -8,6 +8,18 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-12, Claude signed) — Track B fixes live (#603)
+
+Track B shorts with no confirmed watch day now trade (tag watch_day_exempt_b; reversal: mean R < -0.60R after 20 or
+< -0.25R at 40, from Alpaca fills — MANUAL review, no code computes it). While a Track B mover passed the screen in
+the last ~6 min, Track A's Day gross room leaves B's unused budget free. Track A's fade rule ignores Track B decisions.
+Replay research/day_tier_trackb_watchday_replay.py. Deployed, unexercised. Also live: #601 [track-b-wait] logging.
+
+**⏩ EXACT NEXT ACTION:** Monday 10/12 close: first post-live evaluator run (22:15 UTC) + cohold summary (8:15 PM ET);
+check [track-b-wait] lines and any exempt short / reserve line; work any post-live issues. Open: out-of-sample replay
+of the two by-product findings (no-clear-side shorts, with-trend longs); Track A record review; shared lock on Day
+state writes (task chip); post-live engine increment 2.
+
 ## ⏩ LATEST (2026-10-11 late, Claude signed) — Track B review: KEEP; WAIT-reason logging live (#601)
 
 BGG (Simons+Brandt + GAI): keep Track B separate (1 of 27 Day fills; 911 screen passes -> 7 signals; misses: watch-day
