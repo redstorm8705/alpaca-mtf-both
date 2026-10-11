@@ -110,3 +110,7 @@ MSFT 5 opposite-direction).
 - D3 built 2026-10-11 (branch claude/cohold-d3): bracket entry for same-direction co-holds; dormant until the guard
   lifts. Board Harris+Taleb, cold-2nd x3. Replay (research/day_tier_cohold_replay.py, 10/07-10/09 skips): 11 signals,
   8 same-direction (EWY 7, MSFT 1), 3 opposite (UBER); 1 replayable lot (EWY -0.06R).
+- LIFT shipped 2026-10-11 (branch claude/cohold-lift): DAYTRADE_NO_COHOLD=False. Board Thorp+Taleb 2-0. Post-live audit
+  (first co-hold trade): bracket accepted or wash-rejected (the CEO-accepted test), combined-notional per-name cap,
+  Day bracket stop vs the other tier's stop clustering. Still open: P3 (overnight Day lot), M2 (defer other tiers' adds),
+  Track-B wash -> ETF retry.

@@ -388,6 +388,35 @@ def _held_by_other_tiers() -> "set | None":
         return None
 
 
+def _foreign_signed_qty() -> "dict | None":
+    """{symbol: signed shares held by tiers OTHER than the Day tier} (broker net minus the Day tier's claim), from the
+    shared ownership snapshot; None when unreadable. Feeds the same-direction co-hold check. Never raises."""
+    try:
+        from execution.ownership_snapshot import build_ownership_snapshot
+        snap = build_ownership_snapshot()
+        if any(str(e).startswith("daytrade_log:") for e in snap.errors):
+            return None
+        return {s: float(snap.broker_qty.get(s, 0.0)) - snap.claimed_qty(s, "day") for s in snap.foreign_symbols("day")}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("day-tier: foreign-tier share read failed (co-hold treated as blocked): %s", e)
+        return None
+
+
+def _cohold_ok(sym: str, direction: object, foreign: "dict | None") -> bool:
+    """Same-direction co-hold allowed (CEO rule; design record same_direction_cohold_2026-10-10.md): the no-co-hold
+    guard is lifted (config.DAYTRADE_NO_COHOLD is False) AND the other tiers hold `sym` in the SAME direction as this
+    trade. Opposite, unreadable, or flat-but-claimed -> False (the ETF route / skip as before). place_entry re-checks
+    the live position before submitting (bracket entry). Never raises."""
+    try:
+        import config
+        if getattr(config, "DAYTRADE_NO_COHOLD", True) is not False or foreign is None:
+            return False
+        q = float(foreign.get(sym, 0.0) or 0.0)
+        return abs(q) > 1e-6 and (q > 0) == (str(direction) == "long")
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _prior_close(sym: str) -> "float | None":
     """The last COMPLETED session's daily close (today's forming bar dropped), or None. Feeds the exact daily-reset
     ETF stop and the ETF tracking check; None -> first-order stop / tracking check fails safe. Never raises."""
@@ -574,7 +603,9 @@ def _place_affordable(dtm, sym: str, decision: dict, trigger: dict, size: dict, 
         if not skip:
             return False, sym, direction, tries
         wired = int(skip.get("wired") or 0)
-        if skip.get("reason") == "below_min_qty":
+        if skip.get("reason") in ("below_min_qty", "cohold_wash", "cohold_no_bracket"):
+            # below_min_qty: the stock is unaffordable. cohold_wash / cohold_no_bracket (co-hold D3): the co-held stock's
+            # bracket entry was rejected by the wash-trade rule or has no target -> the same ETF route.
             if direction == "long":
                 route, why = _bull_pivot(sym, decision, trigger, held, equity, buying_power, track)
             else:
@@ -1005,6 +1036,7 @@ def run_tick() -> dict:
     entered = 0
     capped = False
     _held_other = _held_by_other_tiers()   # ONCE per tick (co-hold routing); place_entry re-checks before submit
+    _foreign = _foreign_signed_qty() if _held_other else {}   # ONCE per tick: same-direction co-hold check
     _dt_exp = _day_tier_exposure()          # ONCE per tick (one direction per stock); updated on each new entry
     # TRACK M — QQQ Monday weekend-gap-down buy (Rafael-approved 2026-10-05). Runs FIRST inside its 09:45-10:15 ET
     # window (one shot per day); a no-op on every other tick. Same reconcile/force-flat/kill/budget machinery.
@@ -1060,9 +1092,12 @@ def run_tick() -> dict:
             order_sym_a = sym
             # _held_other None (book unreadable) -> no pivot here, and the entry is NOT unguarded: place_entry
             # re-reads live positions + open orders right before submit, returns False if either is unreadable,
-            # and refuses a symbol another tier holds or has an order on (day_trade_manager NO SAME-SIDE CO-HOLD).
-            if _held_other is not None and sym in _held_other:
-                # NO CO-HOLD (interim 2026-10-07): another tier holds this stock -> a long switches to a free 2x bull
+            # refuses an OPPOSITE-direction holder, and (guard lifted, DAYTRADE_NO_COHOLD=False) brackets a
+            # same-direction co-hold off that fresh live read (co-hold lift 2026-10-11).
+            if (_held_other is not None and sym in _held_other
+                    and not _cohold_ok(sym, trigger.get("direction"), _foreign)):
+                # NO CO-HOLD for an OPPOSITE-direction holder (or the guard on): another tier holds this stock -> a long
+                # switches to a free 2x bull
                 # ETF; a short BUYS a free liquid inverse ETF (Rafael 2026-10-07); no route -> skipped, reason logged.
                 _piv_a = None
                 _why_a = "another tier holds this symbol and no free ETF route (no co-hold)"
@@ -1229,6 +1264,9 @@ def run_tick() -> dict:
                 # its 2x bull ETF when the setup is 10/10 or the budget cannot buy one share of the stock. Any failure
                 # -> no pivot (today's behaviour). The 10/10 verdict is recorded on the decision.
                 order_sym = sym
+                # Co-held and NOT a same-direction co-hold the lifted guard allows -> the ETF route (as before).
+                _coheld_b = (_held_other is not None and sym in _held_other
+                             and not _cohold_ok(sym, trigger_b.get("direction"), _foreign))
                 try:
                     from strategy import day_tier_leverage as lev
                     # 10/10 applies to longs AND shorts (CEO 2026-10-07: "full size, long or short"); the alignment
@@ -1256,7 +1294,7 @@ def run_tick() -> dict:
                     if _ten and _stock_shares >= 2 and size_b.get("size_ok"):
                         size_b = {**size_b, "max_size": True}   # 10/10 on the stock itself, at maximum size
                     # ...and ALWAYS switch when another tier holds the stock (no co-hold, interim 2026-10-07)
-                    if _etf and (_stock_shares <= 1 or (_held_other is not None and sym in _held_other)):
+                    if _etf and (_stock_shares <= 1 or _coheld_b):
                         from data.live_price import DELAYED_FEED_AGE_S, live_price
                         # thin ETFs (GGLL, AVL, ...) can go minutes without an IEX print: accept up to the delayed-feed age
                         _up, _ep = live_price(sym), live_price(_etf, max_age_s=DELAYED_FEED_AGE_S)
@@ -1278,7 +1316,6 @@ def run_tick() -> dict:
                     # SHORT -> BUY the inverse ETF (Rafael 2026-10-07): when another tier holds the stock, or the budget
                     # buys 0-1 shares. Otherwise the stock itself is shorted. A failed route on a co-held stock is
                     # skipped (place_entry would refuse the co-hold anyway); on a budget route it keeps the stock path.
-                    _coheld_b = _held_other is not None and sym in _held_other
                     if (trigger_b.get("direction") == "short" and lev.inverse_pivot_enabled()
                             and (_coheld_b or _stock_shares <= 1)):
                         _inv_b, _why_inv_b = _inverse_pivot(sym, decision_b, trigger_b, _held_other, equity,
