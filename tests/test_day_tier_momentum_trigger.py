@@ -241,6 +241,27 @@ class MomentumTrigger(unittest.TestCase):
         self.assertEqual(r["trigger"], "WAIT")
         self.assertIn("cutoff", r["reason"])
 
+    # ── wait_code (2026-10-11): every WAIT names its reason, per evaluated side ─────────────────
+    def test_wait_codes(self):
+        self._vwap(105.0)
+        up = _OR + [(100.5, 102.0, 100.6, 101.5, 1000), (101.5, 103.5, 102.0, 103.0, 3000)]
+        self.assertEqual(M.compute_momentum_trigger("X", "up", _frame(up))["wait_code"], "long:vwap_side")
+        self._vwap(101.0)
+        lowvol = _OR + [(100.5, 102.0, 100.6, 101.5, 1000), (101.5, 103.5, 102.0, 103.0, 900)]
+        self.assertEqual(M.compute_momentum_trigger("X", "up", _frame(lowvol))["wait_code"], "long:volume")
+        self._vwap(100.0)
+        nobreak = _OR + [(100.5, 100.9, 100.0, 100.6, 3000), (100.6, 100.95, 100.1, 100.7, 3000),
+                         (100.7, 100.99, 100.2, 100.8, 3000)]
+        r = M.compute_momentum_trigger("X", None, _frame(nobreak))
+        self.assertEqual(r["wait_code"], "long:not_beyond_level;short:vwap_side")
+        self.assertEqual(M.compute_momentum_trigger("X", "up", _frame(_OR[:2]))["wait_code"], "insufficient_bars")
+
+    def test_enter_has_no_wait_code(self):
+        self._vwap(101.0)
+        rows = _OR + [(100.5, 102.0, 100.6, 101.5, 1000), (101.5, 103.5, 102.0, 103.0, 3000)]
+        r = M.compute_momentum_trigger("X", "up", _frame(rows))
+        self.assertEqual((r["trigger"], r["wait_code"]), ("ENTER", ""))
+
     def test_insufficient_bars_is_wait(self):
         r = M.compute_momentum_trigger("X", "up", _frame(_OR[:2]))
         self.assertEqual(r["trigger"], "WAIT")

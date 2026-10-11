@@ -141,27 +141,34 @@ def compute_momentum_trigger(symbol: str, gap_direction: "str | None", bars) -> 
     result: dict = {
         "symbol": symbol, "trigger": "WAIT", "direction": "none", "mode": "none",
         "entry_ref": None, "structural_level": None, "vwap": None,
-        "vol_confirmed": False, "reason": "",
+        "vol_confirmed": False, "reason": "", "wait_code": "",
     }
+    # `wait_code` (2026-10-11, board Simons/Brandt + GAI: Track B produced 911 screen passes but only 7 signals, and
+    # the WAIT reasons were invisible): a short machine-readable reason for every WAIT, per side where both are
+    # evaluated (e.g. "long:volume;short:vwap_side"), so the runner can log why a screened mover did not trigger.
     try:
         cols = getattr(bars, "columns", [])
         if (bars is None or getattr(bars, "empty", True) or len(bars) < _MIN_BARS
                 or not all(c in cols for c in ("high", "low", "close"))):
             result["reason"] = "insufficient bars — wait"
+            result["wait_code"] = "insufficient_bars"
             return result
         df = bars
         if len(df) > _SESSION_CUTOFF_BARS:
             result["reason"] = f"past bar-count cutoff ({len(df)} > {_SESSION_CUTOFF_BARS} session bars) — wait"
+            result["wait_code"] = "past_cutoff"
             return result
 
         close = _f(df["close"].iloc[-1])
         if close is None or close <= 0:
             result["reason"] = "no usable close — wait"
+            result["wait_code"] = "no_close"
             return result
         vwap = _vwap_last(df)
         result["vwap"] = vwap
         if vwap is None:  # VWAP is a HARD filter — unverifiable -> fail-CLOSED (cold-2nd 2026-09-21)
             result["reason"] = "VWAP unavailable — hard filter cannot be verified — wait"
+            result["wait_code"] = "no_vwap"
             return result
         vol_ok = _vol_ok(df)
         result["vol_confirmed"] = vol_ok
@@ -172,10 +179,12 @@ def compute_momentum_trigger(symbol: str, gap_direction: "str | None", bars) -> 
         or_low = _f(or_win["low"].min())
         if or_high is None or or_low is None or len(post) < 1:
             result["reason"] = "opening range not formed — wait"
+            result["wait_code"] = "or_not_formed"
             return result
         or_range = or_high - or_low
         if or_range < _MIN_OR_RANGE_PX_FRAC * close:  # not a tradeable structure (also rejects or_range<=0)
             result["reason"] = "opening range too tight to be a tradeable structure — wait"
+            result["wait_code"] = "or_too_tight"
             return result
 
         # Instrument-scaled tolerances (adversarial 2026-09-21): floor the break buffer, cap the
@@ -191,17 +200,27 @@ def compute_momentum_trigger(symbol: str, gap_direction: "str | None", bars) -> 
         n = len(post)
         gd = str(gap_direction).strip().lower() if gap_direction is not None else None
 
+        why: dict = {}
+
         def _eval(direction: str) -> "dict | None":
+            h = _eval_side(direction)
+            if isinstance(h, str):
+                why[direction] = h
+                return None
+            return h
+
+        def _eval_side(direction: str) -> "dict | str":
+            """The side's setup, or the short code of the first check it failed."""
             is_long = direction == "long"
             level = or_high if is_long else or_low
             # VWAP hard filter (vwap guaranteed non-None here).
             if is_long and close <= vwap:
-                return None
+                return "vwap_side"
             if not is_long and close >= vwap:
-                return None
+                return "vwap_side"
             # Latest bar must be holding beyond the level, else there is no current continuation.
             if (close <= level) if is_long else (close >= level):
-                return None
+                return "not_beyond_level"
             # CURRENT HELD EPISODE: walk back from the latest while the close holds beyond the level.
             ep_start = n
             for j in range(n - 1, -1, -1):
@@ -210,7 +229,7 @@ def compute_momentum_trigger(symbol: str, gap_direction: "str | None", bars) -> 
                 else:
                     break
             if ep_start >= n - 1:
-                return None  # confirmed hold needs >= 1 bar after the episode start (no lone spike)
+                return "no_hold_bar"  # confirmed hold needs >= 1 bar after the episode start (no lone spike)
             # A BUFFERED break must have occurred WITHIN the current held episode AND STRICTLY BEFORE the
             # latest bar (range stops at n-1), so the latest bar CONFIRMS the hold. A buffered break that
             # lands only on the latest bar — even if a prior bar held the raw level weakly (sub-buffer) —
@@ -218,23 +237,23 @@ def compute_momentum_trigger(symbol: str, gap_direction: "str | None", bars) -> 
             broke = any(pc[j] is not None and ((pc[j] > level + buf) if is_long else (pc[j] < level - buf))
                         for j in range(ep_start, n - 1))
             if not broke:
-                return None  # holding, but no buffered break confirmed by a subsequent bar -> not a structural break
+                return "no_buffered_break"  # holding, but no buffered break confirmed by a subsequent bar -> not a structural break
             if not vol_ok:
-                return None
+                return "volume"
             # NO deep wick AFTER the break (a flush/stop-run on a HELD bar is not a hold). The break
             # bar itself (ep_start) is excluded — its low is naturally below the level (it broke up
             # through it); the flush concern is a subsequent held bar (incl. the entry bar) piercing far.
             if is_long:
                 lows = [pl[j] for j in range(ep_start + 1, n) if pl[j] is not None]
                 if lows and min(lows) < level - wick_tol:
-                    return None
+                    return "deep_wick"
             else:
                 highs = [ph[j] for j in range(ep_start + 1, n) if ph[j] is not None]
                 if highs and max(highs) > level + wick_tol:
-                    return None
+                    return "deep_wick"
             # NOT over-extended (a late entry far beyond the level feeds a huge implied stop to Inc 2).
             if abs(close - level) > max_ext:
-                return None
+                return "over_extended"
             # MODE (§7c): a real retest after the episode start = PULLBACK; a recent break with no
             # retest yet = DRIVE. An OLD break that never retested is neither a §7c DRIVE (past the
             # recent-drive window) nor a PULLBACK (no higher-low structure) -> WAIT (do not emit an
@@ -249,13 +268,14 @@ def compute_momentum_trigger(symbol: str, gap_direction: "str | None", bars) -> 
             elif recent:
                 mode = "DRIVE"
             else:
-                return None  # old break, no retest — not a §7c confirmed-continuation setup -> WAIT
+                return "stale_no_retest"  # old break, no retest — not a §7c confirmed-continuation setup -> WAIT
             return {"direction": direction, "mode": mode, "level": level}
 
         sides = (["long"] if gd == "up" else ["short"] if gd == "down" else ["long", "short"])
         hit = next((h for h in (_eval(s) for s in sides) if h is not None), None)
         if hit is None:
             result["reason"] = "no volume-confirmed break-and-hold of the opening range on the gap side — wait"
+            result["wait_code"] = ";".join(f"{sd}:{why.get(sd, '?')}" for sd in sides)
             return result
 
         result["trigger"] = "ENTER"
@@ -273,5 +293,6 @@ def compute_momentum_trigger(symbol: str, gap_direction: "str | None", bars) -> 
     except Exception as _e:  # a pure signal must NEVER raise into a caller
         result["trigger"] = "WAIT"
         result["reason"] = f"unexpected error: {_e!r}"
+        result["wait_code"] = "error"
         logger.warning("[%s] day-tier MOMENTUM-TRIGGER: unexpected error — WAIT: %s", symbol, _e)
         return result
