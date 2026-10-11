@@ -34,12 +34,16 @@ def _headers() -> dict:
     }
 
 
-def get_latest_quote(symbol: str) -> dict | None:
+def get_latest_quote(symbol: str, feed: str | None = None) -> dict | None:
     """
     Return the latest NBBO quote (bid/ask) for a symbol from Alpaca Data REST API.
 
     Endpoint: GET /v2/stocks/{symbol}/quotes/latest
-    Returns: dict with keys "bid" and "ask" (floats), or None on failure.
+    Returns: dict with keys "bid" and "ask" (floats) and "ts" (the quote's own ISO
+    timestamp string, "" if absent), or None on failure.
+    `feed` (optional; Day after-hours exit 2026-10-11): the `feed` query parameter,
+    e.g. "overnight" for the 8 PM-4 AM ET session (Alpaca 24/5: real-time indicative
+    quotes on the free plan). None = the request is unchanged.
     """
     global _alpaca_402_stale
     try:
@@ -49,6 +53,7 @@ def get_latest_quote(symbol: str) -> dict | None:
                 f"{_BASE}/v2/stocks/{symbol}/quotes/latest",
                 headers=_headers(),
                 timeout=_TIMEOUT,
+                **({"params": {"feed": feed}} if feed else {}),
             )
             if resp.status_code == 429:
                 if _attempt < 2:
@@ -74,7 +79,8 @@ def get_latest_quote(symbol: str) -> dict | None:
             bid = q.get("bp")
             ask = q.get("ap")
             if bid and ask:
-                return {"bid": float(bid), "ask": float(ask)}
+                return {"bid": float(bid), "ask": float(ask),
+                        "ts": str(q.get("t") or "")}
         elif resp.status_code == 402:
             # P2-ALPACA-402: flag stale state; warn only on first occurrence
             if not _alpaca_402_stale:
@@ -90,10 +96,11 @@ def get_latest_quote(symbol: str) -> dict | None:
     return None
 
 
-def get_latest_trade(symbol: str) -> float | None:
+def get_latest_trade(symbol: str, feed: str | None = None) -> float | None:
     """
     Return the latest trade price for a symbol from Alpaca Data REST API.
-    Replaces yfinance fast_info.last_price (DATA-2).
+    Replaces yfinance fast_info.last_price (DATA-2). `feed` (optional): the `feed`
+    query parameter (e.g. "overnight"); None = the request is unchanged.
 
     Endpoint: GET /v2/stocks/{symbol}/trades/latest
     Returns: float price, or None on any failure.
@@ -109,6 +116,7 @@ def get_latest_trade(symbol: str) -> float | None:
                 f"{_BASE}/v2/stocks/{symbol}/trades/latest",
                 headers=_headers(),
                 timeout=_TIMEOUT,
+                **({"params": {"feed": feed}} if feed else {}),
             )
             if resp.status_code == 429:
                 if _attempt < 2:
