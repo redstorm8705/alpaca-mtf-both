@@ -1,0 +1,17 @@
+{
+  "change": "post-live-evaluator",
+  "tier": 1,
+  "paths": [
+    "scripts/post_live_eval.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/post_live_eval_cron.log",
+      "pattern": "post-live eval \\[post-live-evaluator\\]: Post-live check"
+    }
+  ],
+  "expected_rate": "once per trading-day close (OCI cron, weekdays 22:15 UTC)",
+  "window_sessions": 2,
+  "reversal": "on a trading-day close the evaluator raises or never writes its summary line, or opens a second issue for a finding that already has an open issue",
+  "window_reason": "the evaluator runs on every trading-day close; two closes without its summary line means it is broken"
+}

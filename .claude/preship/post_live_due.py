@@ -86,14 +86,21 @@ def audited_prs() -> set:
             texts.append(fh.read())
     except OSError:
         pass
-    done = set()
+    # The LATEST record per PR decides (by its ts). NOT_EXERCISED keeps the PR open (post-live engine, 2026-10-11:
+    # code that never ran is not audited); so does a legacy PASS whose notes say it was not exercised.
+    latest: dict = {}
     for text in texts:
         for line in text.splitlines():
             try:
-                done.add(int(json.loads(line)["pr"]))
+                r = json.loads(line)
+                pr = int(r["pr"])
             except (ValueError, KeyError, TypeError):
                 continue
-    return done
+            if pr not in latest or str(r.get("ts", "")) >= str(latest[pr].get("ts", "")):
+                latest[pr] = r
+    return {pr for pr, r in latest.items()
+            if r.get("verdict") != "NOT_EXERCISED"
+            and not (r.get("verdict") == "PASS" and "not exercised" in str(r.get("notes", "")).lower())}
 
 
 def status(now: "datetime | None" = None) -> list:
@@ -108,9 +115,27 @@ def status(now: "datetime | None" = None) -> list:
     return out
 
 
+def open_findings() -> "list | None":
+    """Open GitHub issues labelled post-live — the OCI evaluator's findings (post-live engine, 2026-10-11). The issue
+    tracker is the transport from the server to the session (a tracked file written on OCI would break its
+    `git pull --ff-only`). None when gh is unavailable. Never raises."""
+    try:
+        r = subprocess.run(["gh", "issue", "list", "--label", "post-live", "--state", "open", "--json",
+                            "number,title", "--limit", "50"], capture_output=True, timeout=10, cwd=REPO)
+        if r.returncode != 0:
+            return None
+        return [(int(i["number"]), str(i["title"])) for i in json.loads(r.stdout.decode() or "[]")]
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def main() -> int:
     rows = status()
     if "--hook" in sys.argv:
+        found = open_findings() or []
+        if found:
+            print("[post-live findings OPEN] " + "; ".join(f"#{n} {t}" for n, t in found[:10])
+                  + ". Root-cause each from the logs, fix through the full gate, then close the issue.")
         over = [r for r in rows if r[1] == "OVERDUE"]
         if over:
             items = "; ".join(f"PR #{pr} ({', '.join(files[:3])}) — live since a full session ended {due:%Y-%m-%d}"

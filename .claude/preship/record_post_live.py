@@ -7,7 +7,8 @@
 
 Appends one JSON line to logs/post_live_audits.jsonl in THIS checkout; commit it with the session's docs so other
 checkouts / accounts see it via origin/main. BUGS_OPEN is allowed (the audit happened) but the notes must name the fix
-being built.
+being built. NOT_EXERCISED (post-live engine, 2026-10-11): the new code never ran in the session — the PR stays open
+(post_live_due.py keeps reporting it) until a later record shows it ran; it is never PASS.
 """
 from __future__ import annotations
 
@@ -26,13 +27,18 @@ def main(argv: "list | None" = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("pr", type=int)
     ap.add_argument("--session", required=True, help="the full trading session audited, YYYY-MM-DD")
-    ap.add_argument("--verdict", required=True, choices=("PASS", "BUGS_FIXED", "BUGS_OPEN"))
+    ap.add_argument("--verdict", required=True, choices=("PASS", "BUGS_FIXED", "BUGS_OPEN", "NOT_EXERCISED"))
     ap.add_argument("--notes", required=True)
     a = ap.parse_args(argv)
     try:
         session = date.fromisoformat(a.session)
     except ValueError:
         print("--session must be YYYY-MM-DD", file=sys.stderr)
+        return 2
+    if a.verdict == "PASS" and "not exercised" in a.notes.lower():
+        # Post-live engine (board 2026-10-11): code that never ran cannot pass — #548/#549/#554 were closed that way.
+        print("a change that was not exercised is NOT_EXERCISED, never PASS (it stays open until it runs)",
+              file=sys.stderr)
         return 2
     if len(a.notes.strip()) < 40:
         print("--notes must say what was checked (>= 40 chars): executed-code evidence, replay, findings",
