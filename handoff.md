@@ -8,6 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-12, Claude signed) — QHM earnings dates fixed (#612, deployed); stops kept through earnings
+
+QHM now sees earnings: GE 10/20 + GOOGL 10/28 (FMP batch), NVDA 11/18 (FMP per-symbol), LLY + GEV via their config
+dates 10/29 / 10/28 (FMP per-symbol is plan-blocked, HTTP 402). Pre-earnings trims can run; the pre-earnings STOP
+CANCEL is OFF (config QHM_EARNINGS_STOP_CANCEL_ENABLED=False) — Rafael's ratification needed to turn it on; a config
+date never cancels. Deployed, unexercised; post-live proof line "QHM earnings sym=... src=..." in mtf_bot.log.
+
+**⏩ EXACT NEXT ACTION:** Monday RTH: confirm the QHM earnings source lines; Monday close: post-live evaluator. Then
+board on LLY's T1 fallback target (Thorp: ~1x avg absolute earnings-day move over the last 8 reports instead of
+6.25 x weekly ATR = +41%); Track B execution logging (Rafael deferred the retire).
+
 ## ⏩ LATEST (2026-10-12, Claude signed) — QHM earnings-date bug; Track B deferred by Rafael
 
 Rafael DEFERRED the Track B retire (keep collecting; optimize: execution logging, limit-at-level replay, meta-label).
