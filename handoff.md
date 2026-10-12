@@ -8,6 +8,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-12 evening, Claude signed) — INCIDENT: test-placed UBER; guard shipped (#619)
+
+Local test runs on 10/11 placed 4 real paper bracket buys of 18 UBER (unmocked submit_bracket_entry + worktree .env
+symlink); 72 UBER filled 10/12 04:00 ET, buying power $0 all session, no tier traded, no page. #619: the broker now
+refuses a TradingClient in any test process; tests blank the Alpaca keys. Rafael: keep UBER as a QHM hold, trim 65,
+stop at entry — his orders placed 19:35 ET (GTC sell 65 @ $71.40, GTC stop 6 @ $70.15); register UBER in QHM (7 sh,
+$70.14) after the trim fills. LLY: keep T1 ~$1,351.57 (implied move), no pre-earnings trim (Rafael).
+
+**⏩ EXACT NEXT ACTION:** build the unmanaged-position alarm (design record
+logs/design_records/unmanaged_position_alarm_2026-10-12.md: main-loop check every phase, page-only, + ledger-sync
+cross-check). Then: QHM UBER registration (after fill); DRAM limited-history scoring (board); a more complete earnings
+data source (board); post-live verdicts for 10/12 (session not exercised: buying power $0).
+
 ## ⏩ LATEST (2026-10-12, OpenAI Codex signed) — F6/Swing residual stop prerequisite live (#617)
 
 The Swing stop reconciler can now protect only Swing's exact canonical ownership claim when QHM or F6 owns the same
