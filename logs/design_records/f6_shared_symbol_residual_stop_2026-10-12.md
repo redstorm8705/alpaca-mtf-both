@@ -13,7 +13,10 @@ This increment remains dormant while `OWNERSHIP_GUARD_ENFORCE=False`. Once enfor
 3. all tier claims fully explain the broker net with zero residual;
 4. QHM and F6 claims are non-negative whole shares;
 5. the Swing claim is same-direction, whole-share, and exactly equals the tracker trade's own quantity; and
-6. every reducing order used as Swing protection carries an exact `IN-` owner tag. A reducing order with unknown ownership makes the state ambiguous and blocks placement.
+6. every reducing order carries an exact tier owner tag and a finite positive whole-share quantity; and
+7. each tier's combined stop plus non-stop reducing reservations fit within that tier's exact claim. Independent orders are not assumed to be OCO.
+
+An unknown owner, malformed quantity, negative protected claim, or aggregate reservation overflow makes the state ambiguous and blocks placement.
 
 The target stop quantity becomes the verified Swing claim, not the broker net. Known QHM, F6, and Day stops do not count as Swing protection and are never cancelled. The existing broker call remains `tier="intraday"` and `allow_cancel_blocking=False`, so its ownership floor and foreign-stop recovery remain the final submission chokepoint.
 
@@ -24,7 +27,8 @@ Any mismatch pages and places nothing. An unrelated non-protected Swing symbol r
 - F6 + Swing and QHM + Swing: place only the Swing residual.
 - Existing exact Swing stop protects only the Swing claim; a foreign stop does not.
 - QHM/F6/Day known foreign stops are preserved.
-- untagged reducing order, unreadable snapshot, nonzero residual, tracker mismatch, opposite direction, fractional protected claim, and broker-net mismatch all block and page.
+- untagged or malformed reducing order, unreadable snapshot, nonzero residual, tracker mismatch, opposite direction, fractional/negative protected claim, and broker-net mismatch all block and page.
+- a Swing stop plus Swing limit that exceed the Swing claim, or any foreign-tier reducing reservation that exceeds its own claim, block and page.
 - enforcement off preserves the legacy exclusions.
 - ordinary unprotected symbols keep the existing full-net behavior.
 

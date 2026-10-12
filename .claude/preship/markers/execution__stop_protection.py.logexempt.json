@@ -1,0 +1,6 @@
+{
+ "file": "execution/stop_protection.py",
+ "sha256": "c94a0d1e07df95d27e9875eecfb8c18937f550fde2f6110311a949bb21c6faa1",
+ "reason": "This is a new dormant F6 launch prerequisite, not a claimed repair of a previously logged production incident.",
+ "recorded_at": "2026-10-13T00:14:09.119444+01:00"
+}

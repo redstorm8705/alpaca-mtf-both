@@ -1,0 +1,7 @@
+{
+  "file": "tests/test_stop_protection.py",
+  "verdict": "PASS",
+  "sha256": "7248f54f444f498cc860025a544c2be6b65afafbbceb65387a9742b1daaeca56",
+  "ts": 1791846918.041845,
+  "claims": "The regression suite covers verified QHM/F6 co-holds, malformed and negative claims, malformed order quantities, unknown owners, Swing stop-plus-limit overflow, foreign reservation overflow, and legacy behavior while enforcement is disabled."
+}
