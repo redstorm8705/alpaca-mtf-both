@@ -8,6 +8,21 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-12, OpenAI Codex signed) — F6/Swing residual stop prerequisite live (#617)
+
+The Swing stop reconciler can now protect only Swing's exact canonical ownership claim when QHM or F6 owns the same
+stock. Before recognizing or placing that stop, it requires readable zero-drift ownership, non-negative whole-share
+claims, exact owner tags on every reducing order, and combined stop-plus-limit reservations within each tier's claim.
+Unknown or malformed ownership pages and places nothing; foreign-tier orders are preserved. Two board-rejected
+reverse-fill paths (negative protected claims and aggregate reducing reservations above ownership) were fixed before
+ship. PR #617 is live at `51ad9f2`; OCI Python 3.10 compile and 140 tests pass, all four services are active, and
+`DEPLOY_OK:51ad9f2` is confirmed. `OWNERSHIP_GUARD_ENFORCE=False` and F6 remains OFF, so the path is deployed but
+unexercised.
+
+**⏩ EXACT NEXT ACTION:** build the pending F6-buy reservation before broker submission, held until exact terminal
+reconciliation. Then complete bounded extended-hours entry, fill-confirmed trim resync, allocator/kill-switch/
+emergency-flatten attribution, ETF eligibility, simulations, and the final flag flip.
+
 ## ⏩ LATEST (2026-10-12, OpenAI Codex signed) — F6 startup ownership preflight live (#614)
 
 F6 prerequisite A is deployed at `978057e`. When F6 is eventually enabled, main now runs the canonical tagged-fill
