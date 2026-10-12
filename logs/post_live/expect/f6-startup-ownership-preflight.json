@@ -1,0 +1,27 @@
+{
+  "change": "f6-startup-ownership-preflight",
+  "tier": 2,
+  "paths": [
+    "execution/forever_hold_manager.py",
+    "main.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "F6 startup ownership reconcile OK: [0-9]+ symbol\\(s\\), no pending F6 orders"
+    }
+  ],
+  "expected_rate": "once per main-process startup after FOREVER6_ENABLED is enabled; dormant before the final F6 launch",
+  "window_sessions": 10,
+  "reversal": "Any F6 starter or trim executes in a process whose startup replay, F6 open-order read, ledger claim validation, or durable clean-interlock write failed.",
+  "metrics": [
+    {
+      "name": "f6_startup_preflight_verdict",
+      "source": "logs/mtf_bot.log",
+      "direction": "none",
+      "bound": "Every enabled process records one clean verdict before an F6 order; any blocked verdict is followed by zero F6 starter/trim submissions."
+    }
+  ],
+  "verification": "tests/test_f6_startup_reconcile.py",
+  "baseline_exempt_reason": "The proof phrase is newly introduced by this diff and names the F6 startup ownership reconcile directly; production cannot emit it before this merge."
+}

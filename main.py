@@ -749,6 +749,28 @@ def main():
     # ── Startup reconciliation ────────────────────────────────────────────────
     # Each step wrapped independently — a slow/failed Alpaca call must not
     # prevent the bot from starting and managing existing positions.
+    # 0. F6: exact tagged-fill ownership replay before ANY F6 entry/trim can run.
+    # This is dormant while FOREVER6_ENABLED=False.  A failed preflight persists the
+    # F6 degraded interlock; ordinary position management continues so an F6 data
+    # fault can never strand a liquidatable tier's exit.
+    if config.FOREVER6_ENABLED:
+        try:
+            from execution.forever_hold_manager import ForeverHoldManager
+            import execution.broker as _f6_startup_broker
+
+            _f6_startup = ForeverHoldManager(_f6_startup_broker).reconcile_on_startup()
+            if _f6_startup.ready:
+                logger.info(
+                    "F6 startup reconcile: %d symbol(s), ownership ready",
+                    len(_f6_startup.symbols_reconciled),
+                )
+            else:
+                logger.critical(
+                    "F6 startup reconcile blocked F6 actions: %s",
+                    _f6_startup.reason,
+                )
+        except Exception as _f6_rec_e:
+            logger.critical("F6 reconcile_on_startup failed: %s", _f6_rec_e)
     # 1. Reconcile overnight GTC stops (check if any triggered while bot was offline)
     try:
         _cancel_and_reconcile_gtc_stops(tracker, risk)
