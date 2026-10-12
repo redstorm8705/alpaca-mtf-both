@@ -1,0 +1,10 @@
+{
+  "feature": "f6-shared-symbol-residual-stop",
+  "doc_path": "logs/design_records/f6_shared_symbol_residual_stop_2026-10-12.md",
+  "doc_sha256": "67d24ee5bc96f75e4a3325e563cadf4b36916c64f6878fca23be56efd1319dc8",
+  "covers": [
+    "execution/stop_protection.py",
+    "tests/test_stop_protection.py"
+  ],
+  "ts": 1791846845.6291468
+}

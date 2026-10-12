@@ -48,9 +48,12 @@ Data tier: T1 (Alpaca Trading REST via execution.broker). No SDK instantiation h
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+import config
 
 from execution.broker import (
     trade_own_qty,
@@ -118,7 +121,7 @@ _PAGE_TTL_NAKED_SEC = 900.0      # 15 min — position unprotected NOW, or modul
 _PAGE_TTL_CONFLICT_SEC = 3600.0  # 60 min — a stop is live; manual reconcile needed
 _NAKED_REASONS = frozenset((
     "no stop level", "place failed", "cover failed", "under-covered", "co-hold sizing",
-    "sub-share qty", "unknown direction", "loop error",
+    "sub-share qty", "unknown direction", "loop error", "protected residual",
 ))
 _CONFLICT_REASONS = frozenset((
     "over-covered", "resting reducing order conflict", "place-guard suppressed",
@@ -257,6 +260,133 @@ def _reducing_qty(orders, direction: str, *, stop_only: bool) -> float:
     return total
 
 
+def _shared_reducing_book(
+    orders,
+    direction: str,
+    *,
+    snapshot,
+    symbol: str,
+) -> tuple[dict[str, dict[str, float]] | None, str]:
+    """Validate and total every reducing reservation on a protected co-hold.
+
+    Stop and non-stop orders are aggregated together per owner before any stop
+    is recognized or placed. We do not assume two independent orders are OCO:
+    absent a broker-proven relationship both can fill, so their sum must fit
+    inside that tier's exact ownership claim. Unknown ownership or malformed
+    quantities make the complete reservation book ambiguous.
+    """
+
+    from execution.ownership_guard import tier_of_coid
+
+    want = _reducing_side_for(direction)
+    book: dict[str, dict[str, float]] = {}
+    for order in orders:
+        if _order_side(order) != want:
+            continue
+        is_stop = _is_stop_type(order)
+        owner = tier_of_coid(getattr(order, "client_order_id", None))
+        if owner is None:
+            return None, "reducing order has no exact tier tag"
+        qty = _order_qty(order)
+        if (
+            not math.isfinite(qty)
+            or qty <= _QTY_EPS
+            or abs(qty - round(qty)) > _QTY_EPS
+        ):
+            return None, f"{owner} reducing order has invalid quantity {qty!r}"
+        try:
+            claim = float(snapshot.claimed_qty(symbol, owner))
+        except Exception as exc:  # noqa: BLE001
+            return None, f"cannot read {owner} ownership claim: {exc}"
+        if (
+            not math.isfinite(claim)
+            or claim <= _QTY_EPS
+            or abs(claim - round(claim)) > _QTY_EPS
+        ):
+            return None, f"{owner} reducing order has no valid same-direction claim ({claim!r})"
+        bucket = book.setdefault(owner, {"stop": 0.0, "other": 0.0})
+        bucket["stop" if is_stop else "other"] += qty
+        reserved = bucket["stop"] + bucket["other"]
+        if reserved > claim + _QTY_EPS:
+            return None, (
+                f"{owner} reducing reservations {reserved:g} exceed its exact claim {claim:g}"
+            )
+    return book, ""
+
+
+def _build_ownership_snapshot(positions):
+    """One injectable boundary around the canonical account-wide snapshot."""
+
+    from execution.ownership_snapshot import build_ownership_snapshot
+
+    return build_ownership_snapshot(positions=positions)
+
+
+def _shared_swing_residual_qty(
+    snapshot,
+    symbol: str,
+    direction: str,
+    net_qty: float,
+    trade: dict,
+) -> tuple[int | None, str]:
+    """Return the exact Swing shares to stop on a QHM/F6 co-held symbol.
+
+    ``(None, "")`` means the symbol has no protected claim.  A non-empty
+    reason means ownership is ambiguous and the caller must fail closed.
+    """
+
+    try:
+        if snapshot is None:
+            return None, "ownership snapshot unavailable"
+        if snapshot.errors:
+            return None, f"ownership sources report {snapshot.errors}"
+        qhm = float(snapshot.claimed_qty(symbol, "qhm"))
+        f6 = float(snapshot.claimed_qty(symbol, "forever_6"))
+        for name, qty in (("QHM", qhm), ("F6", f6)):
+            if (
+                not math.isfinite(qty)
+                or qty < -_QTY_EPS
+                or abs(qty - round(qty)) > _QTY_EPS
+            ):
+                return None, f"{name} claim is not a non-negative whole share count ({qty!r})"
+        if qhm <= _QTY_EPS and f6 <= _QTY_EPS:
+            return None, ""
+
+        signed_net = float(snapshot.broker_qty.get(symbol, 0.0))
+        expected_net = net_qty if direction == "long" else -net_qty
+        if not math.isfinite(signed_net) or abs(signed_net - expected_net) > _QTY_EPS:
+            return None, (
+                f"snapshot/live net mismatch ({signed_net:g} vs {expected_net:g})"
+            )
+        if abs(float(snapshot.residual_qty(symbol))) > _QTY_EPS:
+            return None, (
+                f"tier claims do not explain broker net "
+                f"(residual={snapshot.residual_qty(symbol):g})"
+            )
+
+        own = float(snapshot.claimed_qty(symbol, "swing"))
+        day = float(snapshot.claimed_qty(symbol, "day"))
+        if (
+            not math.isfinite(own)
+            or abs(own - round(own)) > _QTY_EPS
+            or own <= _QTY_EPS
+            or direction != "long"
+        ):
+            return None, f"Swing claim/direction is incompatible ({own:+g}, {direction})"
+        if (
+            not math.isfinite(day)
+            or day < -_QTY_EPS
+            or abs(day - round(day)) > _QTY_EPS
+        ):
+            return None, f"Day claim is not a non-negative whole share count ({day!r})"
+        recorded = trade_own_qty(trade)
+        if recorded is None or abs(float(recorded) - own) > _QTY_EPS:
+            return None, f"tracker/Swing claim mismatch ({recorded!r} vs {own:g})"
+        return int(round(own)), ""
+    except Exception as exc:  # noqa: BLE001 — ambiguity must fail closed
+        return None, f"ownership validation failed: {exc}"
+
+
 def _intended_stop(trade: dict) -> float | None:
     """The stop PRICE this position should currently rest at: the live trail level if one is
     active, else the (possibly breakeven-moved) hard stop. Single resolver."""
@@ -366,7 +496,8 @@ def reconcile_protection(
         use_gtc = session in _GTC_SESSIONS
 
     qhm = _qhm_symbols()
-    f6 = _forever6_symbols()   # F6 held symbols — excluded like QHM (see _forever6_symbols)
+    f6 = _forever6_symbols()
+    ownership_enforced = bool(getattr(config, "OWNERSHIP_GUARD_ENFORCE", False))
     now_mono = time.monotonic()
 
     # PRE-WIRE-BLOCKER-2 (2026-07-20, board: reliability+exec-risk+GAI all APPROVE PART A):
@@ -419,6 +550,17 @@ def reconcile_protection(
             if _psym is not None:
                 _positions_by_symbol[_psym] = _p
 
+    # Shared-symbol residual stops are enabled only with the broker's ownership
+    # chokepoint.  Build from the SAME position snapshot used below so ownership
+    # validation and stop sizing cannot observe different broker books.
+    _ownership = None
+    _ownership_error = ""
+    if ownership_enforced and _all_positions is not None:
+        try:
+            _ownership = _build_ownership_snapshot(_all_positions)
+        except Exception as _own_exc:  # noqa: BLE001
+            _ownership_error = str(_own_exc)
+
     open_symbols = set()
 
     for symbol, trade in list(getattr(tracker, "open_trades", {}).items()):
@@ -429,10 +571,10 @@ def reconcile_protection(
         try:
             if str(trade.get("status", "")).lower() not in ("open", ""):
                 continue
-            if symbol in qhm:
+            if not ownership_enforced and symbol in qhm:
                 summary["excluded_qhm"].append(symbol)  # quarterly holds are not ours to manage
                 continue
-            if symbol in f6:
+            if not ownership_enforced and symbol in f6:
                 summary["excluded_forever6"].append(symbol)  # F6 shares carry no stop by design
                 continue
             direction = str(trade.get("direction", "")).lower()
@@ -483,30 +625,97 @@ def reconcile_protection(
             # A clean evaluation from here → clear any prior unknown-state streak.
             _skip_streak.pop(symbol, None)
 
-            stop_cov = _reducing_qty(orders, direction, stop_only=True)
+            target_qty = net_qty
+            exact_shared_owner = False
+            protected_registry_symbol = symbol in qhm or symbol in f6
+            if ownership_enforced:
+                if _ownership is None and protected_registry_symbol:
+                    _throttled_page(
+                        symbol,
+                        "protected residual",
+                        f"cannot verify the protected ownership snapshot ({_ownership_error or 'unavailable'}) "
+                        "— no Swing stop placed; MANUAL protection check required.",
+                        now_mono,
+                    )
+                    summary["paged"].append((symbol, "protected residual"))
+                    continue
+                _snapshot_protected = False
+                if _ownership is not None:
+                    try:
+                        _protected_claims = (
+                            float(_ownership.claimed_qty(symbol, "qhm")),
+                            float(_ownership.claimed_qty(symbol, "forever_6")),
+                        )
+                        _snapshot_protected = any(
+                            not math.isfinite(qty) or abs(qty) > _QTY_EPS
+                            for qty in _protected_claims
+                        )
+                    except Exception:  # noqa: BLE001 — registry fallback below fails closed
+                        _snapshot_protected = protected_registry_symbol
+                if _snapshot_protected:
+                    _own_qty, _own_reason = _shared_swing_residual_qty(
+                        _ownership, symbol, direction, net_qty, trade
+                    )
+                    if _own_reason:
+                        _throttled_page(
+                            symbol,
+                            "protected residual",
+                            f"cannot prove the Swing residual on a protected co-hold: {_own_reason} "
+                            "— nothing placed; MANUAL protection check required.",
+                            now_mono,
+                        )
+                        summary["paged"].append((symbol, "protected residual"))
+                        continue
+                    if _own_qty is not None:
+                        target_qty = float(_own_qty)
+                        exact_shared_owner = True
+
+            if exact_shared_owner:
+                reducing_book, reducing_reason = _shared_reducing_book(
+                    orders,
+                    direction,
+                    snapshot=_ownership,
+                    symbol=symbol,
+                )
+                if reducing_reason or reducing_book is None:
+                    _throttled_page(
+                        symbol,
+                        "protected residual",
+                        "cannot prove the reducing-order reservations on this protected co-hold: "
+                        f"{reducing_reason or 'unknown order state'} — nothing placed.",
+                        now_mono,
+                    )
+                    summary["paged"].append((symbol, "protected residual"))
+                    continue
+                swing_orders = reducing_book.get("intraday", {})
+                stop_cov = float(swing_orders.get("stop", 0.0))
+                other_cov = float(swing_orders.get("other", 0.0))
+            else:
+                stop_cov = _reducing_qty(orders, direction, stop_only=True)
+                other_cov = _reducing_qty(orders, direction, stop_only=False)
 
             # OVER-COVERED: a stop for MORE than the position (e.g. a resting limit filled and
             # shrank the position but a full-size stop remains) → on trigger it over-sells into
             # a reverse. v1 has no resize path → PAGE, do not treat as protected-and-silent.
-            if stop_cov > net_qty + _QTY_EPS:
+            if stop_cov > target_qty + _QTY_EPS:
                 _throttled_page(symbol, "over-covered",
-                                f"OVER-COVERED: stop qty {stop_cov:g} > position {net_qty:g} ({direction}) — "
+                                f"OVER-COVERED: stop qty {stop_cov:g} > owned target {target_qty:g} ({direction}) — "
                                 f"reverse-fill risk if triggered. MANUAL resize/cancel required.",
                                 now_mono)
                 summary["paged"].append((symbol, "over-covered"))
                 continue
 
-            if stop_cov >= net_qty - _QTY_EPS:
+            if stop_cov >= target_qty - _QTY_EPS:
                 _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
                 _clear_page_throttle(symbol)             # protected — re-arm fresh pages if it recurs
-                summary["already_protected"].append((symbol, net_qty, stop_cov))
+                summary["already_protected"].append((symbol, target_qty, stop_cov))
                 continue  # fully protected → never touch it (additive net)
 
             # UNDER-COVERED partial stop → page (no second stop; avoids a double-stop race).
             if stop_cov > _QTY_EPS:
                 _throttled_page(symbol, "under-covered",
-                                f"UNDER-COVERED: stop covers {stop_cov:g} of {net_qty:g} {direction} shares — "
-                                f"{net_qty - stop_cov:g} naked. MANUAL top-up required.",
+                                f"UNDER-COVERED: stop covers {stop_cov:g} of {target_qty:g} owned {direction} "
+                                f"shares — {target_qty - stop_cov:g} naked. MANUAL top-up required.",
                                 now_mono)
                 summary["paged"].append((symbol, "under-covered"))
                 continue
@@ -514,7 +723,6 @@ def reconcile_protection(
             # No protective stop at all. If a resting REDUCING non-stop order exists (e.g. a
             # profit limit), a full-size stop could later over-sell into a reverse once that
             # order fills → PAGE for manual handling instead of auto-placing (v1 conservatism).
-            other_cov = _reducing_qty(orders, direction, stop_only=False)
             if other_cov > _QTY_EPS:
                 _throttled_page(symbol, "resting reducing order conflict",
                                 f"UNPROTECTED but a resting reducing order covers {other_cov:g} shares — "
@@ -526,7 +734,7 @@ def reconcile_protection(
             intended = _intended_stop(trade)
             if intended is None:
                 _throttled_page(symbol, "no stop level",
-                                f"UNPROTECTED {direction} x{net_qty:g} with NO usable stop level "
+                                f"UNPROTECTED {direction} x{target_qty:g} owned shares with NO usable stop level "
                                 f"(trail_stop/stop missing) — cannot place a stop; MANUAL stop required NOW.",
                                 now_mono)
                 summary["paged"].append((symbol, "no stop level"))
@@ -536,7 +744,7 @@ def reconcile_protection(
 
             # Whole-share guard (positions are integer shares; guard against float drift / a
             # sub-share position that would truncate to a 0-share order).
-            qty_int = int(round(net_qty))
+            qty_int = int(round(target_qty))
             if qty_int < 1:
                 _throttled_page(symbol, "sub-share qty",
                                 f"UNPROTECTED sub-share {direction} position ({net_qty:g}) — cannot place an "
@@ -551,8 +759,17 @@ def reconcile_protection(
             # (DT-) order is open on the symbol, fail safe on the order + page (never guess); with no Day order
             # visible, place the full stop as before (an unprotected Swing position is the worse outcome). An
             # opposite or all-Day claim -> page, nothing placed.
-            _dclaim = _day_tier_claim_for_stop(symbol)
-            if _dclaim is None:
+            _dclaim = None if exact_shared_owner else _day_tier_claim_for_stop(symbol)
+            if exact_shared_owner:
+                logger.warning(
+                    "[%s] STOP-PROTECT: [change_id=f6-shared-symbol-residual-stop] "
+                    "protected co-hold net=%g, verified Swing residual=%d — "
+                    "foreign tier stops remain untouched.",
+                    symbol,
+                    net_qty,
+                    qty_int,
+                )
+            elif _dclaim is None:
                 if _has_day_order(orders):
                     # Throttled (cold-2nd): _skip_unknown's once-per-episode streak is reset by the clean-
                     # evaluation pop above, so it would page every cycle here.
@@ -618,6 +835,16 @@ def reconcile_protection(
                 # So the position IS protected and our get_open_orders read above was stale
                 # (visibility lag). Not a placement and NOT a failure: do not page, do not
                 # record an order id, do not arm the double-place guard (we placed nothing).
+                if exact_shared_owner:
+                    _throttled_page(
+                        symbol,
+                        "protected residual",
+                        "broker reports shares held, but the shared order snapshot contained no exact "
+                        "Swing stop for the verified residual — not claiming protection; VERIFY manually.",
+                        now_mono,
+                    )
+                    summary["paged"].append((symbol, "protected residual"))
+                    continue
                 logger.info(
                     "[%s] STOP-PROTECT: broker reports the qty is already held by a live "
                     "protective order — our order-book read was stale. Treating as PROTECTED; "
@@ -625,7 +852,7 @@ def reconcile_protection(
                 )
                 _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
                 _clear_page_throttle(symbol)             # broker-held (protected) — re-arm fresh pages
-                summary["broker_held"].append((symbol, net_qty, side, intended))
+                summary["broker_held"].append((symbol, target_qty, side, intended))
                 continue
 
             if order is PROTECTION_UNKNOWN:

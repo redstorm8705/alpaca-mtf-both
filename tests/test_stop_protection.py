@@ -28,8 +28,24 @@ for _mod in ("alpaca", "alpaca.trading", "alpaca.trading.client",
 from execution import stop_protection as sp  # noqa: E402  (after the SDK stub)
 
 
-def _order(side: str, otype: str = "stop", qty: float = 1, oid: str = "o1", status: str = "new"):
-    return types.SimpleNamespace(id=oid, symbol="X", side=side, type=otype, qty=qty, status=status, stop_price=100.0)
+def _order(
+    side: str,
+    otype: str = "stop",
+    qty: float = 1,
+    oid: str = "o1",
+    status: str = "new",
+    coid: str | None = None,
+):
+    return types.SimpleNamespace(
+        id=oid,
+        symbol="X",
+        side=side,
+        type=otype,
+        qty=qty,
+        status=status,
+        stop_price=100.0,
+        client_order_id=coid,
+    )
 
 
 _DEF_ORDER = _order("sell")  # module-level singleton default (ruff B008)
@@ -734,6 +750,172 @@ class StopProtectionCohold(StopProtectionInvariant):
     def test_unreadable_claim_no_day_order_places_full_stop(self):
         s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), day_claim=None)
         self.assertEqual(m["day"].call_args.kwargs["qty"], 3)
+
+
+class _OwnershipSnapshot:
+    def __init__(self, claims, net=5.0, errors=()):
+        self.claims = {"X": dict(claims)}
+        self.broker_qty = {"X": net}
+        self.errors = tuple(errors)
+
+    def claimed_qty(self, symbol, tier):
+        aliases = {
+            "forever_6": "forever_6",
+            "forever6": "forever_6",
+            "swing": "swing",
+            "intraday": "swing",
+            "qhm": "qhm",
+            "day": "day",
+            "daytrade": "day",
+        }
+        return float(self.claims.get(symbol, {}).get(aliases[tier], 0.0))
+
+    def residual_qty(self, symbol):
+        return float(self.broker_qty.get(symbol, 0.0)) - sum(self.claims.get(symbol, {}).values())
+
+
+class StopProtectionProtectedResidual(StopProtectionInvariant):
+    """F6/QHM shared-symbol coverage uses exact Swing ownership, never broker net."""
+
+    def _shared(self, snapshot, *, orders=None, trade=None, net=5, f6=("X",), qhm=(), submit=_DEF_ORDER):
+        with mock.patch.object(sp.config, "OWNERSHIP_GUARD_ENFORCE", True), \
+             mock.patch.object(sp, "_build_ownership_snapshot", return_value=snapshot):
+            return self._run(
+                open_orders=[] if orders is None else orders,
+                position=_position("long", net, 110.0),
+                trade=_trade(qty=3) if trade is None else trade,
+                f6=f6,
+                qhm=qhm,
+                submit_day=submit,
+            )
+
+    def test_f6_cohold_places_only_swing_residual(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0})
+        _, mocks = self._shared(snap)
+        self.assertEqual(mocks["day"].call_args.kwargs["qty"], 3)
+
+    def test_qhm_cohold_places_only_swing_residual(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "qhm": 2.0})
+        _, mocks = self._shared(snap, f6=(), qhm=("X",))
+        self.assertEqual(mocks["day"].call_args.kwargs["qty"], 3)
+
+    def test_known_foreign_stop_does_not_count_as_swing_protection(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0})
+        foreign = _order("sell", qty=2, coid="F6-X-s-1-foreign")
+        summary, mocks = self._shared(snap, orders=[foreign])
+        self.assertEqual([row[3] for row in summary["placed"]], [3])
+        self.assertEqual(mocks["day"].call_args.kwargs["qty"], 3)
+
+    def test_exact_swing_stop_covers_only_swing_claim(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0})
+        own = _order("sell", qty=3, coid="IN-X-s-1-own")
+        foreign = _order("sell", qty=2, coid="F6-X-s-1-foreign")
+        summary, mocks = self._shared(snap, orders=[own, foreign])
+        self.assertEqual(summary["already_protected"], [("X", 3.0, 3.0)])
+        mocks["day"].assert_not_called()
+
+    def test_untagged_reducing_order_blocks_without_duplicate(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0})
+        summary, mocks = self._shared(snap, orders=[_order("sell", qty=2)])
+        self.assertIn(("X", "protected residual"), summary["paged"])
+        mocks["day"].assert_not_called()
+
+    def test_malformed_swing_stop_qty_blocks_without_duplicate(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0})
+        for raw_qty in (float("nan"), float("inf"), 1.5, 0, None, "malformed"):
+            with self.subTest(raw_qty=raw_qty):
+                own = _order("sell", qty=raw_qty, coid="IN-X-s-1-own")
+                summary, mocks = self._shared(snap, orders=[own])
+                self.assertIn(("X", "protected residual"), summary["paged"])
+                mocks["day"].assert_not_called()
+
+    def test_negative_protected_claim_cannot_bypass_shared_validation(self):
+        snap = _OwnershipSnapshot({"swing": 6.0, "forever_6": -1.0}, net=5.0)
+        summary, mocks = self._shared(snap, trade=_trade(qty=6))
+        self.assertIn(("X", "protected residual"), summary["paged"])
+        mocks["day"].assert_not_called()
+
+    def test_swing_stop_plus_limit_cannot_exceed_swing_claim(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0})
+        orders = [
+            _order("sell", otype="stop", qty=3, coid="IN-X-s-1-stop"),
+            _order("sell", otype="limit", qty=3, coid="IN-X-s-2-limit"),
+        ]
+        summary, mocks = self._shared(snap, orders=orders)
+        self.assertIn(("X", "protected residual"), summary["paged"])
+        mocks["day"].assert_not_called()
+
+    def test_foreign_stop_cannot_exceed_foreign_claim(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0})
+        foreign = _order("sell", qty=3, coid="F6-X-s-1-oversized")
+        summary, mocks = self._shared(snap, orders=[foreign])
+        self.assertIn(("X", "protected residual"), summary["paged"])
+        mocks["day"].assert_not_called()
+
+    def test_snapshot_error_and_unexplained_residual_block(self):
+        cases = (
+            _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0}, errors=("ledger",)),
+            _OwnershipSnapshot({"swing": 2.0, "forever_6": 2.0}),
+        )
+        for snapshot in cases:
+            with self.subTest(snapshot=snapshot):
+                summary, mocks = self._shared(snapshot)
+                self.assertIn(("X", "protected residual"), summary["paged"])
+                mocks["day"].assert_not_called()
+
+    def test_tracker_mismatch_and_fractional_floor_block(self):
+        cases = (
+            (_OwnershipSnapshot({"swing": 2.0, "forever_6": 3.0}), _trade(qty=3)),
+            (_OwnershipSnapshot({"swing": 3.5, "forever_6": 1.5}), _trade(qty=3)),
+        )
+        for snapshot, trade in cases:
+            with self.subTest(snapshot=snapshot):
+                summary, mocks = self._shared(snapshot, trade=trade)
+                self.assertIn(("X", "protected residual"), summary["paged"])
+                mocks["day"].assert_not_called()
+
+    def test_opposite_swing_direction_blocks(self):
+        snap = _OwnershipSnapshot({"swing": -3.0, "forever_6": 8.0}, net=5.0)
+        with mock.patch.object(sp.config, "OWNERSHIP_GUARD_ENFORCE", True), \
+             mock.patch.object(sp, "_build_ownership_snapshot", return_value=snap):
+            summary, mocks = self._run(
+                open_orders=[],
+                position=_position("short", -5, 90.0),
+                trade=_trade(direction="short", qty=3),
+                f6=("X",),
+            )
+        self.assertIn(("X", "protected residual"), summary["paged"])
+        mocks["day"].assert_not_called()
+
+    def test_broker_held_sentinel_is_not_proof_of_exact_swing_stop(self):
+        snap = _OwnershipSnapshot({"swing": 3.0, "forever_6": 2.0})
+        summary, _ = self._shared(snap, submit=sp.PROTECTION_ALREADY_HELD)
+        self.assertEqual(summary["broker_held"], [])
+        self.assertIn(("X", "protected residual"), summary["paged"])
+
+    def test_enforcement_off_keeps_legacy_whole_symbol_exclusion(self):
+        with mock.patch.object(sp.config, "OWNERSHIP_GUARD_ENFORCE", False):
+            summary, mocks = self._run(
+                open_orders=[],
+                position=_position("long", 5, 110.0),
+                trade=_trade(qty=3),
+                f6=("X",),
+            )
+        self.assertEqual(summary["excluded_forever6"], ["X"])
+        mocks["day"].assert_not_called()
+
+    def test_unreadable_snapshot_does_not_block_unrelated_swing_symbol(self):
+        with mock.patch.object(sp.config, "OWNERSHIP_GUARD_ENFORCE", True), \
+             mock.patch.object(sp, "_build_ownership_snapshot", side_effect=RuntimeError("bad ledger")):
+            summary, mocks = self._run(
+                open_orders=[],
+                position=_position("long", 3, 110.0),
+                trade=_trade(qty=3),
+                f6=(),
+                qhm=(),
+            )
+        self.assertEqual([row[3] for row in summary["placed"]], [3])
+        mocks["day"].assert_called_once()
 
 
 if __name__ == "__main__":

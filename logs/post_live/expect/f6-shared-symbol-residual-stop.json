@@ -1,0 +1,25 @@
+{
+  "change": "f6-shared-symbol-residual-stop",
+  "tier": 2,
+  "paths": [
+    "execution/stop_protection.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change_id=f6-shared-symbol-residual-stop"
+    }
+  ],
+  "expected_rate": "Dormant until ownership enforcement is enabled; after enablement, once whenever the reconciler must place missing Swing protection on a verified QHM/F6 co-hold.",
+  "window_sessions": 10,
+  "reversal": "A tagged event is followed by a stop quantity different from the verified Swing claim, a foreign tier order is cancelled, or the broker net becomes short because the stop over-sold.",
+  "metrics": [
+    {
+      "name": "shared-symbol Swing stop quantity accuracy",
+      "source": "logs/mtf_bot.log plus Alpaca open orders and the canonical ownership snapshot",
+      "direction": "none",
+      "bound": "Every tagged placement quantity equals the verified whole-share Swing claim; zero reverse fills and zero foreign-order cancellations."
+    }
+  ],
+  "verification": "tests/test_stop_protection.py"
+}

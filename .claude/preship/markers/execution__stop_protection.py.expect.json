@@ -1,0 +1,9 @@
+{
+ "file": "execution/stop_protection.py",
+ "sha256": "c94a0d1e07df95d27e9875eecfb8c18937f550fde2f6110311a949bb21c6faa1",
+ "expect_path": "logs/post_live/expect/f6-shared-symbol-residual-stop.json",
+ "expect_sha256": "1c065dca7298e16a216d37f61605a8a5aa80e26ffaed24b8141a63b5daa1a919",
+ "change": "f6-shared-symbol-residual-stop",
+ "tier": 2,
+ "ts": "2026-10-12T23:14:09.085168+00:00"
+}
