@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-11 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-12 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,20 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-12, OpenAI Codex signed) — F6 startup ownership preflight live (#614)
+
+F6 prerequisite A is deployed at `978057e`. When F6 is eventually enabled, main now runs the canonical tagged-fill
+replay before ordinary reconciliation and refuses every F6 starter or discretionary trim unless the replay heals, the
+open-order book is readable, no F6-tagged order remains unresolved, every F6 claim is a whole non-negative quantity
+within the broker net, drift is zero, and the clean verdict persists. The durable and process-local interlocks both
+fail closed. F6 remains OFF; this diff sends no orders and does not claim the complete launch is safe. OCI fast-forward,
+Python 3.10 compile, 10 on-box tests, four active services, and `DEPLOY_OK:978057e` are confirmed.
+
+**⏩ EXACT NEXT ACTION:** build tier-aware residual stop coverage for a co-held F6 symbol: protect only the verified
+Day/Swing residual, never F6/QHM core shares, and fail closed on ownership ambiguity. Then complete the pending-buy
+reservation, bounded F6 entry, trim resync, allocator/kill-switch/emergency-flatten, and ETF gates before the final
+flag flip.
 
 ## ⏩ LATEST (2026-10-12, Claude signed) — QHM earnings dates fixed (#612, deployed); stops kept through earnings
 

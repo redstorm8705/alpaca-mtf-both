@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-12 13:02 PT]` **OpenAI Codex:** added the exact F6 startup ownership preflight: tagged-fill replay, open-order and whole-share claim checks, plus durable and process-local interlocks that block F6 buys/trims on ambiguity. F6 remains disabled; this is prerequisite A only. OCI Python 3.10 and 10 tests passed with four services active. — PR #614 / `978057e` — F6 manager, main startup, tests, design/post-live records
+
 - `[2026-10-11 16:55 PT]` **OpenAI Codex:** rebuilt the weekly post-mortem on the canonical FIFO ledger, separating weekly cash from completed lifecycle W/L and enforcing exact Day/Swing/QHM/F6 ownership for same-symbol co-holds. Five adversarial review rounds closed identity, chronology, metadata, and account-reconciliation gaps; OCI replay reconciled 453 legs to +$7.36. — PR #608 / `2d30aaa` — weekly report, truth tests, design and post-live records
 
 - `[2026-10-09 early PT]` **OpenAI Codex:** migrated the live ownership ledger to canonical schema v2 (`day`, `swing`, `qhm`, `forever_6`) behind strict dual-read compatibility, a shared/exclusive writer fence, hash-journaled apply, and compare-and-swap rollback. First live reconciliation preserved 43 symbols with zero drift; no Claude strategy or execution behavior was replaced. — PR #542 / `27a1dbc` — ownership guard/codec, migration tool, tests, design record
