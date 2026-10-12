@@ -104,3 +104,19 @@ Not risk-path (narrows F1). F2 (the Track B reservation) and the fade-rule fix s
 Out-of-sample for the by-product findings: H1 (no-clear-side shorts) and H2 (with-trend longs) NOT CONFIRMED.
 Flag for the forward pass: all Track B shorts (-0.096R) and longs (-0.078R) were negative out-of-sample — Track B's core
 signal needs its own review.
+
+## Core-signal review and RETIRE recommendation (2026-10-12; board Simons + Brandt 2-0, GAI; Gro unavailable — daily cap)
+research/day_tier_trackb_core_review.py, logs/trackb_core_review_2026-10-11.json (bot's own screen + trigger; 15
+names; in-sample 2025-10..2026-10, out-of-sample 2023-10..2025-09; session-blocked bootstrap; 24 pre-declared variants):
+- Track B pooled: n=2791, -0.061R, t -2.59, 90% CI -0.106..-0.016 (in-sample -0.011R n=939; out-of-sample -0.087R
+  n=1852, t -2.98). About -2.4 bps net per trade after a 5 bps cost.
+- vs entering every screened gap mover with the same rule: difference +0.003R (CI -0.040..+0.047). The design record's
+  claim that break-and-hold "flips the negative raw gap positive" is not supported.
+- Exits (1R target -0.077R; no target -0.076R), DRIVE (-0.011R, t -0.22), after-11:00 (-0.022R, t -0.48): no variant
+  positive in both windows with a pooled CI above zero.
+**Recommendation (to Rafael — he ordered Track B to trade all day on 10/06):** retire Track B
+(DAYTRADE_TRACK_B_ENABLED=False). Its budget reservation stops; Track A gets back the room it had before 10/12. A new
+mover idea returns only as a pre-declared hypothesis that passes the same two-window replay. Rule E: removes entries;
+the reviewer must confirm Track A sizing stays inside its existing caps (returns to the pre-10/12 state).
+Note: GAI's reasoning called Track A "performing" — it is not (Track A -$58.26 over 24 fill-closed trades, see
+day_tier_track_a_review_2026-10-12.md); the recommendation does not rest on that.
