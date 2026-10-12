@@ -124,7 +124,8 @@ def main() -> None:
         # least 2026-06-07 (4+ consecutive weeks). Masked operationally because
         # tracked symbols happened to be 0 each of those weeks; would have
         # left the earnings cache permanently stale once positions existed.
-        preload_earnings_week(sorted(symbols))
+        # 35 days (QHM's 21-day trim window + slack); the cache write is a per-symbol merge, never a narrowing overwrite.
+        preload_earnings_week(sorted(symbols), lookahead_days=35)
         logger.info("FMP earnings cache refreshed successfully.")
     except Exception as e:
         logger.error(f"preload_earnings_week() raised: {e} — will use stale cache if present.")

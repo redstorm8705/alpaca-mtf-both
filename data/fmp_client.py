@@ -18,9 +18,11 @@ Free plan limit: 250 calls/day.
 Guardrail 2: No Alpaca SDK instantiation here.
 """
 
+import fcntl
 import json
 import logging
 import os
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -162,6 +164,31 @@ def get_economic_calendar(lookahead_days: int = 45) -> list[dict]:
 
 
 # ── Per-symbol earnings (legacy fallback path) ────────────────────────────────
+
+def _fetch_symbol_earnings(symbol: str, limit: int = 5) -> "tuple[int, list[date]]":
+    """(HTTP status, dates most-recent-first) from GET /stable/earnings?symbol=. Status 0 = no key or a request
+    error. Never raises."""
+    api_key = _key()
+    if not api_key:
+        return 0, []
+    try:
+        resp = requests.get(f"{_BASE_STABLE}/earnings", params={"symbol": symbol, "apikey": api_key},
+                            timeout=_TIMEOUT)
+        if resp.status_code != 200:
+            return int(resp.status_code), []
+        dates = []
+        for entry in resp.json()[:limit]:
+            d_str = entry.get("date")
+            if d_str:
+                try:
+                    dates.append(date.fromisoformat(str(d_str)[:10]))
+                except Exception as _date_e:
+                    logger.debug("[%s] FMP earnings: date parse failed %r — %s", symbol, d_str, _date_e)
+        return 200, dates
+    except Exception as e:
+        logger.debug(f"[{symbol}] FMP earnings failed: {e}")
+        return 0, []
+
 
 def get_earnings_dates(symbol: str, limit: int = 5) -> list[date]:
     """
@@ -362,20 +389,38 @@ def preload_earnings_week(
                 f"(no scheduled dates or not covered by FMP): {missing}"
             )
 
-        # Persist cache
+        # Persist cache: a locked, atomic, per-symbol MERGE (design record qhm_earnings_dates_fix_2026-10-12.md; two
+        # writers — events/earnings_fetcher and earnings_preflight — used to overwrite each other's scope). Each scanned
+        # symbol records the window it was scanned through, so "scanned, no earnings" differs from "never scanned".
         try:
-            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            cache_payload = {
-                "fetched_at_utc": datetime.now(timezone.utc).isoformat(),
-                "from":           today.isoformat(),
-                "to":             to_date.isoformat(),
-                "data": {sym: [d.isoformat() for d in dates]
-                         for sym, dates in result.items()},
-            }
-            with open(_EARNINGS_CACHE, "w") as f:
-                json.dump(cache_payload, f, indent=2)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            with _earnings_lock():
+                cur = _read_json(_EARNINGS_CACHE)
+                syms = dict(cur.get("symbols") or {}) if isinstance(cur.get("symbols"), dict) else {}
+                for sym in symbol_set:
+                    old = syms.get(sym) if isinstance(syms.get(sym), dict) else None
+                    new_dates = [d.isoformat() for d in result.get(sym, [])]
+                    scanned_to = to_date.isoformat()
+                    # A narrower fresh scan never drops a wider fresh one: the new scan answers its own window, the old
+                    # entry's dates beyond it are kept, and the entry is re-stamped now (adversarial review: keeping the
+                    # old stamp let the whole batch expire mid-session and fan out to per-symbol calls).
+                    if (old is not None and _fresh(old.get("fetched_at_utc"), _EARNINGS_TTL_H)
+                            and str(old.get("scanned_to") or "") > scanned_to):
+                        new_dates = sorted(set(new_dates) | {d for d in (old.get("dates") or []) if str(d) > scanned_to})
+                        scanned_to = str(old.get("scanned_to"))
+                    syms[sym] = {"dates": new_dates, "scanned_to": scanned_to, "fetched_at_utc": now_iso}
+                cache_payload = {
+                    "fetched_at_utc": now_iso,
+                    "from":           today.isoformat(),
+                    "to":             to_date.isoformat(),
+                    "symbols":        syms,
+                    # legacy readers (earnings_preflight audit line, weekly_postmortem): fresh symbols with dates
+                    "data": {k: v["dates"] for k, v in syms.items()
+                             if v.get("dates") and _fresh(v.get("fetched_at_utc"), _EARNINGS_TTL_H)},
+                }
+                _atomic_write_json(_EARNINGS_CACHE, cache_payload)
         except Exception as ce:
-            logger.debug(f"earnings_week cache write failed: {ce}")
+            logger.warning(f"earnings_week cache write failed: {ce}")
 
         n = len(result)
         logger.info(
@@ -389,33 +434,125 @@ def preload_earnings_week(
         return {}
 
 
-def get_cached_earnings_dates(symbol: str) -> list[date]:
-    """
-    Return upcoming earnings dates for a symbol from the pre-loaded cache.
-    Falls back to live get_earnings_dates() on cache miss.
+_EARNINGS_SYMBOL_CACHE = _CACHE_DIR / "earnings_symbol_cache.json"   # per-symbol lookups incl. negatives
+_EARNINGS_SYMBOL_TTL_H = 24          # at most one live per-symbol call per symbol per day (FMP free plan: 250/day)
+_EARNINGS_LOCK = _CACHE_DIR / ".earnings_cache.lock"
 
-    Use this in the entry gate instead of get_earnings_dates() — avoids
-    a live FMP call per symbol during the scan cycle.
-    """
+EARNINGS_DATED = "DATED"                      # a scheduled date is known
+EARNINGS_NONE_IN_WINDOW = "NONE_IN_WINDOW"    # scanned/looked up: no scheduled date in range
+EARNINGS_UNKNOWN = "UNKNOWN"                  # not covered: unscanned for the horizon, plan-blocked, or an error
+
+
+@contextmanager
+def _earnings_lock():
+    """Exclusive cross-process lock around an earnings-cache read-modify-write (writes only; readers rely on the
+    atomic replace). Milliseconds of hold time; no network call inside."""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_EARNINGS_LOCK, "a") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lk, fcntl.LOCK_UN)
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        if path.exists():
+            d = json.loads(path.read_text())
+            return d if isinstance(d, dict) else {}
+    except Exception as e:
+        logger.debug("earnings cache read failed (%s): %s", path.name, e)
+    return {}
+
+
+def _atomic_write_json(path: Path, obj: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(obj, indent=2))
+    os.replace(tmp, path)
+
+
+def _fresh(ts: object, ttl_h: float) -> bool:
+    try:
+        age_h = (datetime.now(timezone.utc).timestamp() - datetime.fromisoformat(str(ts)).timestamp()) / 3600
+        return 0 <= age_h <= ttl_h
+    except Exception:
+        return False
+
+
+def _symbol_lookup(sym: str) -> dict:
+    """Per-symbol earnings via /stable/earnings, cached 24 h INCLUDING negative and failed results. HTTP 402/403
+    (plan restriction) -> UNKNOWN with a WARNING (once per symbol per day, since the result is cached). Never raises."""
+    today = date.today()
+    cache = _read_json(_EARNINGS_SYMBOL_CACHE)
+    e = cache.get(sym)
+    # A request error / timeout (status 0) is retried after 1 h; an answer (200, or a plan block 402/403) is kept 24 h.
+    _ttl = _EARNINGS_SYMBOL_TTL_H if (isinstance(e, dict) and int(e.get("status") or 0) != 0) else 1.0
+    if not (isinstance(e, dict) and _fresh(e.get("fetched_at_utc"), _ttl)):
+        status, dates = _fetch_symbol_earnings(sym)
+        e = {"status": status, "dates": [d.isoformat() for d in dates],
+             "fetched_at_utc": datetime.now(timezone.utc).isoformat()}
+        if status != 200:
+            logger.warning("[%s] FMP per-symbol earnings: HTTP %s%s — earnings date UNKNOWN", sym, status or "error",
+                           " (plan restriction)" if status in (402, 403) else "")
+        try:
+            with _earnings_lock():
+                cur = _read_json(_EARNINGS_SYMBOL_CACHE)
+                cur[sym] = e
+                _atomic_write_json(_EARNINGS_SYMBOL_CACHE, cur)
+        except Exception as we:
+            logger.warning("[%s] earnings symbol cache write failed: %s", sym, we)
+    if int(e.get("status") or 0) != 200:
+        return {"state": EARNINGS_UNKNOWN, "dates": [], "source": "fmp_symbol"}
+    dates = []
+    for d in e.get("dates") or []:
+        try:
+            dates.append(date.fromisoformat(str(d)[:10]))
+        except ValueError:
+            continue
+    upcoming = [d for d in dates if d >= today]
+    return {"state": EARNINGS_DATED if upcoming else EARNINGS_NONE_IN_WINDOW, "dates": dates,
+            "source": "fmp_symbol"}
+
+
+def get_symbol_earnings_info(symbol: str) -> dict:
+    """The per-symbol FMP answer only (cached 24 h; a plan block or error is UNKNOWN). For a held position whose batch
+    answer is "none": the batch calendar is sparse on this plan (LLY reports in the window but is absent), so its
+    "none" is not authoritative for a hold. Never raises."""
+    try:
+        return _symbol_lookup(symbol.upper())
+    except Exception as ex:
+        logger.warning("[%s] per-symbol earnings info failed: %s", symbol, ex)
+        return {"state": EARNINGS_UNKNOWN, "dates": [], "source": "error"}
+
+
+def get_earnings_info(symbol: str, min_horizon_days: int = 0) -> dict:
+    """{"state": DATED | NONE_IN_WINDOW | UNKNOWN, "dates": [date, ...], "source": ...} for `symbol`.
+
+    The batch cache answers only for a symbol it SCANNED, while fresh, through at least today + min_horizon_days
+    (QHM's pre-earnings trim needs 21 days). Anything else — never scanned, scanned too short, stale — goes to the
+    per-symbol lookup (cached 24 h, negatives included). UNKNOWN is never reported as "no earnings" (design record
+    logs/design_records/qhm_earnings_dates_fix_2026-10-12.md). Never raises."""
     sym = symbol.upper()
     try:
-        if _EARNINGS_CACHE.exists():
-            with open(_EARNINGS_CACHE) as f:
-                cache = json.load(f)
-            # Check cache freshness
-            fetched = cache.get("fetched_at_utc")
-            if fetched:
-                age_h = (datetime.now(timezone.utc).timestamp() -
-                         datetime.fromisoformat(fetched).timestamp()) / 3600
-                if age_h <= _EARNINGS_TTL_H:
-                    raw = cache.get("data", {}).get(sym, [])
-                    return [date.fromisoformat(d) for d in raw]
-    except Exception as e:
-        logger.debug(f"[{sym}] earnings cache read failed: {e}")
+        need_to = (date.today() + timedelta(days=max(0, int(min_horizon_days)))).isoformat()
+        e = (_read_json(_EARNINGS_CACHE).get("symbols") or {}).get(sym)
+        if (isinstance(e, dict) and _fresh(e.get("fetched_at_utc"), _EARNINGS_TTL_H)
+                and str(e.get("scanned_to") or "") >= need_to):
+            dates = [date.fromisoformat(str(d)[:10]) for d in (e.get("dates") or [])]
+            return {"state": EARNINGS_DATED if dates else EARNINGS_NONE_IN_WINDOW, "dates": dates,
+                    "source": "fmp_batch"}
+        return _symbol_lookup(sym)
+    except Exception as ex:
+        logger.warning("[%s] earnings info failed: %s", sym, ex)
+        return {"state": EARNINGS_UNKNOWN, "dates": [], "source": "error"}
 
-    # Cache miss / stale → fall back to live call
-    logger.debug(f"[{sym}] earnings cache miss — falling back to live FMP call")
-    return get_earnings_dates(sym)
+
+def get_cached_earnings_dates(symbol: str) -> list[date]:
+    """Earnings dates for a symbol (legacy list contract): the dates from get_earnings_info, [] when none are known.
+    Callers that must tell "no earnings" from "unknown" use get_earnings_info."""
+    return list(get_earnings_info(symbol).get("dates") or [])
 
 
 # ── Analyst sentiment (institutional signal proxy) ────────────────────────────

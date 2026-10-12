@@ -155,6 +155,9 @@ _EARNINGS_TRIM_TIER2_MULT           = 2.0    # Tier 2 fires at this multiple of 
 _EARNINGS_TRIM_ATR_FALLBACK_MULT    = 6.25   # fallback target = this x the 14-week ATR (as % of price), when option data is unavailable. Derived: the intraday target:stop ratio's upper end (2.5x, since this is explicitly WIDER than intraday) applied to QHM's own 2.5x-ATR stop basis = 2.5 * 2.5 = 6.25x ATR — not an invented number.
 _EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS = 21  # never evaluate the trim further out than this even if a run-up is underway (board+GAI dynamic-window outer bound, 2026-08-05); the existing 5-day stop-cancel gate (_maybe_enter_earnings_hold) naturally takes over from this mechanism once a position leaves ACTIVE state
 _EARNINGS_TRIM_STATE_PATH           = _ROOT / "data" / "state" / "qhm_earnings_trim.json"
+# Earnings-date source log + UNKNOWN page, once per symbol per ET day (design record
+# logs/design_records/qhm_earnings_dates_fix_2026-10-12.md).
+_EARNINGS_SRC_LOGGED: dict = {}
 
 _DIP_ADD_ENABLED           = True   # LIVE (Rafael 2026-07-13): adds on dips below avg
 _DIP_ADD_RUNG_A_PCT        = 0.02   # <= cost_avg*(1-0.02): small add, capped AT target
@@ -2103,20 +2106,81 @@ class QuarterlyHoldManager:
     # Earnings protection helpers
     # -----------------------------------------------------------------------
 
+    def _next_earnings(self, symbol: str) -> "tuple[Optional[date], str]":
+        """(next earnings date or None, source "fmp" | "config" | "unknown") for a hold — design record
+        logs/design_records/qhm_earnings_dates_fix_2026-10-12.md (board Thorp + McKinney, GAI):
+          1. FMP (T2) via get_earnings_info, scanned through QHM's 21-day trim horizon -> "fmp" when DATED;
+          2. else this pick's `earnings_exit_before` from quarterly_holds_config.json if today-or-later -> "config"
+             (stale past config dates are ignored);
+          3. else (None, "unknown"), paged once per symbol per day.
+        A "config" date may drive the pre-earnings trim, never the stop cancel. Logs one source line per symbol per
+        day (post-live proof). Never raises."""
+        today = self._now_et().date()
+        nxt: Optional[date] = None
+        src = "unknown"
+        fmp_state = "?"
+        try:
+            from data.fmp_client import get_earnings_info, get_symbol_earnings_info, EARNINGS_DATED
+            info = get_earnings_info(symbol, min_horizon_days=_EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS)
+            if info.get("state") != EARNINGS_DATED or not any(d >= today for d in (info.get("dates") or [])):
+                # The batch calendar is sparse on this plan (adversarial review: LLY reports in the window yet is absent),
+                # so a batch "none" is not authoritative for a hold: ask the per-symbol endpoint (cached 24 h). A
+                # per-symbol 200 is authoritative (its past dates show a report already happened); only a per-symbol
+                # UNKNOWN (plan block / error) falls through to the config date below.
+                info = get_symbol_earnings_info(symbol)
+            fmp_state = str(info.get("state"))
+            upcoming = sorted(d for d in (info.get("dates") or []) if d >= today)
+            if info.get("state") == EARNINGS_DATED and upcoming:
+                nxt, src = upcoming[0], "fmp"
+        except Exception as e:  # RC-3
+            logger.warning("QHM earnings: %s FMP earnings info failed: %s", symbol, e)
+        if nxt is None and fmp_state not in ("NONE_IN_WINDOW", "DATED"):
+            try:
+                cfg = json.loads(_CONFIG_PATH.read_text()) if _CONFIG_PATH.exists() else {}
+                raw = ((cfg.get("picks") or {}).get(symbol) or {}).get("earnings_exit_before")
+                if raw:
+                    cd = date.fromisoformat(str(raw)[:10])
+                    if cd >= today:
+                        nxt, src = cd, "config"
+            except Exception as e:  # RC-3
+                logger.warning("QHM earnings: %s config earnings date unreadable: %s", symbol, e)
+        if nxt is None and fmp_state == "NONE_IN_WINDOW":
+            src = "none_in_window"   # FMP affirmatively has no report in the window (e.g. just after one) — not unknown
+        key = (symbol, today.isoformat())
+        if key not in _EARNINGS_SRC_LOGGED:
+            _EARNINGS_SRC_LOGGED[key] = True
+            logger.info("QHM earnings sym=%s next=%s src=%s fmp_state=%s horizon=%d", symbol,
+                        nxt.isoformat() if nxt else "none", src, fmp_state, _EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS)
+            if nxt is None and src == "unknown":   # cold-2nd: never page on an affirmative "none in window"
+                self._alert(f"⚠️ QHM: {symbol} earnings date UNKNOWN (FMP {fmp_state}, no usable config date) — "
+                            f"stop kept; pre-earnings trim cannot run. Check the report date.")
+        return nxt, src
+
     def _maybe_enter_earnings_hold(self, pos: HoldPosition) -> None:
         """Cancel GTC stop if earnings within 5 calendar days. Gate on confirmed cancel.
         Harris: cancel failure must not advance state.
         DS: verify position still exists after cancel (cancel-fill race guard).
+        DISABLED unless config.QHM_EARNINGS_STOP_CANCEL_ENABLED is True (default False: the stop stays on through
+        earnings until the CEO ratifies the stopless window — design record qhm_earnings_dates_fix_2026-10-12.md), and
+        then only on an FMP (T2) date — a config-only date never cancels a stop.
         """
         if pos.state != HoldState.ACTIVE:
             return
         try:
-            from data.fmp_client import get_cached_earnings_dates
+            import config as _qcfg
             today = self._now_et().date()
-            earnings_dates = get_cached_earnings_dates(pos.symbol)
-            upcoming = sorted([d for d in earnings_dates if d >= today])
-            if not upcoming or (upcoming[0] - today).days > 5:
+            nxt, src = self._next_earnings(pos.symbol)
+            if nxt is None or (nxt - today).days > 5:
                 return
+            if getattr(_qcfg, "QHM_EARNINGS_STOP_CANCEL_ENABLED", False) is not True or src != "fmp":
+                key = (pos.symbol, today.isoformat(), "stop_kept")
+                if key not in _EARNINGS_SRC_LOGGED:
+                    _EARNINGS_SRC_LOGGED[key] = True
+                    logger.info("QuarterlyHoldManager: %s earnings %s (%s, %d days) — stop KEPT through earnings "
+                                "(pre-earnings stop cancel disabled or date not FMP-confirmed)",
+                                pos.symbol, nxt, src, (nxt - today).days)
+                return
+            upcoming = [nxt]
             logger.info(
                 "QuarterlyHoldManager: %s earnings on %s (%d days away) — "
                 "attempting GTC stop cancel, state→PENDING_EARNINGS",
@@ -3017,13 +3081,12 @@ class QuarterlyHoldManager:
                     or pos.avg_entry_price <= 0 or pos.direction != "long"):
                 return False
 
-            from data.fmp_client import get_cached_earnings_dates
             today = self._now_et().date()
-            earnings_dates = get_cached_earnings_dates(pos.symbol)
-            upcoming = sorted([d for d in earnings_dates if d >= today])
-            if not upcoming:
+            # FMP date, else a today-or-later config date (a trim only reduces exposure — board Thorp/McKinney + GAI).
+            _nxt, _src = self._next_earnings(pos.symbol)
+            if _nxt is None:
                 return False
-            gate_date = upcoming[0]
+            gate_date = _nxt
             days_to_earnings = (gate_date - today).days
             if days_to_earnings > _EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS:
                 return False  # outside the outer bound — mechanism not active this cycle
@@ -3112,6 +3175,11 @@ class QuarterlyHoldManager:
 
             tier1_status = sym_state.get("tier1", "none")
             tier2_status = sym_state.get("tier2", "none")
+            if pos.qty_filled < 2 and tier1_status == "none" and tier2_status == "none":
+                # Tier 1 always leaves a remainder (trim_qty = qty - 1 -> 0 for a 1-share hold), so a 1-share hold that has
+                # not trimmed yet can never trim: report the window closed so the trailing lock keeps protecting gains
+                # (adversarial review). A hold already trimmed to its last share keeps its pending Tier 2.
+                return False
             if tier1_status not in ("none", "reserved", "done") or tier2_status not in (
                 "none", "reserved", "done",
             ):
