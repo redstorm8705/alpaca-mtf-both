@@ -7,6 +7,7 @@ when moving to live. Also update ALPACA_API_KEY / ALPACA_SECRET_KEY in .env.
 """
 
 import os
+import sys
 import time
 import uuid
 import logging
@@ -120,8 +121,22 @@ def _make_idem_id(tier: str, symbol: str, side: str) -> str:
         return make_coid("intraday", symbol, side, _epoch, _uniq)
 
 
+def _under_test() -> bool:
+    """True when this process is a test run (same signals as alerts._under_test): MTF_TEST_MODE=1 (tests/__init__.py,
+    tests/conftest.py), pytest loaded, or a test-runner entry point. None occurs in a production process."""
+    if os.getenv("MTF_TEST_MODE") == "1" or "pytest" in sys.modules:
+        return True
+    argv0 = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    return "unittest" in argv0 or "pytest" in argv0 or argv0.startswith("test_")
+
+
 def _get_trading_client() -> TradingClient:
     global _trading_client
+    if _under_test():
+        # 2026-10-12: an unmocked test path (place_entry -> submit_bracket_entry) placed 4 REAL paper bracket orders for
+        # UBER from a developer machine (72 sh, ~1.9x equity, buying power -> $0 for a whole session). A test process may
+        # never build a real trading client — any order/account call that is not mocked fails here instead.
+        raise RuntimeError("real Alpaca TradingClient refused in a test process (mock the broker call)")
     if _trading_client is None:
         _trading_client = TradingClient(
             api_key=os.getenv("ALPACA_API_KEY"),

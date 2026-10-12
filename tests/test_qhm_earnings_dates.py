@@ -19,7 +19,8 @@ import config
 from data import fmp_client as fc
 from execution import quarterly_hold_manager as qhm
 
-TODAY = date.today()
+TODAY = date.today()                                             # fmp_client's calendar (server date)
+TODAY_ET = datetime.now(ZoneInfo("America/New_York")).date()     # QHM's calendar (ET)
 
 
 def _resp(status, payload):
@@ -111,30 +112,30 @@ class QhmNextEarnings(unittest.TestCase):
         return out, alert
 
     def test_fmp_date_wins(self):
-        d = TODAY + timedelta(days=4)
-        out, _ = self._run({"state": "DATED", "dates": [d]}, (TODAY + timedelta(days=9)).isoformat())
+        d = TODAY_ET + timedelta(days=4)
+        out, _ = self._run({"state": "DATED", "dates": [d]}, (TODAY_ET + timedelta(days=9)).isoformat())
         self.assertEqual(out, (d, "fmp"))
 
     def test_future_config_date_when_fmp_unknown(self):
-        cd = TODAY + timedelta(days=9)
+        cd = TODAY_ET + timedelta(days=9)
         out, alert = self._run({"state": "UNKNOWN", "dates": []}, cd.isoformat())
         self.assertEqual(out, (cd, "config"))
         alert.assert_not_called()
 
     def test_past_config_date_is_unknown_and_pages(self):
-        out, alert = self._run({"state": "UNKNOWN", "dates": []}, (TODAY - timedelta(days=30)).isoformat())
+        out, alert = self._run({"state": "UNKNOWN", "dates": []}, (TODAY_ET - timedelta(days=30)).isoformat())
         self.assertEqual(out, (None, "unknown"))
         alert.assert_called_once()
 
 
     def test_affirmative_none_does_not_page(self):
-        out, alert = self._run({"state": "NONE_IN_WINDOW", "dates": []}, (TODAY - timedelta(days=2)).isoformat())
+        out, alert = self._run({"state": "NONE_IN_WINDOW", "dates": []}, (TODAY_ET - timedelta(days=2)).isoformat())
         self.assertEqual(out, (None, "none_in_window"))
         alert.assert_not_called()
 
     def test_batch_none_asks_per_symbol_and_plan_block_uses_config(self):
         # LLY: absent from the sparse batch calendar, per-symbol 402 -> config date
-        cd = TODAY + timedelta(days=17)
+        cd = TODAY_ET + timedelta(days=17)
         out, _ = self._run({"state": "NONE_IN_WINDOW", "dates": [], "source": "fmp_batch"}, cd.isoformat(),
                            sym_info={"state": "UNKNOWN", "dates": []})
         self.assertEqual(out, (cd, "config"))
@@ -142,22 +143,22 @@ class QhmNextEarnings(unittest.TestCase):
     def test_report_already_happened_beats_a_stale_config_date(self):
         # GE on the day after its report: per-symbol shows the past report and the next one months out ->
         # the config date (today) is NOT used.
-        nxt = TODAY + timedelta(days=95)
-        out, _ = self._run({"state": "NONE_IN_WINDOW", "dates": [], "source": "fmp_batch"}, TODAY.isoformat(),
-                           sym_info={"state": "DATED", "dates": [nxt, TODAY - timedelta(days=1)]})
+        nxt = TODAY_ET + timedelta(days=95)
+        out, _ = self._run({"state": "NONE_IN_WINDOW", "dates": [], "source": "fmp_batch"}, TODAY_ET.isoformat(),
+                           sym_info={"state": "DATED", "dates": [nxt, TODAY_ET - timedelta(days=1)]})
         self.assertEqual(out, (nxt, "fmp"))
 
     def test_batch_with_only_a_past_date_asks_per_symbol(self):
-        nxt = TODAY + timedelta(days=90)
-        out, alert = self._run({"state": "DATED", "dates": [TODAY - timedelta(days=1)], "source": "fmp_batch"},
-                               (TODAY - timedelta(days=1)).isoformat(), sym_info={"state": "DATED", "dates": [nxt]})
+        nxt = TODAY_ET + timedelta(days=90)
+        out, alert = self._run({"state": "DATED", "dates": [TODAY_ET - timedelta(days=1)], "source": "fmp_batch"},
+                               (TODAY_ET - timedelta(days=1)).isoformat(), sym_info={"state": "DATED", "dates": [nxt]})
         self.assertEqual(out, (nxt, "fmp"))
         alert.assert_not_called()
 
     def test_per_symbol_none_does_not_fall_back_to_config(self):
         out, _ = self._run({"state": "NONE_IN_WINDOW", "dates": [], "source": "fmp_batch"},
-                           (TODAY + timedelta(days=3)).isoformat(),
-                           sym_info={"state": "NONE_IN_WINDOW", "dates": [TODAY - timedelta(days=1)]})
+                           (TODAY_ET + timedelta(days=3)).isoformat(),
+                           sym_info={"state": "NONE_IN_WINDOW", "dates": [TODAY_ET - timedelta(days=1)]})
         self.assertEqual(out, (None, "none_in_window"))
 
 
@@ -166,7 +167,7 @@ class QhmTrimWindowOneShare(unittest.TestCase):
     must keep running); a hold already trimmed to its last share keeps its pending Tier 2 (window active)."""
 
     def _run(self, trim_state, live_price=None):
-        gate = TODAY + timedelta(days=5)
+        gate = TODAY_ET + timedelta(days=5)
         pos = SimpleNamespace(state=qhm.HoldState.ACTIVE, qty_filled=1, avg_entry_price=300.0, direction="long",
                               symbol="GE")
         me = SimpleNamespace(dry_run=False, _next_earnings=lambda s: (gate, "fmp"),
@@ -176,7 +177,7 @@ class QhmTrimWindowOneShare(unittest.TestCase):
                              _get_live_price=lambda s: live_price,
                              _execute_earnings_trim_tier2=mock.Mock())
         with mock.patch("execution.broker.is_market_open", return_value=True):
-            return qhm.QuarterlyHoldManager._maybe_earnings_trim(me, pos, TODAY.isoformat()), me
+            return qhm.QuarterlyHoldManager._maybe_earnings_trim(me, pos, TODAY_ET.isoformat()), me
 
     def test_untrimmed_one_share_hold_reports_the_window_closed(self):
         out, _ = self._run({"tier1": "none", "tier2": "none"})
@@ -220,7 +221,7 @@ class QhmStopCancelGate(unittest.TestCase):
         broker.get_position.return_value = object()
         me = SimpleNamespace(_now_et=lambda: datetime.now(ZoneInfo("America/New_York")), dry_run=False, broker=broker,
                              _alert=mock.Mock(), _save_state=mock.Mock(),
-                             _next_earnings=lambda s: (TODAY + timedelta(days=days), src))
+                             _next_earnings=lambda s: (TODAY_ET + timedelta(days=days), src))
         qhm._EARNINGS_SRC_LOGGED.clear()
         with mock.patch.object(config, "QHM_EARNINGS_STOP_CANCEL_ENABLED", flag), \
                 mock.patch("execution.broker.cancel_order") as cancel:
