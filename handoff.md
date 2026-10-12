@@ -8,6 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-12, Claude signed) — Track B: RETIRE recommended, awaiting Rafael
+
+Core-signal review (logs/trackb_core_review_2026-10-11.json): Track B -0.061R per trade over 2,791 replayed trades
+(t -2.59), no better than entering every gap mover; none of 24 variants holds up. Board Simons + Brandt + GAI: retire
+(DAYTRADE_TRACK_B_ENABLED=False). Proposal sent to Rafael 2026-10-12. Record:
+logs/design_records/day_tier_track_b_review_2026-10-11.md (last section).
+
+**⏩ EXACT NEXT ACTION:** on Rafael's approval: config flip through the full gate (cold-2nd must confirm Track A sizing
+stays inside its existing caps), deploy. Monday 10/12 close: post-live evaluator + cohold summary. Then: RIDE time
+stop (wider replay first).
+
 ## ⏩ LATEST (2026-10-11, OpenAI Codex signed) — canonical weekly tier/lifecycle truth live (#608)
 
 The weekly post-mortem now consumes the canonical Alpaca fills+orders FIFO snapshot once and reports two
