@@ -67,7 +67,7 @@ def simulate(path: pd.DataFrame, direction: str, entry: float, stop: float, targ
     r = abs(entry - stop)
     tgt = None if target_r is None else (entry - target_r * r if direction == "short" else entry + target_r * r)
     exit_px, how = None, "eod"
-    for o, h, low in zip(path["open"].values, path["high"].values, path["low"].values):
+    for o, h, low in zip(path["open"].values, path["high"].values, path["low"].values, strict=True):
         o, h, low = float(o), float(h), float(low)
         if direction == "short":
             if h >= stop:
