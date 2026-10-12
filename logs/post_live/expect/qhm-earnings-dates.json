@@ -1,0 +1,11 @@
+{
+  "change": "qhm-earnings-dates",
+  "tier": 1,
+  "paths": ["data/fmp_client.py", "execution/quarterly_hold_manager.py", "events/earnings_fetcher.py", "earnings_preflight.py", "config.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "QHM earnings sym=[A-Z]+ next=\\S+ src=(fmp|config|none_in_window|unknown)"}],
+  "baseline_exempt_reason": "the 'QHM earnings sym=... src=...' line is new in this change; the baseline check confirms zero existing matches",
+  "expected_rate": "one line per active QHM hold per ET day during RTH (GE src=fmp next=2026-10-20, GOOGL src=fmp next=2026-10-28, LLY src=config next=2026-10-29)",
+  "window_sessions": 2,
+  "window_reason": "QHM evaluates every active hold every cycle; two sessions without the line means the wiring is broken",
+  "reversal": "any QHM protective stop cancelled before earnings while QHM_EARNINGS_STOP_CANCEL_ENABLED is False; GE/GOOGL showing src=unknown when FMP has a date; daily FMP calls approaching 250"
+}

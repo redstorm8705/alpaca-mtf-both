@@ -405,6 +405,13 @@ VIX_STOP_WIDEN_MULT_2      = 2.0
 VIX_BE_WIDEN_THRESHOLD_1 = 20.0   # VIX ≥ 20 → 0.40×ATR buffer
 VIX_BE_WIDEN_THRESHOLD_2 = 30.0   # VIX ≥ 30 → 0.50×ATR buffer
 
+# QHM PRE-EARNINGS STOP CANCEL (execution/quarterly_hold_manager.py _maybe_enter_earnings_hold). False = a QHM hold keeps
+# its protective stop through earnings. Restoring QHM earnings dates (design record
+# logs/design_records/qhm_earnings_dates_fix_2026-10-12.md) would otherwise cancel GE's stop ~10/15 and LLY's (~92% of
+# equity) ~10/24; board Thorp + McKinney + GAI: the stopless earnings window needs the CEO's ratification. True
+# restores the old cancel, and then only on an FMP-confirmed date (a config-only date never cancels a stop).
+QHM_EARNINGS_STOP_CANCEL_ENABLED = False
+
 # ── FOREVER-6 STARTER TIER (Rafael 2026-07-13, BGG-locked: logs/f6_starter_bgg_2026-07-13.md) ──
 # A never-sell conviction tier ABOVE QHM. The STARTER rule ESTABLISHES 1-3 anchor names on a
 # market-wide dip. CASH-ONLY (no margin — the cold board proved margin makes the never-sell book a
