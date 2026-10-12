@@ -8,6 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-12, Claude signed) — QHM earnings-date bug; Track B deferred by Rafael
+
+Rafael DEFERRED the Track B retire (keep collecting; optimize: execution logging, limit-at-level replay, meta-label).
+QHM holds get no earnings dates (design record logs/design_records/qhm_earnings_dates_fix_2026-10-12.md): GE reports
+10/20; trims and the earnings gate are blind; restoring dates would also arm the pre-earnings STOP CANCEL (LLY ~92% of
+equity). BGG consensus recorded; stop-cancel goes to Rafael.
+
+**⏩ EXACT NEXT ACTION:** build the earnings-date fix (three states, locked merge write, 24 h negative cache, config date
+for entries/trims only, stop-cancel flag OFF pending Rafael) through the full gate before GE's window (~10/15). Then
+Track B execution logging.
+
 ## ⏩ LATEST (2026-10-12, Claude signed) — Track B: RETIRE recommended, awaiting Rafael
 
 Core-signal review (logs/trackb_core_review_2026-10-11.json): Track B -0.061R per trade over 2,791 replayed trades
