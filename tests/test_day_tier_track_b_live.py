@@ -149,6 +149,8 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         oco = SimpleNamespace(id="TP1", legs=[SimpleNamespace(id="ST1", order_type="stop", type="stop")])
         oco_submit = mock.Mock(return_value=oco)
         self.last_oco_submit = oco_submit
+        bracket = mock.Mock(return_value=None)   # co-held entries go through the bracket submit (never the real one)
+        self.last_bracket = bracket
         trigger = {"trigger": "ENTER", "direction": "long", "mode": "DRIVE", "entry_ref": 70.0,
                    "target": None, "wall_ref": 69.0}
         if trigger_override:
@@ -211,6 +213,7 @@ class PlaceEntryTrackThreading(unittest.TestCase):
             mock.patch.object(broker, "cancel_open_orders_for_symbol", return_value=0),
             mock.patch.object(broker, "get_open_position", return_value=pos),
             mock.patch.object(broker, "submit_oco_exit", oco_submit),
+            mock.patch.object(broker, "submit_bracket_entry", bracket),
             mock.patch.object(dtm, "flatten_position", flattened),
             mock.patch.object(dtm, "_submit_verified_plain_stop", emergency_stop),
             mock.patch.object(dtm, "_durable_exit_recorded",
@@ -468,11 +471,15 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         self.assertEqual(log_track, "B")
 
     def test_same_side_co_hold_with_another_tier_is_skipped(self):
-        # 2026-10-07 interim: a live same-side position the day tier does not own -> no entry (no co-hold)
+        # The DAYTRADE_NO_COHOLD kill-flag path (True restores the 2026-10-07 guard): a live same-side position the day
+        # tier does not own -> no entry. Pinned explicitly: with the flag False (live since 2026-10-11) this harness
+        # used to reach the REAL bracket submit and placed 4 paper UBER orders (2026-10-12).
         other = SimpleNamespace(symbol="UBER", side="long", qty="3", current_price=70.0, market_value=210.0)
-        ok, qty, _, _ = self._run("A", positions=[other])
+        with mock.patch.object(config, "DAYTRADE_NO_COHOLD", True):
+            ok, qty, _, _ = self._run("A", positions=[other])
         self.assertFalse(ok)
         self.assertIsNone(qty)
+        self.last_bracket.assert_not_called()   # skipped by the guard, not by a failed submit (adversarial review)
 
     def test_track_a_unchanged(self):
         ok, qty, log_track, state_track = self._run("A")

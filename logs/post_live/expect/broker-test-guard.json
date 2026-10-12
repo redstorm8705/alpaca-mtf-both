@@ -1,0 +1,11 @@
+{
+  "change": "broker-test-guard",
+  "tier": 1,
+  "paths": ["execution/broker.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "\\[CYCLE\\] duration=[0-9]+s"}],
+  "baseline_exempt_reason": "the guard must never fire in production, so its proof is the main loop still completing cycles (and placing orders) after deploy; the reversal is any 'real Alpaca TradingClient refused' line in a production log",
+  "expected_rate": "every main-loop cycle (5 min in RTH)",
+  "window_sessions": 1,
+  "window_reason": "a false positive would stop all broker calls on the first cycle; one session is enough to see it",
+  "reversal": "any 'real Alpaca TradingClient refused' in logs/mtf_bot.log or the Day-tier runner log; no orders placed by any tier on a normal session"
+}
