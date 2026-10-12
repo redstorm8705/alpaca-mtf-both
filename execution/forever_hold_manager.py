@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -47,6 +49,25 @@ _SYNC_DEGRADED = _ROOT / "data" / "state" / "forever6_sync_degraded.json"
 # reserve/confirm transition vs. once per starter event).
 _TRIM_STATE = _ROOT / "data" / "state" / "forever6_trims.json"
 _EPS = 1e-6
+# Process-local half of the startup interlock.  Durable state protects restarts;
+# this boolean also fails closed if persisting that state itself fails.
+_STARTUP_READY = False
+
+
+@dataclass(frozen=True)
+class F6StartupReconcileResult:
+    """Exact startup ownership verdict for the F6 order path.
+
+    ``ready`` is deliberately narrow: it means the full tagged-fill replay healed,
+    every F6 ledger claim agrees with the broker net, and no F6-tagged order is
+    still open.  It does not enable the tier; the launch flag remains a separate,
+    fully gated change.
+    """
+
+    ready: bool
+    symbols_reconciled: tuple[str, ...] = ()
+    pending_order_ids: tuple[str, ...] = ()
+    reason: str = ""
 
 
 class _TrimStateUnreadable(Exception):
@@ -78,7 +99,7 @@ def _read_sync_degraded() -> bool:
     return False
 
 
-def _write_sync_degraded(degraded: bool, detail: str = "") -> None:
+def _write_sync_degraded(degraded: bool, detail: str = "") -> bool:
     """Atomic tmp→fsync→replace (RC-5). A write failure is logged LOUDLY: if we meant to
     SET degraded and the write fails, the next seed may proceed unblocked — so escalate."""
     try:
@@ -90,11 +111,13 @@ def _write_sync_degraded(degraded: bool, detail: str = "") -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(str(tmp), str(_SYNC_DEGRADED))
+        return True
     except Exception as e:
         logger.error("forever6: sync-degraded write failed (degraded=%s): %s", degraded, e)
         if degraded:
             _slack_safe(f":rotating_light: F6 could not persist sync-degraded flag ({e}) "
                         f"— next seed may NOT be auto-blocked; verify manually.")
+        return False
 
 # Reserve slightly MORE than the planned price per leg so a market-order fill above the planned
 # price can never push cumulative spend past `spendable` and breach the cash floor (GAI pre-ship
@@ -119,6 +142,112 @@ class ForeverHoldManager:
     def __init__(self, broker) -> None:
         self.broker = broker
         self.universe = list(config.FOREVER6_UNIVERSE)
+
+    def reconcile_on_startup(self) -> F6StartupReconcileResult:
+        """Rebuild and verify F6 ownership before any F6 action after restart.
+
+        The full ledger replay joins fills to exact F6 client-order IDs.  A clean
+        replay alone is insufficient: an accepted/part-filled order can still fill
+        later, so any open F6-tagged order makes ownership unresolved.  On every
+        ambiguity this method persists the existing sync-degraded interlock, which
+        blocks F6 starters and trims until a later clean startup/preflight clears it.
+
+        This method never raises into ``main``.  It sends no orders and never edits
+        a tier claim directly; ``run_ledger_sync.sync_once`` remains the one replay
+        authority.
+        """
+
+        global _STARTUP_READY
+        _STARTUP_READY = False
+        try:
+            import run_ledger_sync as _rls
+            from execution import ownership_guard as _og
+
+            sync = _rls.sync_once()
+            if not sync.get("ok") or not sync.get("healed"):
+                return self._startup_reconcile_failed(
+                    f"full ledger replay failed: {sync.get('reason') or sync.get('error') or sync}"
+                )
+
+            open_orders = self.broker.get_open_orders()
+            if open_orders is None:
+                return self._startup_reconcile_failed("open-order read failed")
+
+            pending: list[str] = []
+            for order in open_orders:
+                coid = getattr(order, "client_order_id", None)
+                if coid is None and isinstance(order, dict):
+                    coid = order.get("client_order_id")
+                if _og.tier_of_coid(coid) != "forever6":
+                    continue
+                oid = getattr(order, "id", None)
+                if oid is None and isinstance(order, dict):
+                    oid = order.get("id")
+                pending.append(str(oid or coid or "unknown"))
+            if pending:
+                return self._startup_reconcile_failed(
+                    "F6-tagged order(s) still open",
+                    pending=tuple(sorted(pending)),
+                )
+
+            ledger = _og.load_ledger()
+            reconciled: list[str] = []
+            for symbol, entry in ledger.get("positions", {}).items():
+                own = _og.tier_qty(ledger, symbol, "forever6")
+                if own <= _EPS:
+                    continue
+                net = float(entry.get("alpaca_net_qty", 0.0) or 0.0)
+                drift = float(entry.get("drift", 0.0) or 0.0)
+                if (
+                    not math.isfinite(own)
+                    or not math.isfinite(net)
+                    or not math.isfinite(drift)
+                    or own < -_EPS
+                    or abs(own - round(own)) > _EPS
+                    or net < own - _EPS
+                    or abs(drift) > _EPS
+                ):
+                    return self._startup_reconcile_failed(
+                        f"ownership mismatch {symbol}: f6={own} net={net} drift={drift}"
+                    )
+                reconciled.append(str(symbol).upper())
+
+            if not _write_sync_degraded(False, "startup ownership reconciled"):
+                return self._startup_reconcile_failed(
+                    "could not persist the clean startup ownership verdict"
+                )
+            _STARTUP_READY = True
+            result = F6StartupReconcileResult(
+                ready=True,
+                symbols_reconciled=tuple(sorted(reconciled)),
+                reason="ok",
+            )
+            logger.info(
+                "[F6] startup ownership reconcile OK: %d symbol(s), no pending F6 orders",
+                len(result.symbols_reconciled),
+            )
+            return result
+        except Exception as exc:
+            return self._startup_reconcile_failed(f"unexpected startup error: {exc}")
+
+    def _startup_reconcile_failed(
+        self,
+        reason: str,
+        pending: tuple[str, ...] = (),
+    ) -> F6StartupReconcileResult:
+        """Persist and report an ownership ambiguity without ever raising."""
+
+        logger.critical("[F6] startup ownership reconcile BLOCKED: %s", reason)
+        _write_sync_degraded(True, f"startup reconcile: {reason}")
+        _slack_safe(
+            ":rotating_light: F6 startup ownership reconcile BLOCKED — "
+            f"{reason}. F6 orders remain disabled until a clean reconcile."
+        )
+        return F6StartupReconcileResult(
+            ready=False,
+            pending_order_ids=pending,
+            reason=reason,
+        )
 
     # ── state (per-month event cap) ────────────────────────────────────────────
     def _load_state(self) -> dict:
@@ -226,10 +355,22 @@ class ForeverHoldManager:
         if not plan:
             return {"placed": [], "skipped": [], "spent": 0.0, "reason": "empty plan"}
 
+        if config.FOREVER6_ENABLED and not _STARTUP_READY:
+            logger.critical(
+                "[F6] execute_starter BLOCKED — this process has not passed the exact "
+                "startup ownership preflight."
+            )
+            return {
+                "placed": [],
+                "skipped": list(plan),
+                "spent": 0.0,
+                "reason": "startup ownership preflight not ready",
+            }
+
         # C-3 (design 2026-07-17): refuse to place if a prior post-buy sync left the ledger
         # degraded (a fresh F6 lot unreflected). Blocks a BUY only — never a sell — the safe
         # direction for a never-sell book. Auto-cleared when a later sync verifies clean (C-2).
-        if _read_sync_degraded():
+        if (config.FOREVER6_ENABLED and not _STARTUP_READY) or _read_sync_degraded():
             logger.critical("[F6] execute_starter BLOCKED — prior F6 sync degraded (a fresh "
                             "lot was left unreflected in the ledger). Not placing; resolve first.")
             _slack_safe(":rotating_light: F6 seed BLOCKED — prior sync degraded; further F6 "
@@ -537,6 +678,12 @@ class ForeverHoldManager:
         _verify_ledger_reflects pattern.
         """
         results: dict[str, dict] = {}
+        if (config.FOREVER6_ENABLED and not _STARTUP_READY) or _read_sync_degraded():
+            logger.critical(
+                "[F6] trim evaluation BLOCKED — ownership sync is degraded; "
+                "a discretionary trim cannot run against ambiguous tier quantity."
+            )
+            return results
         try:
             from execution import ownership_guard as _og
         except Exception as e:
