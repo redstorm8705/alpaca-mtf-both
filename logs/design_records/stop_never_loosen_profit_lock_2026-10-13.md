@@ -62,4 +62,5 @@
 - **A:** cold-2nd FAIL (0C pull-back) -> fixed -> PASS. Masked-loss seat FAIL (Kelly R via trade["stop"]) ->
   fixed (`original_stop` frozen).
 - **B:** cold-2nd PASS. Masked-loss seat FAIL (lock on a reconciliation-booked loss) -> fixed (gate on price past
-  T1, breakeven floor).
+  T1, breakeven floor). Cold v3 found a false nightly duplicate-stop page when an expired DAY id remained beside
+  the live GTC id -> the anomaly now fires only for at least two distinct, broker-confirmed live stop IDs.

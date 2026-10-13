@@ -1764,9 +1764,16 @@ class PortfolioTracker:
         # reconciliation can produce impossible states
         trade["qty_remaining"]     = max(0, min(trade["qty_remaining"], trade["qty"]))
         trade["partial_exited"]    = True
-        trade["trail_stop"]        = trail_stop
-        # breakeven floor after partial
-        trade["stop"]              = trade.get("entry_price")
+        # breakeven floor after partial — NEVER loosen (CEO 2026-10-13): a stop or trail already tighter
+        # (operator-raised, adopted at reconcile, or ratcheted) is kept; long = higher, short = lower.
+        _tighter = max if direction == "long" else min
+        _be = trade.get("entry_price")
+        _cur_stop = trade.get("stop")
+        trade["stop"] = (_be if _cur_stop is None or _be is None
+                         else _tighter(float(_cur_stop), float(_be)))
+        _cur_trail = trade.get("trail_stop")
+        trade["trail_stop"] = (trail_stop if _cur_trail is None or trail_stop is None
+                               else _tighter(float(_cur_trail), float(trail_stop)))
         trade["partial_exit_price"] = exit_price
         trade["partial_exit_time"]  = datetime.now(_PT).isoformat()
         # accumulate across all tranches

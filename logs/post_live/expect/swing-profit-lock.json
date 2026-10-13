@@ -1,0 +1,26 @@
+{
+  "change": "swing-profit-lock",
+  "tier": 2,
+  "paths": [
+    "execution/exit_logic.py",
+    "execution/portfolio_tracker.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change_id=swing-profit-lock"
+    }
+  ],
+  "expected_rate": "When a Swing position is past T1 after a reconciliation-booked partial but has no trail; otherwise the tighten-only and one-share paths are validated from state and broker order history.",
+  "window_sessions": 5,
+  "reversal": "A Swing stop or trail moves in the adverse direction, a 1-share position crosses T1 without a profit lock, or an overnight trail advances without its broker stop following.",
+  "metrics": [
+    {
+      "name": "swing_profit_lock_integrity",
+      "source": "logs/mtf_bot.log, trade_log.json, and Alpaca order history",
+      "direction": "none",
+      "bound": "Zero loosened stops; zero eligible 1-share T1 crossings without a trail; broker stop at least as tight as the persisted trail after a successful replace."
+    }
+  ],
+  "verification": "tests/test_exit_logic_stop_moves.py"
+}
