@@ -40,6 +40,7 @@ from execution.broker import (
     get_open_orders,
     get_open_positions,
     get_order,
+    resolve_live_order,
     submit_gtc_stop_order,
 )
 from execution.fill_helpers import fetch_actual_fill_price
@@ -134,6 +135,113 @@ def _is_trading_day_today() -> Optional[bool]:
 # ---------------------------------------------------------------------------
 # GTC stop reconciliation (pre-market)
 # ---------------------------------------------------------------------------
+
+def _adopt_tighter_live_stop(symbol: str, trade: dict, order, tracker) -> bool:
+    """Raise the tracker's effective stop (trail_stop if set, else stop) to a
+    live broker stop that is TIGHTER (long: higher; short: lower), on the
+    protective side, for the tracker's share count. Returns True when adopted.
+    Never loosens, never raises; an unreadable field leaves the trade as is."""
+    try:
+        direction = str(trade.get("direction") or "")
+        if direction not in ("long", "short"):
+            return False
+        _status = str(getattr(order, "status", "") or "").lower().split(".")[-1]
+        if _status not in ("new", "accepted", "held", "pending_new"):
+            return False          # only a stop actually in force sets the level
+        side = str(getattr(order, "side", "") or "").lower()
+        if not side.endswith("sell" if direction == "long" else "buy"):
+            return False
+        live_px = float(getattr(order, "stop_price", None) or 0.0)
+        live_qty = abs(int(float(getattr(order, "qty", None) or 0)))
+        _rem = trade.get("qty_remaining")
+        trade_qty = abs(int(float(
+            trade.get("qty", 0) if _rem is None else _rem
+        )))
+        key = "trail_stop" if trade.get("trail_stop") else "stop"
+        cur = trade.get(key)
+        if (live_px <= 0 or live_qty != trade_qty or trade_qty <= 0
+                or cur is None):
+            return False
+        cur = float(cur)
+        if direction == "long":
+            tighter = live_px > cur + 0.005
+        else:
+            tighter = live_px < cur - 0.005
+        if not tighter:
+            return False
+        # freeze the sized risk first: R-multiple / Kelly readers fall back to
+        # trade["stop"] when original_stop is absent (masked-loss seat 2026-10-13)
+        if trade.get("original_stop") is None and trade.get("stop") is not None:
+            trade["original_stop"] = trade.get("stop")
+        trade[key] = round(live_px, 2)
+        trade["broker_stop_px"] = round(live_px, 2)
+        _entry = trade.get("entry_price")
+        if _entry is not None and (
+                (direction == "long" and live_px >= float(_entry))
+                or (direction == "short" and live_px <= float(_entry))):
+            # at/past breakeven: the 0.5R breakeven promotion must not pull it
+            # back down to entry at the next RTH cycle (cold-2nd 2026-10-13)
+            trade["be_stop_promoted"] = True
+        tracker._save_log()
+        logger.warning(
+            f"[{symbol}] live GTC stop ${live_px:.2f} is tighter than the "
+            f"tracker {key} ${cur:.2f} — adopted as the tracker {key} "
+            f"(never loosen a stop)."
+        )
+        try:
+            import trade_logger
+            trade_logger.log_event(
+                "stop_adopted", symbol=symbol, price=round(live_px, 2),
+                size=trade_qty, prior_stop=cur, stop_field=key,
+                direction=direction, order_id=str(getattr(order, "id", "")),
+            )
+        except Exception as _ev_e:  # noqa: BLE001
+            logger.warning(f"[{symbol}] stop_adopted event not written: {_ev_e}")
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            f"[{symbol}] tighter-stop adoption check failed (trade unchanged): {e}"
+        )
+        return False
+
+
+def _find_replacement_stop(symbol: str, trade: dict):
+    """The single live GTC stop on this trade's protective side for exactly its
+    share count, tagged to this tier or untagged (an operator order), else None.
+    Never another tier's tagged stop; ambiguity (0 or 2+) returns None."""
+    try:
+        from execution.ownership_guard import tier_of_coid
+        direction = str(trade.get("direction") or "")
+        if direction not in ("long", "short"):
+            return None
+        want = "sell" if direction == "long" else "buy"
+        _rem = trade.get("qty_remaining")
+        want_qty = abs(int(float(
+            trade.get("qty", 0) if _rem is None else _rem
+        )))
+        if want_qty <= 0:
+            return None
+
+        def _v(x) -> str:
+            return str(getattr(x, "value", x) or "").lower()
+        found = []
+        for o in get_open_orders(symbol) or []:
+            try:
+                if (_v(getattr(o, "side", "")) == want
+                        and _v(getattr(o, "type", "")) == "stop"
+                        and _v(getattr(o, "time_in_force", "")) == "gtc"
+                        and abs(int(float(getattr(o, "qty", 0) or 0))) == want_qty
+                        and float(getattr(o, "stop_price", 0) or 0) > 0
+                        and tier_of_coid(getattr(o, "client_order_id", None))
+                        in ("intraday", None)):
+                    found.append(o)
+            except (TypeError, ValueError):
+                continue
+        return found[0] if len(found) == 1 else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{symbol}] replacement-stop lookup failed: {e}")
+        return None
+
 
 def cancel_and_reconcile_gtc_stops(
     tracker: "PortfolioTracker",
@@ -261,7 +369,26 @@ def cancel_and_reconcile_gtc_stops(
         if not order_id:
             continue
 
-        order = get_order(order_id)
+        # Follow the replaced_by chain: a stop moved in place (by the bot or by
+        # the operator in Alpaca) leaves the stored id at status "replaced";
+        # the order in force is the last one in the chain (2026-10-13 PLTR).
+        order, _live_oid = resolve_live_order(order_id)
+        _st0 = str(getattr(order, "status", "") or "").lower() if order else ""
+        if order is None or (("cancel" in _st0 or "expired" in _st0)
+                             and "pending_cancel" not in _st0):
+            # The stored stop is gone; an operator may have cancelled it and placed
+            # a new one in Alpaca (2026-10-13 PLTR). Adopt that live stop instead of
+            # clearing the id and re-submitting a second, looser stop.
+            _manual = _find_replacement_stop(symbol, trade)
+            if _manual is not None:
+                logger.warning(
+                    f"[{symbol}] stored GTC stop {order_id} is "
+                    f"{_st0 or 'not found'} — adopting the live stop "
+                    f"{_manual.id} @ ${float(_manual.stop_price or 0):.2f}."
+                )
+                tracker.set_gtc_stop_order_id(symbol, str(_manual.id))
+                order, _live_oid = _manual, str(_manual.id)
+                order_id = _live_oid
         if order is None:
             # Order not found — may have been cancelled externally
             logger.warning(
@@ -270,6 +397,13 @@ def cancel_and_reconcile_gtc_stops(
             )
             tracker.clear_gtc_stop_order_id(symbol)
             continue
+        if _live_oid and _live_oid != str(order_id):
+            logger.info(
+                f"[{symbol}] GTC stop {order_id} was replaced — tracking "
+                f"the live order {_live_oid}."
+            )
+            tracker.set_gtc_stop_order_id(symbol, _live_oid)
+            order_id = _live_oid
 
         status = str(order.status).lower()
 
@@ -372,6 +506,13 @@ def cancel_and_reconcile_gtc_stops(
             tracker.clear_gtc_stop_order_id(symbol)
 
         else:
+            # NEVER LOOSEN (2026-10-13): a live stop TIGHTER than the tracker's
+            # stop (operator-raised, or a bot move the tracker never recorded)
+            # becomes the tracker's stop, so neither the adoption check below
+            # nor the pre-RTH cancel + DAY-stop resubmit can put the position
+            # back on a looser level. Same side and share count required; a
+            # looser or mismatched live stop is handled as before.
+            _adopt_tighter_live_stop(symbol, trade, order, tracker)
             # Order is still live (new/accepted/pending). Behavior is
             # phase-gated (S58 board: Peterffy + Kim):
             #   premarket/RTH → cancel unconditionally. GTC stops hold all

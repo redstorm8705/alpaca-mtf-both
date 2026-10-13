@@ -1,0 +1,26 @@
+{
+ "change": "stop-never-loosen-reconcile",
+ "tier": 2,
+ "paths": [
+  "execution/orphan_manager.py"
+ ],
+ "proof": [
+  {
+   "log": "logs/mtf_bot.log",
+   "pattern": "adopting the live stop|adopted as the tracker"
+  }
+ ],
+ "expected_rate": "on each startup/premarket reconcile after an operator or in-place stop change; PLTR's $205.40 manual stop on the first reconcile after deploy",
+ "window_sessions": 5,
+ "reversal": "a position's broker stop ends a reconcile LOWER (long) / HIGHER (short) than before it, or two protective stops exist on one Swing position after a reconcile",
+ "metrics": [
+  {
+   "name": "loosened_stops_after_reconcile",
+   "source": "Alpaca order history vs trade_log.json stop before/after reconcile",
+   "direction": "down",
+   "bound": "0"
+  }
+ ],
+ "verification": "tests/test_reconcile_adopts_tighter_stop.py",
+ "baseline_exempt_reason": "none"
+}
