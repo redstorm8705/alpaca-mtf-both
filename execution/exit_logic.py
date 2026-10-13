@@ -22,6 +22,7 @@ Extraction rules (board-approved lift-then-split):
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -152,17 +153,6 @@ def _move_stops(symbol: str, trade: dict, tracker, new_px: "float | None",
     stored = [(k, str(trade.get(k))) for k in _STOP_KEYS if trade.get(k)]
     if not stored:
         return "none"
-    if len(stored) == 2 and symbol not in _both_stops_warned:
-        # design record item #12: a DAY and a GTC stop both stored is an anomaly — page once
-        _both_stops_warned.add(symbol)
-        logger.error(f"[{symbol}] ANOMALY: both a DAY and a GTC stop id are stored — each live one is "
-                     f"moved; reconcile which should exist.")
-        try:
-            from alerts import send_slack
-            send_slack(f":warning: [{symbol}] two broker stops stored (DAY + GTC) — both kept in sync; "
-                       f"check Alpaca for a duplicate stop.")
-        except Exception as _bw_e:
-            logger.error(f"[{symbol}] both-stops anomaly alert failed: {_bw_e}")
     live = []
     changed = False
     for key, oid in stored:
@@ -189,6 +179,19 @@ def _move_stops(symbol: str, trade: dict, tracker, new_px: "float | None",
         if changed:
             tracker._save_log()
         return "none"
+    _live_stop_ids = {live_id for _key, live_id, _order in live}
+    if len(_live_stop_ids) >= 2 and symbol not in _both_stops_warned:
+        # design record item #12: a DAY and a GTC stop both LIVE is an anomaly — page once (an expired DAY id
+        # stored beside the overnight GTC is not: it is cleared above — cold-2nd 2026-10-13)
+        _both_stops_warned.add(symbol)
+        logger.error(f"[{symbol}] ANOMALY: both a DAY and a GTC stop id are stored — each live one is "
+                     f"moved; reconcile which should exist.")
+        try:
+            from alerts import send_slack
+            send_slack(f":warning: [{symbol}] two broker stops stored (DAY + GTC) — both kept in sync; "
+                       f"check Alpaca for a duplicate stop.")
+        except Exception as _bw_e:
+            logger.error(f"[{symbol}] both-stops anomaly alert failed: {_bw_e}")
     result = "moved"
     for key, live_id, order in live:
         try:
@@ -215,6 +218,60 @@ def _move_stops(symbol: str, trade: dict, tracker, new_px: "float | None",
     if changed:
         tracker._save_log()
     return result
+
+
+def _exact_filled_stop_price(symbol: str, trade: dict, direction: str, qty: int) -> "float | None":
+    """Return a fill only when the exact stored protective-stop chain proves it.
+
+    A same-symbol closed-order search is not identity-safe when Day, QHM, F6, or a manual order can
+    trade the same stock. Resolve each stored order ID through Alpaca's replacement chain and require
+    the expected symbol, protective side, exact Swing quantity, FILLED state, and positive average.
+    """
+    _want_side = "sell" if direction == "long" else "buy"
+    for _key in _STOP_KEYS:
+        _stored_id = trade.get(_key)
+        if not _stored_id:
+            continue
+        try:
+            _order, _live_id = resolve_live_order(str(_stored_id))
+        except Exception as _exact_e:
+            logger.error(f"[{symbol}] exact stop-fill lookup {_stored_id} failed: {_exact_e}")
+            continue
+        if _order is None or _order_status(_order) != "filled":
+            continue
+        _order_symbol = str(getattr(_order, "symbol", "") or "").upper()
+        _raw_side = getattr(_order, "side", "")
+        _order_side = str(getattr(_raw_side, "value", _raw_side)).lower()
+        _raw_order_qty = getattr(_order, "qty", None)
+        _raw_filled_qty = getattr(_order, "filled_qty", None)
+        _raw_fill_price = getattr(_order, "filled_avg_price", None)
+        try:
+            if (_raw_order_qty is None or _raw_filled_qty is None or _raw_fill_price is None
+                    or isinstance(_raw_order_qty, bool) or isinstance(_raw_filled_qty, bool)
+                    or isinstance(_raw_fill_price, bool)):
+                raise ValueError("boolean fill field")
+            _order_qty_float = float(_raw_order_qty)
+            _filled_qty_float = float(_raw_filled_qty)
+            _fill_price = float(_raw_fill_price)
+            if (not math.isfinite(_order_qty_float) or not _order_qty_float.is_integer()
+                    or _order_qty_float <= 0
+                    or not math.isfinite(_filled_qty_float) or not _filled_qty_float.is_integer()
+                    or _filled_qty_float <= 0 or not math.isfinite(_fill_price) or _fill_price <= 0):
+                raise ValueError("non-finite, fractional, or non-positive fill field")
+            _order_qty = int(_order_qty_float)
+            _filled_qty = int(_filled_qty_float)
+        except (TypeError, ValueError, OverflowError):
+            _order_qty, _filled_qty, _fill_price = 0, 0, 0.0
+        if (_order_symbol == symbol.upper() and _order_side == _want_side
+                and _order_qty == int(qty) and _filled_qty == int(qty) and _fill_price > 0):
+            logger.info(f"[{symbol}] exact filled stop {_live_id}: {_filled_qty}sh @ ${_fill_price:.2f}")
+            return _fill_price
+        logger.critical(
+            f"[{symbol}] stored stop {_live_id} is filled but identity fields do not prove this "
+            f"Swing close (symbol={_order_symbol!r}, side={_order_side!r}, "
+            f"order_qty={_order_qty}, filled_qty={_filled_qty}, expected_qty={qty}, avg={_fill_price})."
+        )
+    return None
 
 
 def _capped_qty(symbol: str, trade: dict, direction: str) -> "int | None":
@@ -538,6 +595,35 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
 
         tranche_lvl = trade.get("profit_tranche_level", 0)
 
+        # ── Profit lock (CEO 2026-10-13, PLTR/EWY): a position past T1 always carries a trail ─────
+        # A partial booked outside this function (reconciliation banked an extended-hours fill) left PLTR at
+        # tranche 1 with no trail, protected only at breakeven while +$27. Start the trail for the reached phase,
+        # floored at the current stop (never looser); the ratchet below moves the broker stop this scan.
+        # Only once price is actually PAST T1 (a reconciliation-booked loss also raises the tranche level —
+        # masked-loss seat 2026-10-13): never trail a losing position out ahead of its own stop.
+        _lk_tgt = trade.get("target")
+        _lk_t1 = (entry_price + TRANCHE_FRACS[0] * (float(_lk_tgt) - entry_price)) if _lk_tgt is not None else None
+        _lk_past_t1 = (_lk_t1 is not None and _lk_t1 != entry_price
+                       and (current_price >= _lk_t1 if direction == "long" else current_price <= _lk_t1))
+        if (tranche_lvl >= 1 and not trade.get("trail_stop") and atr_value > 0 and qty_rem >= 1
+                and _lk_past_t1):
+            _lk_phase = min(int(tranche_lvl), 3)
+            _lk_dist = atr_value * TRAIL_PHASE_MULTS.get(_lk_phase, config.TRAIL_STOP_ATR_MULT)
+            _lk_cur = trade.get("stop")
+            # floor = breakeven or the current stop if tighter (same rule as a 1-share lot at T1)
+            _lk_floor = (entry_price if _lk_cur is None
+                         else (max(float(_lk_cur), entry_price) if direction == "long"
+                               else min(float(_lk_cur), entry_price)))
+            trade["stop"] = _lk_floor
+            trade["trail_phase"] = _lk_phase
+            trade["trail_stop"] = (max(round(current_price - _lk_dist, 2), _lk_floor) if direction == "long"
+                                   else min(round(current_price + _lk_dist, 2), _lk_floor))
+            trade["_stop_sync_pending"] = True
+            tracker._save_log()
+            logger.warning(f"[change_id=swing-profit-lock] [{symbol}] profit lock: tranche {tranche_lvl} "
+                           f"reached with no trail — trail started "
+                           f"(phase {_lk_phase}) @ ${trade['trail_stop']:.2f}, floor ${_lk_floor:.2f}")
+
         # ── Trail stop: ratchet every scan, close remainder if hit ───────────
         if trade.get("trail_stop") and atr_value > 0:
             _phase_mult = TRAIL_PHASE_MULTS.get(trade.get("trail_phase"), config.TRAIL_STOP_ATR_MULT)
@@ -701,7 +787,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     kelly.record_trade(
                         direction, trade["trade_mode"],
                         entry_price, _ts_fill,
-                        trade["stop"], qty_rem,
+                        trade.get("original_stop") or trade["stop"], qty_rem,   # sized risk, not a raised stop
                     )
                 alert_exit(
                     symbol=symbol, direction=direction,
@@ -759,8 +845,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
         _t3_pending = tranche_lvl == len(TRANCHE_FRACS) - 1
         if target is None or qty_rem < 1:
             continue
-        if qty_rem < 2 and not _t3_pending:
-            continue
+        # (a 1-share lot is NOT skipped: below, a tranche too small to split locks profit instead — CEO 2026-10-13)
 
         target_dist = (target - entry_price) if direction == "long" else (entry_price - target)
         if target_dist <= 0:
@@ -847,27 +932,59 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 # Partial close silently skips every tranche so trail stop never activates.
                 # At T1, always move hard stop to breakeven (H-15: fires regardless of atr_value).
                 # Trail stop only activates if ATR data is available.
-                if t_idx == 0 and not trade.get("trail_stop"):
-                    trade["stop"] = entry_price   # move hard stop to breakeven — always
-                    if atr_value > 0:
-                        _ts_dist = atr_value * config.TRAIL_STOP_ATR_MULT
-                        _ts_floor = trade.get("stop", 0.0)  # already = entry_price (set above)
-                        _ts_val   = (max(round(current_price - _ts_dist, 2), _ts_floor)
-                                     if direction == "long"
-                                     else (min(round(current_price + _ts_dist, 2), _ts_floor)
-                                           if _ts_floor else round(current_price + _ts_dist, 2)))
-                        tracker.update_trail_stop(symbol, _ts_val)
-                        logger.info(
-                            f"[{symbol}] T1 reached (qty={qty_rem}, too small for partial) — "
-                            f"trail stop activated @ ${_ts_val:.2f}, hard stop → breakeven ${entry_price:.2f}"
+                # Lock instead of scale out: hard stop to at least breakeven (never lowered), trail started or
+                # tightened to this tranche's phase (floored at the stop), broker stop moved by the ratchet
+                # (_stop_sync_pending). Then evaluate the next tranche this scan.
+                _cur_stop = trade.get("stop")
+                trade["stop"] = (entry_price if _cur_stop is None
+                                 else (max(float(_cur_stop), entry_price) if direction == "long"
+                                       else min(float(_cur_stop), entry_price)))
+                _ph = min(t_idx + 1, 3)
+                if atr_value > 0 and (not trade.get("trail_stop") or int(trade.get("trail_phase") or 0) < _ph):
+                    _ts_dist = atr_value * TRAIL_PHASE_MULTS[_ph]
+                    _ts_floor = float(trade["stop"])
+                    _ts_new = (max(round(current_price - _ts_dist, 2), _ts_floor) if direction == "long"
+                               else min(round(current_price + _ts_dist, 2), _ts_floor))
+                    _ts_old = trade.get("trail_stop")
+                    if _ts_old is not None:     # a phase change never loosens the trail
+                        _ts_new = max(_ts_new, float(_ts_old)) if direction == "long" else min(_ts_new, float(_ts_old))
+                    trade["trail_phase"] = _ph
+                    trade["trail_stop"] = _ts_new
+                # This block runs after the normal trail-ratchet block, so merely setting
+                # _stop_sync_pending leaves the broker at the old stop until the next scan.
+                # Synchronize the newly locked level now; a restart or fast reversal must not
+                # erase the profit lock (board/cold-2nd 2026-10-13).
+                _lock_px = trade.get("trail_stop") or trade.get("stop")
+                _lock_sync = _move_stops(symbol, trade, tracker, _lock_px, None, direction)
+                _lock_ok = _lock_sync == "moved"
+                if _lock_sync == "none" and _lock_px is not None:
+                    _lock_ok = _submit_new_stop(
+                        symbol, trade, tracker, float(_lock_px), qty_rem, direction,
+                        mri, f"profit_lock_t{t_idx + 1}",
+                    )
+                if _lock_ok:
+                    trade.pop("_stop_sync_pending", None)
+                else:
+                    trade["_stop_sync_pending"] = True
+                    logger.critical(
+                        f"[{symbol}] T{t_idx + 1} profit lock broker sync failed "
+                        f"({_lock_sync}) — software lock ${float(_lock_px or 0):.2f} retained; "
+                        "retry next cycle."
+                    )
+                    try:
+                        from alerts import send_slack
+                        send_slack(
+                            f":rotating_light: [{symbol}] Swing T{t_idx + 1} profit lock could not be "
+                            f"confirmed at Alpaca ({_lock_sync}); retrying while the prior stop remains."
                         )
-                    else:
-                        logger.info(
-                            f"[{symbol}] T1 reached (qty={qty_rem}, atr=0) — "
-                            f"hard stop moved to breakeven ${entry_price:.2f} (no ATR for trail stop)"
-                        )
+                    except Exception as _lock_alert_e:
+                        logger.error(f"[{symbol}] profit-lock sync alert failed: {_lock_alert_e}")
+                logger.info(f"[{symbol}] T{t_idx + 1} reached (qty={qty_rem}, too small to split) — profit locked: "
+                            f"stop ${trade['stop']:.2f}, trail {trade.get('trail_stop')} (phase {trade.get('trail_phase')})")
                 tracker._save_log()
-                break
+                if _lock_sync == "filled":
+                    break
+                continue
 
             # P0 inc 3 (replaces the CRITICAL-1 cancel): SHRINK the broker stop to the shares that
             # will remain, so the tranche's shares are freed while the rest stay protected
@@ -927,11 +1044,14 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                 # so line 2121 (_stop_px) uses entry_price, not a stale trail level.
                 # T2/T3: activate ATR trail floored at the promoted stop.
                 if t_idx == 0:
-                    trade["stop"]        = entry_price
+                    _t1_cur = trade.get("stop")
+                    trade["stop"] = (entry_price if _t1_cur is None
+                                     else (max(float(_t1_cur), entry_price) if direction == "long"
+                                           else min(float(_t1_cur), entry_price)))   # never lower a tighter stop
                     trade["trail_phase"] = 1
                     if atr_value > 0:
                         trail_dist  = atr_value * TRAIL_PHASE_MULTS[1]
-                        _stop_floor = entry_price
+                        _stop_floor = float(trade["stop"])
                         trail_stop  = (
                             max(round(current_price - trail_dist, 2), _stop_floor) if direction == "long"
                             else min(round(current_price + trail_dist, 2), _stop_floor)
@@ -939,7 +1059,7 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                         tracker.update_trail_stop(symbol, trail_stop)
                         logger.info(
                             f"[{symbol}] T1 partial: trail activated (phase 1) @ ${trail_stop:.2f} "
-                            f"({TRAIL_PHASE_MULTS[1]}×ATR=${atr_value:.2f}) floor=${entry_price:.2f}"
+                            f"({TRAIL_PHASE_MULTS[1]}×ATR=${atr_value:.2f}) floor=${_stop_floor:.2f}"
                         )
                     else:
                         trade["trail_stop"] = None
@@ -1600,7 +1720,11 @@ def check_exits(
                 else (_be_entry - current_price)
             )
             _be_r = _be_profit / _be_risk if _be_risk > 0 else 0.0
-            if _be_r >= 0.5 and _be_profit > 0:
+            # tighten-only (CEO 2026-10-13): a stop already at/past entry is never pulled back to entry
+            _be_tightens = (not _be_stp) or (_be_stp < _be_entry if direction == "long" else _be_stp > _be_entry)
+            if not _be_tightens:
+                trade["be_stop_promoted"] = True
+            elif _be_r >= 0.5 and _be_profit > 0:
                 trade["stop"]             = _be_entry
                 trade["be_stop_promoted"] = True
                 logger.info(
@@ -2296,7 +2420,7 @@ def _check_exits_extended_hours(
                     if not trade.get("_fill_unverified"):
                         kelly.record_trade(
                             direction, trade.get("trade_mode", "swing"),
-                            entry_price, fill_price, trade.get("stop"), filled_qty,
+                            entry_price, fill_price, trade.get("original_stop") or trade.get("stop"), filled_qty,
                         )
                     logger.info(
                         f"[{symbol}] EH partial exit confirmed: fill=${fill_price:.2f} "
@@ -2327,8 +2451,9 @@ def _check_exits_extended_hours(
             logger.warning(f"[{symbol}] EH price fetch failed: {_e}")
             continue
 
-        # ── Post-partial: trail stop + breakeven floor ────────────────────
-        if trade.get("partial_exited"):
+        # ── Post-partial (or any trade with a live trail): trail stop + breakeven floor ──
+        # CEO 2026-10-13: a 1-share lot locked at T1/T2 carries a trail without a partial; it is trailed here too.
+        if trade.get("partial_exited") or trade.get("trail_stop"):
             trail_stop     = trade.get("trail_stop")
             breakeven_stop = trade.get("stop")
 
@@ -2362,12 +2487,109 @@ def _check_exits_extended_hours(
                 continue
 
             if trail_stop is not None and atr_value > 0:
-                trail_dist = atr_value * config.TRAIL_STOP_ATR_MULT
+                # same phase distance as the RTH ratchet (0.75 / 0.50 / 0.25 x ATR), else the default
+                _eh_mult = {1: 0.75, 2: 0.50, 3: 0.25}.get(  # PROV:existing-swing-trail-phases
+                    trade.get("trail_phase"), config.TRAIL_STOP_ATR_MULT
+                )
+                trail_dist = atr_value * _eh_mult
                 new_trail  = (
                     round(current_price - trail_dist, 2) if direction == "long"
                     else round(current_price + trail_dist, 2)
                 )
-                tracker.update_trail_stop(symbol, new_trail)
+                tracker.update_trail_stop(symbol, new_trail)        # only ever tightens
+                # CEO 2026-10-13: move the BROKER stop with it overnight too (it was software-only here, so the GTC
+                # stop at Alpaca stayed at its old level all night). In place, never looser, never cancels.
+                _eh_trail = trade.get("trail_stop")
+                if _eh_trail is not None and (_eh_trail != trail_stop or trade.get("_stop_sync_pending")):
+                    _eh_res = _move_stops(symbol, trade, tracker, float(_eh_trail), None, direction)
+                    if _eh_res == "moved":
+                        trade.pop("_stop_sync_pending", None)
+                        logger.info(f"[{symbol}] EH trail ratchet → broker stop moved in place to ${_eh_trail:.2f}")
+                    elif _eh_res == "none":
+                        _eh_qty = _capped_qty(symbol, trade, direction)
+                        _eh_placed = (
+                            _eh_qty is not None and _eh_qty >= 1 and _submit_new_stop(
+                                symbol, trade, tracker, float(_eh_trail), _eh_qty, direction,
+                                None, "overnight_trail_ratchet",
+                            )
+                        )
+                        if _eh_placed:
+                            trade.pop("_stop_sync_pending", None)
+                            logger.info(
+                                f"[{symbol}] EH trail ratchet → replacement GTC stop confirmed "
+                                f"at ${_eh_trail:.2f}"
+                            )
+                        else:
+                            trade["_stop_sync_pending"] = True
+                            logger.critical(
+                                f"[{symbol}] EH trail ratchet: no live stop and replacement GTC "
+                                f"could not be confirmed @ ${_eh_trail:.2f}."
+                            )
+                            try:
+                                alert_gtc_failed(
+                                    symbol=symbol,
+                                    side="sell" if direction == "long" else "buy",
+                                    stop_px=float(_eh_trail),
+                                    reason="overnight trail ratchet replacement not confirmed",
+                                )
+                            except Exception as _eh_page_e:
+                                logger.error(f"[{symbol}] EH replacement-stop alert failed: {_eh_page_e}")
+                    elif _eh_res == "filled":
+                        # The stop can fill between the state read and replace. Only a broker-flat
+                        # read plus an exact fill may close the tracker here; otherwise retain a
+                        # durable reconcile marker and page instead of fabricating P&L.
+                        try:
+                            _eh_pos = get_open_position(symbol)
+                        except Exception as _eh_pos_e:
+                            _eh_pos = "unreadable"
+                            logger.error(f"[{symbol}] EH filled-stop position verification failed: {_eh_pos_e}")
+                        _eh_exact = (
+                            _exact_filled_stop_price(symbol, trade, direction, qty_rem)
+                            if _eh_pos is None else None
+                        )
+                        if _eh_pos is None and _eh_exact is not None:
+                            pnl = tracker.record_exit(
+                                symbol, _eh_exact, reason="gtc_stop_triggered", mri_level="NORMAL"
+                            )
+                            if tracker.closed_trades:
+                                _record_tqi(tracker.closed_trades[-1], kelly)
+                            if risk is not None:
+                                risk.register_close(pnl or 0.0)
+                            kelly.record_trade(
+                                direction, trade.get("trade_mode", "swing"), entry_price, _eh_exact,
+                                trade.get("original_stop") or trade.get("stop"), qty_rem,
+                            )
+                            alert_exit(
+                                symbol=symbol, direction=direction, pnl=pnl or 0.0,
+                                reason="gtc_stop_triggered",
+                                tqi=tracker.closed_trades[-1].get("tqi_score", 0) if tracker.closed_trades else 0,
+                            )
+                            logger.warning(
+                                f"[{symbol}] EH trail ratchet lost the replace race: filled GTC "
+                                f"reconciled exactly @ ${_eh_exact:.2f}."
+                            )
+                            continue
+                        _eh_first_reconcile_alert = not trade.get("_stop_fill_reconcile_pending")
+                        trade["_stop_fill_reconcile_pending"] = True
+                        trade["_stop_sync_pending"] = True
+                        logger.critical(
+                            f"[{symbol}] EH trail ratchet found a filled stop but could not prove an "
+                            f"exact flat close (position={_eh_pos!r}, fill={_eh_exact!r}) — tracker retained."
+                        )
+                        if _eh_first_reconcile_alert:
+                            try:
+                                from alerts import send_slack
+                                send_slack(
+                                    f":rotating_light: [{symbol}] filled overnight stop needs reconciliation; "
+                                    "the Swing tracker was retained because exact fill/flat state was not proven."
+                                )
+                            except Exception as _eh_fill_page_e:
+                                logger.error(f"[{symbol}] EH filled-stop reconcile alert failed: {_eh_fill_page_e}")
+                    elif _eh_res in ("retry", "unknown"):
+                        trade["_stop_sync_pending"] = True
+                        logger.warning(f"[{symbol}] EH trail ratchet: broker stop not moved ({_eh_res}) — "
+                                       f"software trail ${_eh_trail:.2f} kept; retry next cycle.")
+                    tracker._save_log()
             continue
 
         # ── Pre-partial: hard stop check ──────────────────────────────────

@@ -11,8 +11,8 @@ import pandas as pd
 from execution import broker, exit_logic as el
 
 
-def _order(oid, status="new", stop_price=95.0, qty="10"):
-    return SimpleNamespace(id=oid, status=status, stop_price=stop_price, qty=qty)
+def _order(oid, status="new", stop_price=95.0, qty="10", **kw):
+    return SimpleNamespace(id=oid, status=status, stop_price=stop_price, qty=qty, **kw)
 
 
 class FakeTracker:
@@ -116,6 +116,47 @@ class TestMoveStops(Base):
 
     def test_no_stored_stop_is_none(self):
         self.assertEqual(el._move_stops("X", {"direction": "long"}, FakeTracker({}), 97.0, None, "long"), "none")
+
+
+class TestExactFilledStopPrice(Base):
+    def _resolved(self, order_qty="1", filled_qty="1", filled_avg_price="98", **kw):
+        order = _order(
+            "G1", status="filled", qty=order_qty, symbol="X", side="sell",
+            filled_qty=filled_qty, filled_avg_price=filled_avg_price, **kw,
+        )
+        self.m["resolve_live_order"].return_value = (order, "G1")
+        self.m["resolve_live_order"].side_effect = None
+        return el._exact_filled_stop_price(
+            "X", {"gtc_stop_order_id": "G1"}, "long", 1,
+        )
+
+    def test_accepts_only_exact_identity_bound_fill(self):
+        self.assertEqual(self._resolved(), 98.0)
+
+    def test_rejects_fractional_nonfinite_boolean_and_bad_price_fields(self):
+        for order_qty, filled_qty, price in (
+            ("1.5", "1", "98"), (float("inf"), "1", "98"), (True, "1", "98"),
+            ("1", "1.5", "98"), ("1", float("nan"), "98"),
+            ("1", float("inf"), "98"), ("1", True, "98"),
+            ("1", "1", float("nan")), ("1", "1", float("inf")), ("1", "1", True),
+        ):
+            with self.subTest(order_qty=order_qty, filled_qty=filled_qty, price=price):
+                self.assertIsNone(self._resolved(
+                    order_qty=order_qty, filled_qty=filled_qty, filled_avg_price=price,
+                ))
+
+    def test_rejects_wrong_symbol_side_or_quantity(self):
+        for field, value in (("symbol", "Y"), ("side", "buy"), ("filled_qty", "2")):
+            values = {"symbol": "X", "side": "sell", "qty": "1", "filled_qty": "1"}
+            values[field] = value
+            order = _order(
+                "G1", status="filled", filled_avg_price="98", **values,
+            )
+            self.m["resolve_live_order"].side_effect = lambda oid, o=order: (o, oid)
+            with self.subTest(field=field):
+                self.assertIsNone(el._exact_filled_stop_price(
+                    "X", {"gtc_stop_order_id": "G1"}, "long", 1,
+                ))
 
 
 class TestWaitSharesFree(Base):
@@ -300,7 +341,8 @@ class TestPartialExitSequence(Base):
         self.m["partial_close_position"].side_effect = lambda s, q, **k: self.calls.append(("partial", q)) or False
         t = self._trade(qty=9, qty_remaining=3, profit_tranche_level=2, trail_stop=None)
         self._run(t)
-        self.m["cancel_stop_confirmed"].assert_called_once_with("X", "S1")
+        # tranche 2 with no trail: the profit lock starts the trail and moves the stop in place first (S1 -> S1-r)
+        self.m["cancel_stop_confirmed"].assert_called_once_with("X", "S1-r")
         self.assertIn(("partial", 3), self.calls)
         kw = self.m["submit_day_stop_order"].call_args[1]
         self.assertEqual((kw["qty"], kw["allow_cancel_blocking"]), (3, False))
@@ -313,13 +355,105 @@ class TestPartialExitSequence(Base):
         t = self._trade(qty=9, qty_remaining=3, profit_tranche_level=2, trail_stop=None)
         self._run(t)
         self.assertNotIn(("partial", 3), self.calls)
-        self.assertEqual(t["rth_day_stop_order_id"], "S1")
+        self.assertEqual(t["rth_day_stop_order_id"], "S1-r")       # moved in place by the profit lock, kept
 
     def test_software_only_position_sells_then_places_stop(self):
         t = self._trade(rth_day_stop_order_id=None)
         self._run(t)
         self.assertEqual(self.calls[0], ("partial", 3))
         self.assertEqual(self.m["submit_day_stop_order"].call_args[1]["allow_cancel_blocking"], False)
+
+
+class TestProfitLock(TestPartialExitSequence):
+    """CEO 2026-10-13 (PLTR, EWY): a position past T1 always carries a trail; a 1-share lot locks profit at T1/T2
+    instead of being skipped; no path lowers a stop that is already tighter."""
+
+    def test_reconciled_partial_without_trail_starts_one(self):
+        # PLTR: tranche 1 banked by reconciliation, 1 share left, no trail, stop at breakeven, price well past T2
+        self.m["fetch_bars"].return_value = pd.DataFrame({"close": [108.0, 108.0]})
+        self.m["get_latest_trade"].return_value = 108.0
+        t = self._trade(qty=2, qty_remaining=1, profit_tranche_level=1, trail_stop=None, stop=100.0)
+        self._run(t)
+        self.assertIn(("replace", "S1", 105.0, None), self.calls)   # phase-1 trail: broker stop raised this scan
+        self.assertEqual(t["trail_stop"], 106.0)                    # T2 reached: phase 2 (0.5 x ATR) ...
+        self.assertIn(("replace", "S1-r", 106.0, None), self.calls)  # ... and broker moved again this scan
+        self.assertFalse(t.get("_stop_sync_pending", False))
+        self.assertNotIn(("partial", 1), self.calls)
+
+    def test_reconciled_loss_does_not_start_a_trail(self):
+        # 3 shares closed externally at a loss bumped the tranche level; price $99 (below entry, below T1)
+        self.m["fetch_bars"].return_value = pd.DataFrame({"close": [99.0, 99.0]})
+        self.m["get_latest_trade"].return_value = 99.0
+        t = self._trade(qty=9, qty_remaining=6, profit_tranche_level=1, trail_stop=None, stop=95.0)
+        self._run(t)
+        self.assertIsNone(t.get("trail_stop"))
+        self.assertEqual(t["stop"], 95.0)
+        self.assertFalse([c for c in self.calls if c[0] == "partial"])
+
+    def test_lock_floor_is_breakeven(self):
+        self.m["fetch_bars"].return_value = pd.DataFrame({"close": [104.5, 104.5]})
+        self.m["get_latest_trade"].return_value = 104.5
+        t = self._trade(qty=2, qty_remaining=1, profit_tranche_level=1, trail_stop=None, stop=95.0)
+        self._run(t)
+        self.assertEqual(t["stop"], 100.0)
+        self.assertGreaterEqual(t["trail_stop"], 101.5)
+
+    def test_one_share_at_t1_locks_instead_of_skipping(self):
+        # EWY-like: 1 share, T1 (104) reached, no partial possible
+        t = self._trade(qty=1, qty_remaining=1, profit_tranche_level=0, trail_stop=None)
+        self._run(t)
+        self.assertEqual(t["stop"], 100.0)                       # breakeven
+        self.assertEqual(t["profit_tranche_level"], 1)
+        self.assertEqual(t["trail_phase"], 1)
+        self.assertEqual(t["trail_stop"], 101.5)                 # 104.5 - 0.75 x ATR 4
+        self.assertNotIn(("partial", 1), self.calls)
+        self.assertIn(("replace", "S1", 101.5, None), self.calls)
+        self.assertFalse(t.get("_stop_sync_pending", False))
+
+    def test_one_share_terminal_stop_submits_replacement_same_scan(self):
+        self.m["resolve_live_order"].side_effect = lambda oid: (_order(oid, status="expired"), oid)
+        t = self._trade(qty=1, qty_remaining=1, profit_tranche_level=0, trail_stop=None)
+        self._run(t)
+        kw = self.m["submit_day_stop_order"].call_args.kwargs
+        self.assertEqual((kw["qty"], kw["stop_price"], kw["allow_cancel_blocking"]), (1, 101.5, False))
+        self.assertEqual(t["rth_day_stop_order_id"], "NEWDAY")
+        self.assertFalse(t.get("_stop_sync_pending", False))
+
+    def test_one_share_replacement_failure_retains_pending_and_pages(self):
+        self.m["resolve_live_order"].side_effect = lambda oid: (_order(oid, status="expired"), oid)
+        self.m["submit_day_stop_order"].side_effect = lambda **k: None
+        t = self._trade(qty=1, qty_remaining=1, profit_tranche_level=0, trail_stop=None)
+        with mock.patch("alerts.send_slack") as slack:
+            self._run(t)
+        self.assertTrue(t["_stop_sync_pending"])
+        slack.assert_called()
+
+    def test_one_share_short_mirrors(self):
+        self.m["fetch_bars"].return_value = pd.DataFrame({"close": [95.5, 95.5]})
+        self.m["get_latest_trade"].return_value = 95.5
+        t = self._trade(direction="short", qty=1, qty_remaining=1, stop=105.0, target=90.0, trail_stop=None)
+        self._run(t)
+        self.assertEqual(t["stop"], 100.0)
+        self.assertEqual(t["trail_stop"], 98.5)                  # 95.5 + 0.75 x 4
+
+    def test_tighter_stop_is_never_lowered(self):
+        # an operator stop at 103 (above breakeven) survives the T1 lock
+        t = self._trade(qty=1, qty_remaining=1, profit_tranche_level=0, trail_stop=None, stop=103.0)
+        self._run(t)
+        self.assertEqual(t["stop"], 103.0)
+        self.assertGreaterEqual(t["trail_stop"], 103.0)
+
+    def test_t1_partial_does_not_lower_a_tighter_stop(self):
+        t = self._trade(stop=102.0)                              # 9 shares, real T1 partial
+        self._run(t)
+        self.assertEqual(t["stop"], 102.0)
+
+    def test_phase_change_never_loosens_trail(self):
+        self.m["fetch_bars"].return_value = pd.DataFrame({"close": [106.5, 106.5]})
+        self.m["get_latest_trade"].return_value = 106.5
+        t = self._trade(qty=1, qty_remaining=1, profit_tranche_level=1, trail_stop=106.0, trail_phase=1, stop=100.0)
+        self._run(t)
+        self.assertGreaterEqual(t["trail_stop"], 106.0)
 
 
 class TrailBase(Base):
@@ -584,6 +718,200 @@ class TestPromotedLotBreakEven(TestCheckExitsLivePrice):
             self._run_at(t, 103.5)
         self.assertTrue(t.get("be_stop_promoted"))
         self.assertEqual(t["stop"], 100.0)
+
+
+class TestBreakEvenNeverLowers(TestPromotedLotBreakEven):
+    """CEO 2026-10-13: a stop already at/past entry (operator-raised, adopted at reconcile) is never pulled back."""
+
+    def test_stop_above_entry_is_kept(self):
+        t = self._bt(False)
+        t["stop"] = 104.0
+        mv = self._run_at(t, 106.0)
+        self.assertEqual(t["stop"], 104.0)
+        self.assertTrue(t.get("be_stop_promoted"))
+        mv.assert_not_called()
+
+
+class TestOvernightRatchetMovesBrokerStop(Base):
+    """CEO 2026-10-13: overnight the trail ratchet moves the broker stop too (it was software-only), and a 1-share
+    lot with a trail but no partial is trailed."""
+
+    def _run(self, t, px):
+        tr = FakeTracker({"X": t})
+        with mock.patch.object(el, "get_latest_trade", return_value=px), \
+                mock.patch.object(el, "_get_qhm_syms", return_value=set()), \
+                mock.patch.object(el, "submit_limit_order") as lim:
+            el._check_exits_extended_hours(tr, risk=mock.Mock(), kelly=mock.Mock())
+        return lim
+
+    def _t(self, **kw):
+        t = {"status": "open", "direction": "long", "entry_price": 100.0, "atr_value": 4.0, "qty": 1,
+             "qty_remaining": 1, "stop": 100.0, "trail_stop": 105.0, "trail_phase": 2,
+             "gtc_stop_order_id": "G1", "overnight": True}
+        t.update(kw)
+        return t
+
+    def test_one_share_trail_moves_gtc_stop_overnight(self):
+        t = self._t()
+        lim = self._run(t, 110.0)
+        self.assertEqual(t["trail_stop"], 108.0)                          # 110 - 0.5 x 4 (phase 2)
+        self.m["replace_stop_order"].assert_called_with("X", "G1", 108.0, qty=None)
+        lim.assert_not_called()
+
+    def test_no_move_when_price_falls(self):
+        t = self._t()
+        self._run(t, 106.5)
+        self.assertEqual(t["trail_stop"], 105.0)
+        self.m["replace_stop_order"].assert_not_called()
+
+    def test_short_mirrors(self):
+        t = self._t(direction="short", stop=100.0, trail_stop=95.0)
+        self._run(t, 90.0)
+        self.assertEqual(t["trail_stop"], 92.0)
+        self.m["replace_stop_order"].assert_called_with("X", "G1", 92.0, qty=None)
+
+    def test_unmoved_broker_stop_retries(self):
+        self.m["replace_stop_order"].side_effect = lambda *a, **k: None
+        t = self._t()
+        self._run(t, 110.0)
+        self.assertTrue(t["_stop_sync_pending"])
+
+    def test_terminal_gtc_is_replaced_same_scan(self):
+        self.m["resolve_live_order"].side_effect = lambda oid: (_order(oid, status="expired"), oid)
+        t = self._t()
+        self._run(t, 110.0)
+        kw = self.m["submit_gtc_stop_order"].call_args.kwargs
+        self.assertEqual((kw["qty"], kw["stop_price"], kw["allow_cancel_blocking"]), (1, 108.0, False))
+        self.assertEqual(t["gtc_stop_order_id"], "NEWGTC")
+        self.assertFalse(t.get("_stop_sync_pending", False))
+
+    def test_terminal_gtc_replacement_failure_retains_pending_and_pages(self):
+        self.m["resolve_live_order"].side_effect = lambda oid: (_order(oid, status="expired"), oid)
+        self.m["submit_gtc_stop_order"].side_effect = lambda **k: None
+        t = self._t()
+        with mock.patch.object(el, "alert_gtc_failed") as page:
+            self._run(t, 110.0)
+        self.assertTrue(t["_stop_sync_pending"])
+        page.assert_called_once()
+
+    def test_filled_gtc_flat_with_exact_fill_books_exit(self):
+        self.m["resolve_live_order"].side_effect = lambda oid: (
+            _order(oid, status="filled", qty="1", symbol="X", side="sell",
+                   filled_qty="1", filled_avg_price="107.5"), oid)
+        self.m["get_open_position"].return_value = None
+        t = self._t(trade_mode="swing", original_stop=95.0)
+        tr = _ClosingTracker({"X": t})
+        risk, kelly = mock.Mock(), mock.Mock()
+        with mock.patch.object(el, "get_latest_trade", return_value=110.0), \
+                mock.patch.object(el, "_get_qhm_syms", return_value=set()), \
+                mock.patch.object(el, "_record_tqi"), mock.patch.object(el, "alert_exit") as alert:
+            el._check_exits_extended_hours(tr, risk=risk, kelly=kelly)
+        self.assertNotIn("X", tr.open_trades)
+        self.assertEqual(tr.closed_trades[-1]["exit_price"], 107.5)
+        risk.register_close.assert_called_once()
+        kelly.record_trade.assert_called_once()
+        alert.assert_called_once()
+
+    def test_filled_gtc_unreadable_position_retains_tracker_and_pages(self):
+        self.m["resolve_live_order"].side_effect = lambda oid: (_order(oid, status="filled"), oid)
+        self.m["get_open_position"].side_effect = RuntimeError("broker unavailable")
+        t = self._t()
+        with mock.patch("alerts.send_slack") as slack:
+            self._run(t, 110.0)
+        self.assertTrue(t["_stop_fill_reconcile_pending"])
+        self.assertTrue(t["_stop_sync_pending"])
+        slack.assert_called_once()
+
+    def test_filled_gtc_position_still_open_retains_tracker_and_pages_once(self):
+        self.m["resolve_live_order"].side_effect = lambda oid: (_order(oid, status="filled"), oid)
+        self.m["get_open_position"].return_value = SimpleNamespace(qty="1", side="long")
+        t = self._t()
+        with mock.patch("alerts.send_slack") as slack:
+            self._run(t, 110.0)
+            self._run(t, 111.0)
+        self.assertTrue(t["_stop_fill_reconcile_pending"])
+        self.assertTrue(t["_stop_sync_pending"])
+        slack.assert_called_once()
+
+    def test_filled_gtc_flat_without_exact_fill_retains_tracker_and_pages(self):
+        # Exact stored ID is filled, but the broker payload does not prove side/qty/symbol/price.
+        self.m["resolve_live_order"].side_effect = lambda oid: (
+            _order(oid, status="filled", qty="1", symbol="X", side="sell",
+                   filled_qty="2", filled_avg_price="107.5"), oid)
+        self.m["get_open_position"].return_value = None
+        t = self._t()
+        with mock.patch("alerts.send_slack") as slack:
+            self._run(t, 110.0)
+        self.assertTrue(t["_stop_fill_reconcile_pending"])
+        self.assertIn("X", FakeTracker({"X": t}).open_trades)
+        slack.assert_called_once()
+
+
+class TestBothStopsAnomalyOnlyWhenLive(Base):
+    """An expired DAY id stored beside the live overnight GTC is not a duplicate-stop anomaly (cold-2nd 2026-10-13)."""
+
+    def test_expired_day_plus_live_gtc_does_not_page(self):
+        el._both_stops_warned.discard("X")
+        self.m["resolve_live_order"].side_effect = lambda oid: (
+            (_order(oid, status="expired"), oid) if oid == "D1" else (_order(oid), oid))
+        t = {"direction": "long", "rth_day_stop_order_id": "D1", "gtc_stop_order_id": "G1"}
+        with mock.patch("alerts.send_slack") as slack:
+            el._move_stops("X", t, FakeTracker({"X": t}), 108.0, None, "long")
+        slack.assert_not_called()
+        self.assertIsNone(t["rth_day_stop_order_id"])
+
+    def test_two_live_stops_still_page(self):
+        el._both_stops_warned.discard("X")
+        t = {"direction": "long", "rth_day_stop_order_id": "D1", "gtc_stop_order_id": "G1"}
+        with mock.patch("alerts.send_slack") as slack:
+            el._move_stops("X", t, FakeTracker({"X": t}), 108.0, None, "long")
+        slack.assert_called_once()
+
+    def test_same_live_stop_stored_under_two_keys_does_not_page(self):
+        el._both_stops_warned.discard("X")
+        t = {"direction": "long", "rth_day_stop_order_id": "SAME", "gtc_stop_order_id": "SAME"}
+        with mock.patch("alerts.send_slack") as slack:
+            el._move_stops("X", t, FakeTracker({"X": t}), 108.0, None, "long")
+        slack.assert_not_called()
+
+
+class TestRecordPartialNeverLoosens(unittest.TestCase):
+    """portfolio_tracker.record_partial_exit keeps a tighter stop / trail (CEO 2026-10-13)."""
+
+    def _tracker(self, trade):
+        from execution import portfolio_tracker as pt
+        tr = pt.PortfolioTracker.__new__(pt.PortfolioTracker)
+        tr.open_trades = {"X": trade}
+        tr._save_log = lambda *a, **k: None
+        return tr
+
+    def _trade(self, **kw):
+        t = {"symbol": "X", "direction": "long", "entry_price": 100.0, "qty": 9, "qty_remaining": 9,
+             "stop": 95.0, "trail_stop": None, "trade_mode": "swing"}
+        t.update(kw)
+        return t
+
+    def test_tighter_stop_and_trail_kept(self):
+        t = self._trade(stop=104.0, trail_stop=107.0)
+        tr = self._tracker(t)
+        with mock.patch.object(type(tr), "_save_log", lambda *a, **k: None, create=True):
+            try:
+                tr.record_partial_exit("X", 108.0, 3, 105.0)
+            except Exception as e:  # noqa: BLE001 — surface unexpected harness gaps
+                self.fail(f"record_partial_exit raised {e!r}")
+        self.assertEqual((t["stop"], t["trail_stop"]), (104.0, 107.0))
+
+    def test_looser_values_promoted_as_before(self):
+        t = self._trade()
+        tr = self._tracker(t)
+        tr.record_partial_exit("X", 108.0, 3, 105.0)
+        self.assertEqual((t["stop"], t["trail_stop"]), (100.0, 105.0))
+
+    def test_short_mirrors(self):
+        t = self._trade(direction="short", stop=96.0, trail_stop=94.0)
+        tr = self._tracker(t)
+        tr.record_partial_exit("X", 92.0, 3, 95.0)
+        self.assertEqual((t["stop"], t["trail_stop"]), (96.0, 94.0))
 
 
 class _ClosingTracker(FakeTracker):
