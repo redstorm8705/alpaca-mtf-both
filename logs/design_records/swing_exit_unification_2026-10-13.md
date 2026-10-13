@@ -40,3 +40,19 @@ counter-prompts on false premises (kill switch closing positions; PLTR "in loss"
 
 ## Status
 No code change. Awaiting Rafael's decision on the package (keep A instead of the planned unification).
+
+## Round 2 (2026-10-13 evening, Claude-signed) — CEO: time limit, MSFT trail, 2x ETFs
+Script: OCI `logs/lab/c2/swing_exit_replay2.py` (+ `swing_exit_replay2_*.csv`, summary json). Per trade, removing the
+30-session limit and trailing at highest close - 5 ATR earns more (+5.04% vs +2.80%, paired t 3.2) but holds the slot
+~43 vs ~22 days; per held day it is lower (0.118% vs 0.128%). At the measured ONE slot, by calendar year: median year
+A +21.8%, 5-ATR no limit +0.4%, 5-ATR + 30 limit +20.6%, 4-ATR no limit +2.7%. A stock that keeps making new 55-day
+closing highs can re-enter (no re-entry cooldown in swing_breakout_manager.py).
+Synthetic 2x (daily-compounded, 0.95%/yr): ~2x per-day return and ~2x tail (worst trade -34.3%). 2x single-stock ETFs
+for every pool name are tradable + marginable on Alpaca (NVDL, TSLL, MSFU, AAPU, AMZU, GGLL, METU, AVL, MUU, AMDL,
+NFXL, PLTU). Counting a 2x lot at face value toward Invariant #11 would mask exposure (Taleb: 2 lots -> ~2.1x real).
+BGGN 4/4 after one counter-prompt round (Gro/GAI first favoured no-limit + a MSFT breakeven/0.5-ATR trail and Gro a
+face-value 2x "pilot"; corrected with the 1-slot year table, the variant-D result and the no-shadow rule):
+- Keep the 30-session limit while capacity is one lot; revisit when overnight room exceeds one lot.
+- MSFT stop unchanged at $497.10.
+- 2x ETFs: no (Gro, GAI, Taleb); Thorp: only counted at 2x notional and through the board. All 4: never count at face value.
+The binding constraint for both questions is overnight capacity (QHM ~130% of equity under the 1.75x cap).

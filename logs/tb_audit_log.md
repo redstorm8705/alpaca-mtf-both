@@ -11364,3 +11364,4 @@ OCI deployment at `137.131.51.250`: v1 source SHA `78aaef8e19765d432aa74570e5cf2
   - 0.25% minimum step;
   - no once-a-day limit.
 - 2026-10-13 (Claude): Swing exit unification replayed before building (logs/design_records/swing_exit_unification_2026-10-13.md). Legacy locks on breakout lots -1.66%/trade (t -3.0); live capacity measured at 1 lot. BGGN 4/4 after 2 counter-prompt rounds: keep breakout exits, no MSFT breakeven, PLTR finishes on legacy. No code change; awaiting Rafael.
+- 2026-10-13 (Claude): swing exit round 2 (time limit / trail / 2x ETFs) replayed; BGGN 4/4 keep 30-session limit at 1-slot capacity, MSFT stop unchanged, no 2x at face value. Record updated.
