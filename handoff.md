@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-13 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-13 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,38 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-13 night, OpenAI Codex signed) — every broker fill now pages Slack (#629/#631/#632)
+
+Live evidence for the missed notification is
+`mtf_bot.log: "[EWY] Exit recorded: $164.28 | P&L: $17.18 (external_close)"`. Source inspection at
+`execution/orphan_manager.py:1774-1784` showed that path calling `tracker.record_exit` and `risk.register_close` with
+no alert call. PR #629 (`gh pr view 629` -> merged `289d38f`) added the broker FILL poller. Its delivery contract is
+visible at `execution/fill_notifications.py:450-478`: failed Slack delivery breaks before `seen[fid]` and before the
+cursor advances; successful delivery writes the ID and timestamp. The standalone schedule is the exact flocked cron
+at `scripts/install_fill_notifications_cron.sh:7`. First production activation logged
+`change_id=broker-fill-slack-notifier delivered 38 broker fill notification(s)`; the immediate retry emitted no
+delivery line.
+
+The broker-derived OCI diagnostic then printed five Python 3.10 failures: SNXX/SNDQ on 10/09 and three UBER fills on
+10/12, each `PY310_FILL_TIMESTAMP_REJECTED` with a 4/5-digit fraction. PR #631 (`gh pr view 631` -> merged
+`2312e28`) normalized explicitly-zoned timestamps. Its controlled cursor replay logged exactly
+`delivered 5 broker fill notification(s)` and the state count changed from 38 to 43; the next run emitted no delivery
+line. PR #632 (`gh pr view 632` -> merged `fc2388a`) canonicalized the 43 stored timestamps. Live final state audit:
+`seen=43`, `noncanonical=0`; migration-log count remained 1 across the next poll. Each PR's GitHub `preship` check
+concluded `success`; the Groq/GAI and independent-review records are in the linked design records and PR descriptions.
+
+Verification captured on OCI after the final deploy:
+
+- `git rev-parse --short HEAD` -> `fc2388a`; `systemctl is-active mtf-bot.service` -> `active`.
+- State audit -> `{'seen': 43, 'noncanonical': 0}`.
+- Consecutive-run audit -> `CANONICAL_LOGS_BEFORE=1 CANONICAL_LOGS_AFTER=1`; the migration did not repeat.
+- Recovery runner -> `change_id=broker-fill-slack-notifier delivered 5 broker fill notification(s)`; the immediate
+  next run emitted no delivery line.
+- `crontab -l` contains the flocked `run_fill_notifications.py` entry once per minute.
+
+**⏩ EXACT NEXT ACTION:** notification work is complete. Continue Claude's existing QHM ADOPT for UBER, then QHM
+overnight profit-lock; do not rebuild the fill notifier or the Swing exit work.
 
 ## ⏩ LATEST (2026-10-13 midday, Claude signed) — unmanaged-position alarm deployed (#624)
 
