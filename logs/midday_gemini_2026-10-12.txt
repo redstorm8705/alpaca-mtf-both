@@ -1,0 +1,67 @@
+Midday Gemini Audit — 2026-10-12
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+(No catastrophic stop failures or naked positions; live holdings remain covered or software-protected by design. However, short execution is entirely deadlocked due to zero buying power reporting while longs are locked out by Rule 1, and QHM attempted an invalid short order on NVDA.)
+
+---
+
+### PERFORMANCE AUDIT
+- **Trade Integrity & P&L**: Alpaca ground truth recorded 16 buy fills on UBER today, while closed trades list 0 due to known degraded entry-event logging (issue D1). 
+- **Kelly Performance Stats**: Rebuilt Kelly stats reveal a severe performance divergence: `short_intraday` has a 18.2% win rate and Profit Factor of 0.25 over 55 trades, whereas `long_intraday` maintains a 31.1% win rate and Profit Factor of 1.2 over 106 trades.
+- **P&L Drift**: Alpaca FIFO EOD shows `$1.61` vs ledger `$0.00` (drift `+$1.61`, ledger sync drift `$2.30`–`$2.32`). Benign within paper settlement constraints.
+
+---
+
+### ENTRY QUALITY
+- **Rule 1 Lockout Execution**: Correctly blocked all intraday long entries (NVDA, META, MSFT) because 6/8 (75%) premarket movers were down $\ge 2\%$.
+- **Shorting Starvation**: While Rule 1 mandated "Shorts + inverse ETFs only", live shorting was entirely starved across all qualified candidates (NFLX, AVGO, MARA) due to `buying_power=$0.00`.
+
+---
+
+### EXIT QUALITY
+- No exits were closed during the provided midday cycle log window. Software stop monitoring is active on EWY and PLTR, with broker stop protection verified on GE, GOOGL, LLY, MSFT, and UBER.
+
+---
+
+### MRI ALIGNMENT
+- MRI registered `ELEVATED` (score=25/100, 22/27 samples elevated). Dynamic threshold correctly raised `MIN_SCORE` from 8 to 10/12, filtering out 14 low-conviction signals. Sizing reductions (0.85x MRI floor, 65% Columbus Day thin liquidity, 75% doldrums) were computed and applied properly.
+
+---
+
+### LOG ANOMALIES
+- **QHM Invalid Order Attempt**: At `17:27:14,730`, QuarterlyHoldManager attempted to submit a short limit order on NVDA despite broker shorting restrictions: `[NVDA] Limit order rejected — shorting not enabled`.
+- **DRAM Missing Daily Data**: Recurring warning `[DRAM] No daily data — long/short entry blocked (fail-closed)` on every confluence scan.
+- **News Monitor Noise**: Keyword monitor triggered on irrelevant political headline (`'Stronger together': B.C.'s Eby sends Thanksgiving message... | keywords: ['vote']`), injecting news points into MRI.
+
+---
+
+### NEW BUGS / CONCERNS
+
+1. **EXECUTION BUG | HIGH | QHM submits short order on non-shortable / disabled broker context**
+   - *Exact condition*: Occurs during `QuarterlyHoldManager` Day-1 gate execution for NVDA when the broker account cannot short equity or shorting is disabled on the specific instrument (`Limit order rejected — shorting not enabled`).
+   - *Variable involved*: Order side in `execution.quarterly_hold_manager` / `execution.broker`.
+   - *Why it produces wrong output*: QHM is designed for long quarterly holdings/re-confirmations, but routed a sell/short transaction without validating broker borrow/short capability, resulting in an unhandled broker rejection (`returned None`).
+
+2. **INFRASTRUCTURE | MEDIUM | Zero buying power blocks all shorts during Premarket Red sessions**
+   - *Exact condition*: Occurs when `shorting_enabled=True` mid-session (equity $2,628.15), but Alpaca returns `buying_power=$0.00` in `execution.entry_logic`.
+   - *Variable involved*: `buying_power` check in `shorting pre-flight`.
+   - *Why it produces wrong output*: When Rule 1 triggers, the bot can *only* take short or inverse ETF trades. With short pre-flight failing on `$0.00` buying power, the bot is in a state of involuntary gridlock despite having $2.6K+ in equity.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate
+
+---
+
+### RECOMMENDED ACTIONS
+1. **[EXECUTION]** Patch `execution.quarterly_hold_manager` to enforce long-only order side checks prior to broker submission, preventing rejected short orders on QHM tranches.
+2. **[INFRASTRUCTURE]** Investigate margin/cash buying power calculation in `execution.entry_logic` during paper trading to resolve the `$0.00` buying power lockout when shorting is enabled mid-session.
+3. **[ALPHA]** Re-evaluate the `short_intraday` strategy parameters; a PF of 0.25 and 18.2% win rate across 55 trades indicates systematic alpha decay in short intraday setups.
