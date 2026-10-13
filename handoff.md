@@ -19,10 +19,14 @@ umbrella tree, and logic for taking profit." Today the Swing breakout lots (`exe
 MSFT) have no profit lock. Their exits are a fixed stop at fill - 2.5 x ATR, a close below the 20-day low, and a
 30-session time exit (`config.py` SWING_BREAKOUT_*). Legacy 12-pt lots use `exit_logic.py` (profit lock + trail).
 
-**⏩ EXACT NEXT ACTION (Claude queue):** 1) Unify Swing exits: one rulebook with stops by classification. Breakout
-lots get the same breakeven / profit lock / ratcheting trail with in-place broker moves, overnight too. Replay
-against the breakout backtest, then board + Gro + GAI. 2) QHM ADOPT for UBER (7 sh, operator GTC stop). 3) QHM
-overnight profit-lock.
+**Replay result (2026-10-13 evening, Claude signed):** the planned unification was replayed before building. Legacy
+locks on breakout trades cut the per-trade mean from +2.80% to +1.17-1.48% (worse in 9 of 11 years); breakeven alone
+costs 0.66%/trade. BGGN 4/4 (Thorp, Taleb, Gro, GAI after counter-prompts): keep the breakout exits as the one Swing
+rulebook, no MSFT breakeven move, PLTR finishes on its legacy engine with its stop never below $206.78. Record:
+`logs/design_records/swing_exit_unification_2026-10-13.md`.
+
+**⏩ EXACT NEXT ACTION (Claude queue):** 1) Rafael decides the swing-exit package (recommendation: keep the breakout
+exits; no code change). 2) QHM ADOPT for UBER (7 sh, operator GTC stop). 3) QHM overnight profit-lock.
 
 ## ⏩ LATEST (2026-10-13, OpenAI Codex signed) — Swing stop integrity live (#622)
 
