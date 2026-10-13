@@ -30,8 +30,12 @@ counter-prompts on false premises (kill switch closing positions; PLTR "in loss"
 "B2 no losing year").
 - Q1 single rulebook: **A** (breakout exits) for every new Swing trade. No legacy locks on breakout lots.
 - Q2 MSFT stop to breakeven: **No** (variant D costs -0.66%/trade).
-- Q3 PLTR: **finishes on its legacy engine**; its stop never goes below $206.78. When it exits, the legacy Swing
-  exit engine has no lots left and can be retired in a separate cleanup diff.
+- Q3 PLTR: **finishes on its legacy engine**; its stop never goes below $206.78.
+- CORRECTION (same day): the legacy exit engine is NOT PLTR-only. Day-tier lots promoted to Swing
+  (`execution/day_promotion.py` adopt_promotions, DAYTRADE_PROMOTION_ENABLED) become Swing tracker trades and are
+  managed by `exit_logic.py`; mean-reversion entries would be too (MR_ENABLED=False today). The replay above tested
+  breakout entries only; it says nothing about promoted Day lots. The legacy engine cannot be retired until promoted
+  lots have their own tested rule.
 - Re-examine B2 if live capacity reaches 2+ lots (Taleb); reassess C2 at the real-money conversion (Thorp).
 
 ## Status
