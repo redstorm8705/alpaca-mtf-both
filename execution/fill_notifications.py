@@ -47,13 +47,19 @@ _TIER_LABELS = {
 }
 
 
-def _parse_broker_timestamp(value: str) -> datetime:
+def _parse_broker_timestamp(
+    value: str, *, report_normalization: bool = False
+) -> datetime:
     """Parse Alpaca timestamps on Python 3.10, including 4/5-digit fractions."""
     match = _BROKER_TS.fullmatch(value)
     if match is None:
         raise ValueError(f"invalid broker timestamp: {value!r}")
     fraction = match.group("fraction")
-    if fraction is not None and len(fraction) not in (3, 6):
+    if (
+        report_normalization
+        and fraction is not None
+        and len(fraction) not in (3, 6)
+    ):
         logger.info(
             "change_id=fill-timestamp-precision normalized broker fractional "
             "digits=%d",
@@ -101,6 +107,7 @@ def _load_state(path: Path, now: Optional[datetime] = None) -> Optional[dict]:
 
         retention_floor = clock - timedelta(days=_MAX_CATCHUP_DAYS)
         expired_seen = []
+        canonicalized_seen = 0
         for fill_id, ack in seen.items():
             if not isinstance(fill_id, str) or not fill_id:
                 raise ValueError("seen contains an invalid fill ID")
@@ -117,6 +124,10 @@ def _load_state(path: Path, now: Optional[datetime] = None) -> Optional[dict]:
                 raise ValueError(f"seen[{fill_id!r}] has invalid timestamp/hash")
             if acknowledged_at < retention_floor:
                 expired_seen.append(fill_id)
+            canonical_stamp = acknowledged_at.isoformat()
+            if ack.get("ts") != canonical_stamp:
+                ack["ts"] = canonical_stamp
+                canonicalized_seen += 1
         expired_malformed = []
         for fingerprint, stamp in malformed.items():
             acknowledged_at = parsed_ts(stamp)
@@ -135,6 +146,12 @@ def _load_state(path: Path, now: Optional[datetime] = None) -> Optional[dict]:
             del seen[fill_id]
         for fingerprint in expired_malformed:
             del malformed[fingerprint]
+        if canonicalized_seen:
+            logger.info(
+                "change_id=fill-timestamp-state-canonical normalized %d stored "
+                "fill timestamp(s)",
+                canonicalized_seen,
+            )
         return data
     except Exception as exc:
         logger.error("fill notification state unreadable; refusing to advance: %s", exc)
@@ -241,7 +258,7 @@ def _message(fill: dict, tier: str) -> str:
     order_tail = order_id[-8:] if order_id else "unavailable"
     if not isinstance(raw_when, str) or not raw_when:
         raise ValueError("missing fill timestamp")
-    parsed_when = _parse_broker_timestamp(raw_when)
+    parsed_when = _parse_broker_timestamp(raw_when, report_normalization=True)
     if parsed_when.tzinfo is None:
         raise ValueError("fill timestamp is not timezone-aware")
     when = raw_when
@@ -436,7 +453,9 @@ def poll_fill_notifications(
                 complete = False
                 break
             seen[fid] = {
-                "ts": str(fill.get("transaction_time") or now.isoformat()),
+                "ts": _parse_broker_timestamp(
+                    str(fill.get("transaction_time") or now.isoformat())
+                ).isoformat(),
                 "hash": payload_hash,
             }
             delivered += 1

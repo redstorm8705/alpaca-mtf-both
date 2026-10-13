@@ -1,0 +1,17 @@
+{
+  "change": "fill-timestamp-state-canonical",
+  "tier": 1,
+  "paths": [
+    "execution/fill_notifications.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/fill_notifications_cron.log",
+      "pattern": "change_id=fill-timestamp-state-canonical normalized [1-9][0-9]* stored fill timestamp"
+    }
+  ],
+  "expected_rate": "Exactly once on the first post-deploy poll while legacy timestamps are canonicalized",
+  "window_sessions": 1,
+  "window_reason": "The existing production state guarantees immediate exercise on the first scheduled poll",
+  "reversal": "Normalization repeats on later polls, changes the number of acknowledged IDs, or causes any duplicate broker-fill Slack card"
+}
