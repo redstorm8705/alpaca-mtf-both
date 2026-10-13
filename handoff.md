@@ -57,7 +57,9 @@ costs 0.66%/trade. BGGN 4/4 (Thorp, Taleb, Gro, GAI after counter-prompts): keep
 rulebook, no MSFT breakeven move, PLTR finishes on its legacy engine with its stop never below $206.78. Record:
 `logs/design_records/swing_exit_unification_2026-10-13.md`.
 
-**⏩ EXACT NEXT ACTION (Claude queue):** 1) Rafael decides the swing-exit package (recommendation: keep the breakout
+**Swing capacity (2026-10-13 night):** BGGN on giving Swing more overnight room; see Round 3 in the record above.
+
+**⏩ EXACT NEXT ACTION (Claude queue):** 0) Rafael decides Swing capacity (UBER sell vs QHM adopt; reserve; 3% one-share floor; cap). 1) Rafael decides the swing-exit package (recommendation: keep the breakout
 exits; no code change). 2) QHM ADOPT for UBER (7 sh, operator GTC stop). 3) QHM overnight profit-lock.
 
 ## ⏩ LATEST (2026-10-13, OpenAI Codex signed) — Swing stop integrity live (#622)
