@@ -1,0 +1,17 @@
+{
+  "change": "fill-timestamp-precision",
+  "tier": 1,
+  "paths": [
+    "execution/fill_notifications.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/fill_notifications_cron.log",
+      "pattern": "change_id=fill-timestamp-precision normalized broker fractional digits=[45]"
+    }
+  ],
+  "expected_rate": "On the targeted recovery replay and whenever Alpaca emits a new 4/5-digit fractional timestamp",
+  "window_sessions": 1,
+  "window_reason": "The controlled post-deploy cursor replay immediately exercises all five known production examples",
+  "reversal": "Any of the five known activity IDs remains unacknowledged as a BUY/SELL fill, or the replay duplicates an already acknowledged fill"
+}

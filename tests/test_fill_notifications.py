@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from execution.fill_notifications import (
     _message,
+    _parse_broker_timestamp,
     _tier_for_fill,
     poll_fill_notifications,
 )
@@ -21,6 +22,17 @@ def _fill(fid="f1", *, side="sell", qty="1", price="164.28", order_id="order-123
         "transaction_time": "2026-10-13T13:03:20Z", "symbol": "EWY",
         "side": side, "qty": qty, "price": price,
     }
+
+
+def test_python310_accepts_alpaca_variable_fraction_timestamps():
+    four = _parse_broker_timestamp("2026-10-09T14:40:15.6787Z")
+    five = _parse_broker_timestamp("2026-10-12T13:59:01.03589Z")
+    assert four.microsecond == 678700
+    assert five.microsecond == 35890
+    assert _message(
+        {**_fill(), "transaction_time": "2026-10-09T14:40:15.6787Z"},
+        "unavailable",
+    ).startswith(":red_circle: *BROKER SELL FILLED")
 
 
 def test_first_run_backfills_instead_of_silently_baselining(tmp_path: Path):
