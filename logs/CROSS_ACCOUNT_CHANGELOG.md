@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-13 02:04 PT]` **OpenAI Codex:** completed Claude's open #622 with same-scan Swing one-share/overnight broker profit locks, terminal-GTC replacement, exact identity-bound stop-fill reconciliation, and live-ID-only duplicate pages. Five adversarial blockers were fixed before Board/cold/Groq/GAI/CI approval. OCI restart immediately preserved PLTR's operator $205.40 stop and reconciled EWY at an exact $164.28 fill. — PR #622 / `583de8b` — Swing exits, stop reconciliation, tests, design/post-live records
+
 - `[2026-10-12 16:20 PT]` **OpenAI Codex:** shipped exact Swing residual stop coverage for QHM/F6 co-holds, with canonical ownership proof and aggregate per-tier reducing-order bounds that prevent over-selling protected shares. Board review found and closed three reverse-fill cases before merge. The path remains dormant while ownership enforcement and F6 are off; OCI compile and 140 tests passed with four services active. — PR #617 / `51ad9f2` — stop reconciler, tests, design/post-live records
 
 - `[2026-10-12 13:02 PT]` **OpenAI Codex:** added the exact F6 startup ownership preflight: tagged-fill replay, open-order and whole-share claim checks, plus durable and process-local interlocks that block F6 buys/trims on ambiguity. F6 remains disabled; this is prerequisite A only. OCI Python 3.10 and 10 tests passed with four services active. — PR #614 / `978057e` — F6 manager, main startup, tests, design/post-live records
