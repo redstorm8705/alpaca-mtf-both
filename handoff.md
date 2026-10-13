@@ -14,8 +14,15 @@ PR #624 merged (`gh pr view 624` -> "MERGED 7df1a818"). OCI deploy printed `DEPL
 "14:23:05 [unmanaged-position] [UBER] residual 7 first seen — paging if it persists". Details are in
 `logs/tb_audit_log.md` (2026-10-13 entry).
 
-**⏩ EXACT NEXT ACTION (Claude queue):** design and gate the QHM ADOPT path for UBER (7 sh, operator GTC stop),
-starting with a board + Gro + GAI design pass; then the QHM overnight profit-lock.
+**CEO directive (2026-10-13):** "We need one swing tier, not two... they all need to live under the same rules,
+umbrella tree, and logic for taking profit." Today the Swing breakout lots (`execution/swing_breakout_manager.py`;
+MSFT) have no profit lock. Their exits are a fixed stop at fill - 2.5 x ATR, a close below the 20-day low, and a
+30-session time exit (`config.py` SWING_BREAKOUT_*). Legacy 12-pt lots use `exit_logic.py` (profit lock + trail).
+
+**⏩ EXACT NEXT ACTION (Claude queue):** 1) Unify Swing exits: one rulebook with stops by classification. Breakout
+lots get the same breakeven / profit lock / ratcheting trail with in-place broker moves, overnight too. Replay
+against the breakout backtest, then board + Gro + GAI. 2) QHM ADOPT for UBER (7 sh, operator GTC stop). 3) QHM
+overnight profit-lock.
 
 ## ⏩ LATEST (2026-10-13, OpenAI Codex signed) — Swing stop integrity live (#622)
 
