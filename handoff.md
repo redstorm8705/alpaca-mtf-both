@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-12 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-13 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,23 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-13, OpenAI Codex signed) — Swing stop integrity live (#622)
+
+PR #622 merged and deployed at `583de8b`. Restart/pre-market reconciliation now adopts an exact tighter live Swing
+stop instead of loosening it. One-share T1/T2 locks and overnight trail ratchets update Alpaca in the same scan; a
+terminal stop ID gets a replacement GTC stop. A stop-fill race closes the tracker and updates risk/Kelly only when
+the broker is flat and the exact stored stop chain proves FILLED status, symbol, side, original quantity, filled
+quantity, and finite positive fill price. Duplicate-stop Slack pages require two distinct broker-confirmed live IDs.
+Board and cold review PASS; Groq + Google AI Studio APPROVE; CI PASS. Local adjacent suite: 313 tests + 13 malformed-
+fill subtests. OCI Python 3.10 compile plus 64 direct unit tests PASS; service restart clean; `DEPLOY_OK:583de8b`.
+Startup exercised the reconcile half immediately: PLTR adopted the operator-raised $205.40 stop without loosening;
+EWY's broker-flat phantom was closed from an exact $164.28 fill (+$17.18). The new Swing profit-lock path remains
+deployed-unexercised pending a qualifying scan/post-live proof.
+
+**⏩ EXACT NEXT ACTION:** resume OpenAI Codex's F6 pending-buy reservation prerequisite. Separately resolve the
+existing startup unmanaged-position alert for MSFT/UBER (UBER is the known keep/trim/register incident) before the
+next session; do not attribute that pre-existing ownership state to #622.
 
 ## ⏩ LATEST (2026-10-12 evening, Claude signed) — INCIDENT: test-placed UBER; guard shipped (#619)
 

@@ -1,6 +1,15 @@
 # Tech Board (TB) Master Audit Log
 
 ---
+
+## 2026-10-13 — Swing stop integrity SHIPPED (#622, OpenAI Codex)
+
+- **Defects:** restart reconciliation could replace an operator-tightened stop with a looser tracker stop; one-share T1/T2 locks and overnight ratchets could remain software-only until the next scan; expired DAY IDs caused false duplicate-stop pages.
+- **Fix:** adopt exact tighter live stops; synchronize one-share and overnight locks at Alpaca in the same scan; replace terminal GTC IDs; page duplicates only for distinct live IDs. A filled-stop race mutates tracker/risk/Kelly only after broker-flat confirmation and strict identity-bound validation of the stored stop chain, symbol, side, original and filled whole-share quantities, and finite positive fill price.
+- **Adversarial gate:** reviewers rejected missing terminal-stop replacement, next-scan-only one-share locks, generic same-symbol fill recovery, fractional/non-finite fill coercion, and missing original-order quantity validation. Every finding was fixed with regressions. Final Board PASS; cold PASS; Groq and Google AI Studio APPROVE; mechanical and CI PASS.
+- **Validation/deploy:** 313 adjacent tests plus 13 malformed-fill subtests locally; OCI Python 3.10 compile and 64 direct unit tests PASS. PR #622 merged as `583de8b`; `mtf-bot` restarted active; `DEPLOY_OK:583de8b`. Reconcile behavior exercised immediately (PLTR adopted $205.40; EWY exact $164.28 external close). Profit-lock behavior remains deployed-unexercised pending its post-live proof.
+
+---
 ## 2026-10-11 — Weekly post-mortem canonical tier/lifecycle truth SHIPPED (#608, OpenAI Codex)
 
 - **Defect:** same-symbol co-holds could merge in the weekly report, realized partial exits could count as completed trades, and nearest-time metadata could borrow another tier's reason/score.
