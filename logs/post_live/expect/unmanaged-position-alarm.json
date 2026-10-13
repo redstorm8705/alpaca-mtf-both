@@ -1,0 +1,11 @@
+{
+  "change": "unmanaged-position-alarm",
+  "tier": 1,
+  "paths": ["execution/unmanaged_positions.py", "main.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "\\[unmanaged-position\\]"}],
+  "expected_rate": "every main-loop pass logs or pages for any residual; on deploy day UBER 7 (no tier until its QHM adoption) pages once on the second pass",
+  "window_sessions": 5,
+  "reversal": "a Slack 'NO tier manages them ... close them' page for a symbol a live tier manages (Swing tracker, breakout, Day log, QHM, F6), or a truly unmanaged position held through a session without a page",
+  "verification": "tests/test_unmanaged_positions.py",
+  "baseline_exempt_reason": "none"
+}
