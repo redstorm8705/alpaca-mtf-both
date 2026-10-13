@@ -56,3 +56,15 @@ face-value 2x "pilot"; corrected with the 1-slot year table, the variant-D resul
 - MSFT stop unchanged at $497.10.
 - 2x ETFs: no (Gro, GAI, Taleb); Thorp: only counted at 2x notional and through the board. All 4: never count at face value.
 The binding constraint for both questions is overnight capacity (QHM ~130% of equity under the 1.75x cap).
+
+## Round 3 (2026-10-13 night, Claude-signed) — CEO: "use the available buying power; Swing should have more than one share"
+Live account: equity $2,620; positions $4,267 (1.63x); cash -$1,647; buying_power $5,359 is the 4x INTRADAY figure;
+regt (overnight) buying power left $972.64. QHM $3,227 (LLY $2,336 = 89% of equity); UBER $499 (no tier); MSFT $542.
+Room under the 1.75x cap: ~$318 (< one $524 lot). Four 20% lots + QHM = $5,323 > the Reg-T 2x limit ($5,240).
+BGGN (Gro corrected once: it had left QHM out of the 1.75x total):
+- Reserve Swing room inside the cap; QHM new adds wait, QHM never force-sold: 4/4.
+- One-share floor when one share's stop risk <= 3% of equity (AMD case): Thorp, Taleb yes; GAI 2.5%; Gro no.
+- Sell UBER to free ~$499: Gro, GAI, Taleb yes; Thorp: Rafael's call (operator position).
+- Cap: keep 1.75x (GAI, Taleb; Taleb: 1.85x is the bounded step if a 3rd lot is wanted); Thorp 1.9x; none 2.0x.
+Result: UBER sold + reserve at 1.75x = 2 Swing lots; at 1.9x = 3 lots. Concentration tail is LLY (a -20% gap = -$467).
+Status: awaiting Rafael.
