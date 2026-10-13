@@ -11328,3 +11328,38 @@ OCI deployment at `137.131.51.250`: v1 source SHA `78aaef8e19765d432aa74570e5cf2
 - 2026-10-12 (OpenAI Codex): PR #614 F6 startup ownership preflight shipped/deployed (`978057e`). Canonical tagged-fill replay + readable open-order proof + whole-share/net/drift validation now gate both F6 starters and discretionary trims through durable and process-local interlocks. F6/ownership flags remain OFF; prerequisite A only. Board/masked-loss APPROVE, independent cold PASS, GAI APPROVE, Groq waived by Rafael, CI PASS; 101 local focused/adjacent and 10 OCI tests PASS; four OCI services active, `DEPLOY_OK:978057e`. Next: shared-symbol residual stop coverage.
 - 2026-10-12 (OpenAI Codex): PR #617 F6/Swing shared-symbol residual stop prerequisite shipped/deployed (`51ad9f2`). When ownership enforcement is later enabled, stop protection targets only the verified Swing claim and validates every tier claim plus aggregate stop/non-stop reducing reservations before any action. Independent cold review rejected NaN order quantities; the board then rejected negative protected claims and cross-order reservation overflow; all were fixed with regressions before final APPROVE. Final independent cold PASS, GAI APPROVE, Groq waived by Rafael, mechanical/CI PASS; 242 local combined tests and 140 OCI tests PASS; four services active, `DEPLOY_OK:51ad9f2`. Ownership enforcement and F6 remain OFF; deployed, unexercised. Next: pending F6-buy reservation.
 - 2026-10-12 (Claude) INCIDENT: local test run (test_day_tier_track_b_live co-hold case; unmocked submit_bracket_entry after #590; worktree .env symlink) placed 4 real paper UBER brackets 10/11 -> 72 UBER filled 10/12, BP $0 all session, no page. Fix: broker refuses TradingClient under test + tests blank Alpaca keys + test fixed (mutation-checked). cold-2nd FAIL r2 (shadowed mock) -> PASS r3; adversarial PASS; GAI preship.
+
+---
+
+## 2026-10-13 — Unmanaged-position alarm SHIPPED (#624, Claude)
+
+- **Defect:** 72 test-placed UBER shares sat unmanaged on 2026-10-12 with no page. No running check compared
+  Alpaca with the tiers.
+- **Fix:** `execution/unmanaged_positions.py` runs in the main loop (finally after run_cycle). It pages
+  confirmed whole-share residuals and is page-only.
+- **Gate:** cold-2nd PASS after 6 rounds. Adversarial findings fixed:
+  - per-source last-good fallback;
+  - weekend/holiday Day carry;
+  - booking-aware two-pass confirmation;
+  - shrink/regrow re-page;
+  - QHM-pending wording.
+  Gro + GAI APPROVE; CI PASS on the second run (the first had 2 reviewer timeouts, no reject).
+- **Deploy:** `DEPLOY_OK:7df1a81`.
+- **Also 2026-10-13:**
+  - #622 never-loosen reconcile (Claude) and Swing profit lock (Codex) are live. PLTR adopted the $205.40 stop and
+    ratcheted to $206.78.
+  - UBER incident audit: `logs/design_records/uber_incident_audit_2026-10-12.md`.
+  - #616 closed with its root cause.
+- **Next (Claude), QHM ADOPT for UBER:**
+  - The ownership ledger read on OCI 2026-10-13 shows UBER daytrade 72, intraday -65, net 7.
+  - QHM accepts only `QH-`-prefixed stops (`quarterly_hold_manager.py` ~L4870).
+  - Option A: re-tag the operator stop in place via `replace_stop_order` with `client_order_id`.
+    `alpaca.trading.requests.ReplaceOrderRequest` has a `client_order_id` field (checked in alpaca-py 0.43.3).
+    Live acceptance is unverified, so a failed replace aborts the adoption.
+  - The ledger overlay (`ownership_guard.py` ~L1188) must take QHM shares from `daytrade` first.
+  - Consume the request at the top of `run_weekly_check`.
+- **Then, QHM overnight profit-lock (board Harris + Thorp, option B):**
+  - confirmed price = min(this mark, last mark, consolidated last trade);
+  - in-place replace;
+  - 0.25% minimum step;
+  - no once-a-day limit.

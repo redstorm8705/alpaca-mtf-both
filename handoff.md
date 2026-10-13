@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-13 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-13 (Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-13 midday, Claude signed) — unmanaged-position alarm deployed (#624)
+
+PR #624 merged (`gh pr view 624` -> "MERGED 7df1a818"). OCI deploy printed `DEPLOY_OK:7df1a81`. Production log:
+"14:23:05 [unmanaged-position] [UBER] residual 7 first seen — paging if it persists". Details are in
+`logs/tb_audit_log.md` (2026-10-13 entry).
+
+**⏩ EXACT NEXT ACTION (Claude queue):** design and gate the QHM ADOPT path for UBER (7 sh, operator GTC stop),
+starting with a board + Gro + GAI design pass; then the QHM overnight profit-lock.
 
 ## ⏩ LATEST (2026-10-13, OpenAI Codex signed) — Swing stop integrity live (#622)
 
