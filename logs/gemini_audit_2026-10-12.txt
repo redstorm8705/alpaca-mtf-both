@@ -1,0 +1,61 @@
+Nightly Gemini Audit — 2026-10-12
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['earnings_preflight.py', 'main.py', 'config.py', 'run_day_tier.py', 'weekly_postmortem.py', 'data/fmp_client.py', 'strategy/day_tier_alignment.py', 'execution/forever_hold_manager.py', 'execution/day_trade_manager.py', 'execution/quarterly_hold_manager.py', 'events/earnings_fetcher.py', 'research/day_tier_track_a_replay.py', 'research/day_tier_trackb_oos_replay.py', 'research/day_tier_trackb_core_review.py', 'research/day_tier_trackb_watchday_replay.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but the `earnings_preflight.py` script has been failing for over a month due to a `TypeError` (missing positional argument), and the `get_quarterly_hold_quantities()` function in `quarterly_hold_manager.py` is currently raising an exception due to a corrupt state file, which is causing the ledger maintainer to fail closed (which is the correct safety behavior, but indicates a data integrity issue).
+
+### LOG ANOMALIES
+*   **`earnings_preflight.py`**: The log confirms a `TypeError: preload_earnings_week() missing 1 required positional argument: 'symbols'` on every Sunday run since at least 2026-06-07. The script is failing to refresh the earnings cache.
+*   **`execution.quarterly_hold_manager`**: `get_quarterly_hold_quantities` is logging a `CRITICAL` error: `state file present but unreadable/corrupt`. This is triggering the fail-closed mechanism, which is preventing the ledger from updating its protected floor for QHM symbols.
+*   **`execution.orphan_manager`**: `POSITION COUNT DRIFT` detected at 20:02:49. The bot corrected its internal tracker to match Alpaca's authoritative count.
+*   **`execution.broker`**: Multiple `Limit order rejected — shorting not enabled` warnings for `NVDA` at 19:50:33 and 19:57:20. This is expected behavior given the Rule 1 lockout, but the frequency suggests the strategy is attempting to re-submit orders despite the lockout.
+
+### PERFORMANCE AUDIT
+*   **P&L Integrity**: The `EOD P&L DRIFT` of `+$1.61` is noted as pre-heal telemetry and is not a loss.
+*   **Score Correlation**: The bot is correctly identifying `NFLX` as a `strong_bear` (score 12/12) and `NVDA`/`AAPL` as `strong_bull` (scores 10-11/12).
+*   **Rule 1 Lockout**: The `PREMARKET RED LOCKOUT` is functioning as intended, blocking long entries when >75% of movers are red.
+
+### TRADE INTEGRITY
+*   **No issues found** in the provided trade events.
+
+### MODIFIED FILE FINDINGS
+*   **`earnings_preflight.py`**:
+    *   **Bug**: `preload_earnings_week(sorted(symbols), lookahead_days=35)` is called, but the function definition in `data/fmp_client.py` requires a `symbols` list. The audit notes this has been failing for weeks.
+    *   **Logic Error**: The comparison `if ed_str in trading_days:` is correct, but the previous implementation was comparing `date` objects to `str` objects, which was the root cause of the failure to fire alerts.
+*   **`execution/quarterly_hold_manager.py`**:
+    *   **Bug**: The `get_quarterly_hold_quantities` function is raising an exception when the JSON is corrupt. While the fail-closed logic is correct, the file corruption itself needs manual intervention to restore the ledger.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H4**: FIXED (Verified in `config.py` and `main.py`)
+*   **P5-M1**: UNTOUCHED
+*   **P5-M2**: UNTOUCHED
+*   **P5-M3**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **INFRASTRUCTURE | HIGH | `earnings_preflight.py` | `TypeError` in `preload_earnings_week` call | The function call is missing the required `symbols` argument, causing the earnings cache to remain stale.**
+*   **EXECUTION | MEDIUM | `execution/quarterly_hold_manager.py` | State file corruption | `quarterly_holds.json` is corrupt, causing `get_quarterly_hold_quantities` to fail and trigger fail-closed logic.**
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Manual Intervention**: Restore `data/state/quarterly_holds.json` from a backup to resolve the `quarterly_hold_manager` corruption.
+2.  **Code Fix**: Update `earnings_preflight.py` to ensure the `preload_earnings_week` call matches the signature in `data/fmp_client.py`.
+3.  **Data Integrity**: Verify the `data/state/` directory for write permissions or disk space issues that may have caused the JSON corruption.
+4.  **Monitoring**: Add a specific alert for `TypeError` in the `earnings_preflight` cron logs to prevent silent failures in the future.
+================================================================================
+BROKER GROUND TRUTH (2026-10-12, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  EWY    SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=1
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   SOFTWARE-ONLY-BY-DESIGN  owners=core exposed=390m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
+  UBER   COVERED                  owners=day exposed=361m no-broker-stop=0m [-] rejected_stop_orders=0
