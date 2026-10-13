@@ -35,6 +35,40 @@ def test_python310_accepts_alpaca_variable_fraction_timestamps():
     ).startswith(":red_circle: *BROKER SELL FILLED")
 
 
+def test_variable_fraction_timestamp_is_canonical_in_state(tmp_path: Path):
+    state = tmp_path / "fills.json"
+    fill = {**_fill(), "transaction_time": "2026-10-09T14:40:15.6787Z"}
+    assert poll_fill_notifications(
+        now_et=datetime(2026, 10, 13, 10, tzinfo=ET), state_path=state,
+        fetch_fills=lambda day: [fill] if day == "2026-10-09" else [],
+        deliver=lambda _msg: True,
+        tier_lookup=lambda _fill: "intraday",
+    ) == 1
+    saved = json.loads(state.read_text())
+    assert saved["seen"]["f1"]["ts"] == "2026-10-09T14:40:15.678700+00:00"
+
+
+def test_existing_variable_fraction_state_is_self_healed(tmp_path: Path):
+    state = tmp_path / "fills.json"
+    state.write_text(json.dumps({
+        "version": 1,
+        "seen": {
+            "f1": {
+                "ts": "2026-10-09T14:40:15.6787Z",
+                "hash": "a" * 64,
+            }
+        },
+        "malformed_seen": {},
+        "last_poll_at": "2026-10-13T09:00:00-04:00",
+    }))
+    assert poll_fill_notifications(
+        now_et=datetime(2026, 10, 13, 10, tzinfo=ET), state_path=state,
+        fetch_fills=lambda _day: [], deliver=lambda _msg: True,
+    ) == 0
+    saved = json.loads(state.read_text())
+    assert saved["seen"]["f1"]["ts"] == "2026-10-09T14:40:15.678700+00:00"
+
+
 def test_first_run_backfills_instead_of_silently_baselining(tmp_path: Path):
     sent, state = [], tmp_path / "fills.json"
     count = poll_fill_notifications(
