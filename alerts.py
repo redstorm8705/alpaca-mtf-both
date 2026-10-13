@@ -362,6 +362,24 @@ def send_slack(message: str) -> None:
         logger.warning(f"send_slack failed (one or more parts): {message[:120]}")
 
 
+def send_slack_delivery(message: str) -> bool:
+    """Send a pre-formatted Slack message and report confirmed delivery.
+
+    The broker fill notifier persists a fill ID only after this returns True,
+    so a transient webhook failure is retried rather than silently losing a
+    buy/sell notification.
+    """
+    if not _SLACK_WEBHOOK:
+        logger.warning(f"[ALERT no-op] {message[:120]}")
+        return False
+    message = _sanitize(message)
+    ts = datetime.now(PT).strftime("%H:%M PT")
+    ok = _send_slack_chunked(f"{message}\n— {ts}")
+    if not ok:
+        logger.warning(f"send_slack_delivery failed: {message[:120]}")
+    return ok
+
+
 # ── Public API ───────────────────────────────────────────────────────────────
 
 def alert_entry(symbol: str, direction: str, shares: int, price: float,

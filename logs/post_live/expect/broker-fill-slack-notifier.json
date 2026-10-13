@@ -1,0 +1,20 @@
+{
+  "change": "broker-fill-slack-notifier",
+  "tier": 1,
+  "paths": [
+    "alerts.py",
+    "execution/fill_notifications.py",
+    "run_fill_notifications.py",
+    "scripts/install_fill_notifications_cron.sh"
+  ],
+  "proof": [
+    {
+      "log": "logs/fill_notifications_cron.log",
+      "pattern": "change_id=broker-fill-slack-notifier delivered [1-9][0-9]* broker fill notification"
+    }
+  ],
+  "expected_rate": "On every poll that finds one or more previously unseen Alpaca FILL activities",
+  "window_sessions": 2,
+  "window_reason": "The next broker execution should exercise the notifier; two sessions allow for a no-trade day",
+  "reversal": "Any confirmed Alpaca stock fill lacks a corresponding Slack broker-fill message, or a fill is acknowledged after failed Slack delivery"
+}
