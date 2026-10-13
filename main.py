@@ -1071,8 +1071,18 @@ def main():
                         os.execv(sys.executable, [sys.executable] + sys.argv)
 
             _cycle_t0 = time.perf_counter()
-            run_cycle(risk, tracker, calendar, regime, kelly, news, mri, trade_mode, universe_override,
-                      gate_state=gate_state)
+            try:
+                run_cycle(risk, tracker, calendar, regime, kelly, news, mri, trade_mode, universe_override,
+                          gate_state=gate_state)
+            finally:
+                # Unmanaged-position alarm (2026-10-12 UBER incident; design record
+                # unmanaged_position_alarm_2026-10-12.md): every phase incl. overnight, also when run_cycle raised;
+                # page-only, never raises, never trades.
+                try:
+                    from execution.unmanaged_positions import check_unmanaged
+                    check_unmanaged(tracker)
+                except Exception as _um_e:  # noqa: BLE001
+                    logger.warning("unmanaged-position check failed: %s", _um_e)
             _cycle_dur = time.perf_counter() - _cycle_t0
             # Release Python heap after each cycle — prevents heap fragmentation OOM (DS audit 2026-04-29)
             _gc_t0 = time.perf_counter()
