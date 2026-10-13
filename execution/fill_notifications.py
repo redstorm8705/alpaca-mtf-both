@@ -18,6 +18,7 @@ import logging
 import hashlib
 import math
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
@@ -34,6 +35,9 @@ _KEEP_DAYS = 8
 _INITIAL_BACKFILL_DAYS = 4
 _MAX_CATCHUP_DAYS = 31
 _CLOCK_SKEW = timedelta(minutes=5)
+_BROKER_TS = re.compile(
+    r"^(?P<head>.+?)(?:\.(?P<fraction>[0-9]+))?(?P<zone>Z|[+-][0-9]{2}:[0-9]{2})$"
+)
 
 _TIER_LABELS = {
     "daytrade": "Day",
@@ -41,6 +45,23 @@ _TIER_LABELS = {
     "qhm": "QHM",
     "forever6": "Forever 6",
 }
+
+
+def _parse_broker_timestamp(value: str) -> datetime:
+    """Parse Alpaca timestamps on Python 3.10, including 4/5-digit fractions."""
+    match = _BROKER_TS.fullmatch(value)
+    if match is None:
+        raise ValueError(f"invalid broker timestamp: {value!r}")
+    fraction = match.group("fraction")
+    if fraction is not None and len(fraction) not in (3, 6):
+        logger.info(
+            "change_id=fill-timestamp-precision normalized broker fractional "
+            "digits=%d",
+            len(fraction),
+        )
+    fraction_text = "" if fraction is None else f".{(fraction + '000000')[:6]}"
+    zone = "+00:00" if match.group("zone") == "Z" else match.group("zone")
+    return datetime.fromisoformat(f"{match.group('head')}{fraction_text}{zone}")
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -73,7 +94,7 @@ def _load_state(path: Path, now: Optional[datetime] = None) -> Optional[dict]:
         def parsed_ts(value: object) -> Optional[datetime]:
             if not isinstance(value, str) or not value:
                 return None
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = _parse_broker_timestamp(value)
             if parsed.tzinfo is None or parsed > clock + _CLOCK_SKEW:
                 return None
             return parsed
@@ -162,7 +183,7 @@ def _tier_for_fill(fill: dict) -> str:
 
         symbol = str(fill.get("symbol") or "")
         stamp = str(fill.get("transaction_time") or "")
-        after = datetime.fromisoformat(stamp.replace("Z", "+00:00")) - timedelta(days=2)
+        after = _parse_broker_timestamp(stamp) - timedelta(days=2)
         request = GetOrdersRequest(
             status=QueryOrderStatus.ALL,
             after=after,
@@ -220,7 +241,7 @@ def _message(fill: dict, tier: str) -> str:
     order_tail = order_id[-8:] if order_id else "unavailable"
     if not isinstance(raw_when, str) or not raw_when:
         raise ValueError("missing fill timestamp")
-    parsed_when = datetime.fromisoformat(raw_when.replace("Z", "+00:00"))
+    parsed_when = _parse_broker_timestamp(raw_when)
     if parsed_when.tzinfo is None:
         raise ValueError("fill timestamp is not timezone-aware")
     when = raw_when
@@ -289,8 +310,8 @@ def poll_fill_notifications(
             start_date = now.date() - timedelta(days=backfill_days)
         else:
             try:
-                last_poll = datetime.fromisoformat(
-                    str(state.get("last_poll_at") or "").replace("Z", "+00:00")
+                last_poll = _parse_broker_timestamp(
+                    str(state.get("last_poll_at") or "")
                 ).date()
                 start_date = last_poll - timedelta(days=1)
             except (TypeError, ValueError):
