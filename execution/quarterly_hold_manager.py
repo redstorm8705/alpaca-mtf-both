@@ -5000,7 +5000,7 @@ class QuarterlyHoldManager:
 
     def _overnight_room_dollars(self, equity: float) -> Optional[float]:
         """Dollars QHM may still add under Architecture Invariant #11's total limb (all tiers'
-        overnight notional <= SWING_BREAKOUT_TOTAL_OVERNIGHT_K x equity), after leaving the Swing
+        overnight notional <= K x equity, K = overnight_capacity.overnight_k() <= the ceiling), after leaving the Swing
         tier's unused reserve free: SWING_RESERVE_LOTS x SWING_BREAKOUT_SLOT_PCT x equity, minus the
         breakout lots Swing already holds (CEO 2026-10-14, BGG 4/4 on the reserve). Working buy orders
         count at their unfilled notional (a buy stop on a short counts too: stricter). Block-only: a
@@ -5011,7 +5011,8 @@ class QuarterlyHoldManager:
             import config as _cfg
             from execution.broker import get_open_orders, get_open_positions
             from execution.swing_breakout_manager import _HOLDING, _load_state
-            k_total = float(getattr(_cfg, "SWING_BREAKOUT_TOTAL_OVERNIGHT_K", 1.75))
+            from execution.overnight_capacity import overnight_k
+            k_total = overnight_k()           # dynamic, tighten-only total limb (<= the 1.9 ceiling)
             lots = int(getattr(_cfg, "SWING_RESERVE_LOTS", 0))
             slot = float(getattr(_cfg, "SWING_BREAKOUT_SLOT_PCT", 0.20))
             swing_syms = {s for s, r in _load_state().get("positions", {}).items()
