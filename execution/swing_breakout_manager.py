@@ -21,7 +21,8 @@ WHAT IT TRADES (long only, one lot per symbol):
 
 SIZING (board risk seat 2026-09-29): SWING_BREAKOUT_MAX_SLOTS slots × SWING_BREAKOUT_SLOT_PCT of equity,
   whole shares (a 1-share floor up to SWING_BREAKOUT_MIN1_MAX_PCT of equity when one share exceeds the slot);
-  the per-trade risk at the stop is capped at SWING_BREAKOUT_MAX_RISK_PCT of equity; the tier's
+  the per-trade risk at the stop is capped at SWING_BREAKOUT_MAX_RISK_PCT of equity (a single share may risk up to
+  SWING_BREAKOUT_MIN1_RISK_PCT when that cap would buy none — CEO 2026-10-14); the tier's
   overnight notional is capped at the smaller of (a) min(SWING_BREAKOUT_BUDGET_PCT, 100% − other swing/day
   notional, QHM/F6 excluded) and (b) SWING_BREAKOUT_TOTAL_OVERNIGHT_K × equity − ALL position notional
   (Architecture Invariant #11 as amended 2026-10-02, Rafael-approved, BGG 4/4). No room → skip + log
@@ -197,15 +198,18 @@ def size_order(equity: float, price: float, atr: float, other_notional: float, t
         q_risk = math.floor(risk_cap / stop_dist)
         qty = max(0, min(q_slot, q_risk))
         floor_note = ""
-        if qty == 0 and q_risk >= 1:
+        # A single share may risk up to SWING_BREAKOUT_MIN1_RISK_PCT of equity at its stop when the per-lot cap buys
+        # zero shares (CEO 2026-10-14; AMD 10/07 was refused: $63.30 stop distance vs a $50 cap). Never above it.
+        one_risk_cap = max(float(_cfg("SWING_BREAKOUT_MIN1_RISK_PCT", 0.0)) * equity, risk_cap)
+        if qty == 0 and stop_dist <= one_risk_cap:
             # MIN-1-SHARE floor (BGGN 2026-09-29, risk seat + Gro + GAI): a name whose ONE share exceeds the slot
-            # may still enter as 1 share when that share is <= min(SWING_BREAKOUT_MIN1_MAX_PCT × equity, budget
-            # room) — the loss at the stop stays <= the risk cap (q_risk >= 1). Keeps high-priced megacaps in the
-            # traded universe (no selection bias vs the backtest); the allocator still admits or denies it.
+            # (or whose one-share stop risk exceeds the per-lot cap) may still enter as 1 share when that share is
+            # <= min(SWING_BREAKOUT_MIN1_MAX_PCT × equity, budget room) and its stop risk <= one_risk_cap. Keeps
+            # high-priced megacaps in the traded universe; the allocator still admits or denies it.
             one_cap = min(float(_cfg("SWING_BREAKOUT_MIN1_MAX_PCT", 0.25)) * equity, budget)
             if price <= one_cap:
                 qty = 1
-                floor_note = f", 1-share floor (≤ ${one_cap:.0f})"
+                floor_note = f", 1-share floor (≤ ${one_cap:.0f}, stop risk ${stop_dist:.0f} ≤ ${one_risk_cap:.0f})"
         why = (f"slot ${slot:.0f}, budget room ${budget:.0f} (tier-limb ${room_tier:.0f}, total-limb ${room_total:.0f}; "
                f"tier ${tier_notional:.0f}, other ${other_notional:.0f}, QHM/F6 ${protected_notional:.0f}), "
                f"risk cap ${risk_cap:.0f} / stop ${stop_dist:.2f} → slot {q_slot} sh, risk {q_risk} sh → {qty} sh{floor_note}")
