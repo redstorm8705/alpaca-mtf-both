@@ -13,6 +13,8 @@ def _mgr(positions: dict, prices: dict, gf=None) -> qm.QuarterlyHoldManager:
     m.dry_run = False
     m._positions = positions
     m._get_live_price = lambda sym: prices.get(sym)  # type: ignore[method-assign]
+    # the Invariant #11 total-limb / Swing-reserve room is tested separately (OvernightReserve below)
+    m._overnight_room_dollars = lambda equity: float("inf")  # type: ignore[method-assign]
     # mirror manager init: pre-cap holds record their share count once
     m._gf_shares = dict(gf) if gf is not None else {
         s: p.qty_filled for s, p in positions.items() if qm.QuarterlyHoldManager._is_grandfathered(p)}
@@ -160,3 +162,84 @@ class NewMoneyBudget(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OvernightReserve(unittest.TestCase):
+    """CEO 2026-10-14: QHM buys leave room for SWING_RESERVE_LOTS Swing breakout slots inside the
+    K x equity total-overnight cap; unreadable inputs block (fail-closed); nothing is ever sold."""
+
+    def _room(self, positions, swing_state, equity=2620.0, k=1.9, lots=2, orders=()):
+        from types import SimpleNamespace
+        from unittest import mock
+        m = qm.QuarterlyHoldManager.__new__(qm.QuarterlyHoldManager)
+        pos = [SimpleNamespace(symbol=s, market_value=v) for s, v in positions.items()]
+        with mock.patch.multiple(__import__("config"),
+                                 SWING_BREAKOUT_TOTAL_OVERNIGHT_K=k, SWING_RESERVE_LOTS=lots,
+                                 SWING_BREAKOUT_SLOT_PCT=0.20, create=True), \
+                mock.patch("execution.broker.get_open_positions", return_value=pos), \
+                mock.patch("execution.broker.get_open_orders",
+                           return_value=None if orders is None else list(orders)), \
+                mock.patch("execution.swing_breakout_manager._load_state", side_effect=swing_state):
+            return m._overnight_room_dollars(equity)
+
+    def test_live_book_leaves_room_for_a_second_swing_lot(self):
+        # 2026-10-13 book: QHM $3,227 (LLY/GOOGL/GE/NVDA), UBER $499, MSFT $542 (breakout lot).
+        book = {"LLY": 2336.0, "GOOGL": 354.0, "GE": 308.0, "NVDA": 229.0, "UBER": 499.0, "MSFT": 542.0}
+        def state():
+            return {"positions": {"MSFT": {"status": "open"}}}
+        room = self._room(book, state)
+        # 1.9 x 2620 = 4978 - 4268 total - (2 x 524 reserve - 542 swing = 506 unused) = 204
+        self.assertAlmostEqual(room, 4978.0 - 4268.0 - 506.0, places=6)
+
+    def test_no_swing_lot_reserves_two_full_slots(self):
+        def state():
+            return {"positions": {}}
+        room = self._room({"LLY": 2336.0}, state)
+        self.assertAlmostEqual(room, 4978.0 - 2336.0 - 1048.0, places=6)
+
+    def test_full_reserve_used_adds_nothing_back(self):
+        def state():
+            return {"positions": {"MSFT": {"status": "open"}, "AMD": {"status": "open"}}}
+        room = self._room({"LLY": 2336.0, "MSFT": 542.0, "AMD": 640.0}, state)
+        self.assertAlmostEqual(room, 4978.0 - 3518.0, places=6)          # unused reserve 0, never negative
+
+    def test_unreadable_swing_state_blocks(self):
+        def boom():
+            raise RuntimeError("swing_breakout state unreadable")
+        self.assertIsNone(self._room({"LLY": 2336.0}, boom))
+
+    def test_cap_room_blocks_when_overnight_room_unavailable_or_exhausted(self):
+        m = _mgr(dict(LIVE_BOOK), PRICES)   # grandfathered LLY/GEV excluded: the 20% name cap leaves 2 NVDA
+        m._overnight_room_dollars = lambda equity: None  # type: ignore[method-assign]
+        self.assertIsNone(m._qhm_cap_room_shares("NVDA", 231.0, EQUITY))
+        m._overnight_room_dollars = lambda equity: 200.0  # type: ignore[method-assign]
+        self.assertEqual(m._qhm_cap_room_shares("NVDA", 231.0, EQUITY), 0)   # $200 < one $231 share
+        m._overnight_room_dollars = lambda equity: 470.0  # type: ignore[method-assign]
+        self.assertEqual(m._qhm_cap_room_shares("NVDA", 231.0, EQUITY), 2)
+
+
+    def test_working_buy_orders_count_against_the_room(self):
+        # Cold review F1: a QHM tranche sent earlier this cycle is not a position yet.
+        from types import SimpleNamespace
+
+        def state():
+            return {"positions": {}}
+        buy = SimpleNamespace(symbol="GE", side="buy", qty="1", filled_qty="0", limit_price="318.0", stop_price=None)
+        sell_stop = SimpleNamespace(symbol="LLY", side="sell", qty="2", filled_qty="0", limit_price=None,
+                                    stop_price="1000")
+        base = self._room({"LLY": 2336.0}, state)
+        self.assertAlmostEqual(self._room({"LLY": 2336.0}, state, orders=[buy, sell_stop]), base - 318.0, places=6)
+
+    def test_unreadable_open_orders_or_market_value_blocks(self):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        def state():
+            return {"positions": {}}
+        self.assertIsNone(self._room({"LLY": 2336.0}, state, orders=None))
+        m = qm.QuarterlyHoldManager.__new__(qm.QuarterlyHoldManager)
+        with mock.patch("execution.broker.get_open_positions",
+                        return_value=[SimpleNamespace(symbol="LLY", market_value=None)]), \
+                mock.patch("execution.broker.get_open_orders", return_value=[]), \
+                mock.patch("execution.swing_breakout_manager._load_state", side_effect=state):
+            self.assertIsNone(m._overnight_room_dollars(2620.0))

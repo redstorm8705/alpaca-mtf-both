@@ -1,0 +1,20 @@
+{
+  "change": "qhm-swing-reserve",
+  "tier": 1,
+  "paths": [
+    "config.py",
+    "execution/quarterly_hold_manager.py",
+    "tests/test_qhm_new_money_budget.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "QHM overnight room unavailable|QHM (dip-add|tranche).*(clamped|BLOCKED|room)"
+    }
+  ],
+  "baseline_exempt_reason": "The QHM cap log lines already exist; this change is proven by a post-deploy QHM buy decision whose room reflects K x equity minus total notional minus the unused Swing reserve (re-derivable from the logged equity, positions and swing_breakout.json), or by the new 'QHM overnight room unavailable' fail-closed line.",
+  "expected_rate": "Every QHM dip-add / tranche evaluation (RTH, per cycle when a hold is eligible)",
+  "window_sessions": 5,
+  "window_reason": "QHM buys are infrequent; five sessions allow for days with no eligible add",
+  "reversal": "Total overnight notional exceeds 1.9 x equity after a QHM buy, a QHM buy consumes the unused Swing reserve, or a QHM stop placement/replacement is blocked"
+}

@@ -4990,10 +4990,71 @@ class QuarterlyHoldManager:
         cur_sym = (live_price * pos.qty_filled) if (pos and pos.qty_filled and pos.qty_filled > 0) else 0.0
         agg_room = _QHM_AGG_CAP_PCT * equity - total          # aggregate headroom ($)
         name_room = _QHM_PER_NAME_CAP_PCT * equity - cur_sym  # per-name headroom ($)
-        room = min(agg_room, name_room)
+        overnight_room = self._overnight_room_dollars(equity)  # Invariant #11 total limb less the Swing reserve
+        if overnight_room is None:
+            return None
+        room = min(agg_room, name_room, overnight_room)
         if room <= 0:
             return 0
         return int(room / live_price)                         # floor → never over the cap
+
+    def _overnight_room_dollars(self, equity: float) -> Optional[float]:
+        """Dollars QHM may still add under Architecture Invariant #11's total limb (all tiers'
+        overnight notional <= SWING_BREAKOUT_TOTAL_OVERNIGHT_K x equity), after leaving the Swing
+        tier's unused reserve free: SWING_RESERVE_LOTS x SWING_BREAKOUT_SLOT_PCT x equity, minus the
+        breakout lots Swing already holds (CEO 2026-10-14, BGG 4/4 on the reserve). Working buy orders
+        count at their unfilled notional (a buy stop on a short counts too: stricter). Block-only: a
+        QHM add waits; nothing is ever sold. Positions are read live from the broker (T1 Alpaca)
+        and the breakout lots from the Swing tier's state file. FAIL-CLOSED: any unreadable input
+        returns None, and the caller blocks the buy."""
+        try:
+            import config as _cfg
+            from execution.broker import get_open_orders, get_open_positions
+            from execution.swing_breakout_manager import _HOLDING, _load_state
+            k_total = float(getattr(_cfg, "SWING_BREAKOUT_TOTAL_OVERNIGHT_K", 1.75))
+            lots = int(getattr(_cfg, "SWING_RESERVE_LOTS", 0))
+            slot = float(getattr(_cfg, "SWING_BREAKOUT_SLOT_PCT", 0.20))
+            swing_syms = {s for s, r in _load_state().get("positions", {}).items()
+                          if isinstance(r, dict) and r.get("status") in _HOLDING}
+            total = 0.0
+            swing = 0.0
+            for p in get_open_positions() or []:
+                raw_mv = getattr(p, "market_value", None)
+                if raw_mv is None:
+                    raise ValueError(f"no market value for {getattr(p, 'symbol', '?')}")
+                mv = abs(float(raw_mv))
+                if not math.isfinite(mv):
+                    raise ValueError(f"non-finite market value for {getattr(p, 'symbol', '?')}")
+                total += mv
+                if getattr(p, "symbol", None) in swing_syms:
+                    swing += mv
+            # Working BUY orders (e.g. a QHM tranche sent earlier this cycle) are not positions yet but will
+            # be: count their unfilled notional, or two buys in one cycle could both see the same room.
+            orders = get_open_orders()
+            if orders is None:
+                raise ValueError("open orders unreadable")
+            for o in orders:
+                side_raw = getattr(o, "side", "")
+                if not str(getattr(side_raw, "value", side_raw)).lower().endswith("buy"):
+                    continue
+                left = float(getattr(o, "qty", 0) or 0) - float(getattr(o, "filled_qty", 0) or 0)
+                px_raw = getattr(o, "limit_price", None) or getattr(o, "stop_price", None)
+                if left <= 0:
+                    continue
+                if px_raw is None:
+                    raise ValueError(f"working buy without a price on {getattr(o, 'symbol', '?')}")
+                pending = left * float(px_raw)
+                if not math.isfinite(pending):
+                    raise ValueError("non-finite working-order notional")
+                total += pending
+            unused_reserve = max(0.0, lots * slot * equity - swing)
+            room = k_total * equity - total - unused_reserve
+            if not math.isfinite(room):
+                raise ValueError("non-finite overnight room")
+            return room
+        except Exception as e:  # RC-3: unreadable broker/state -> block (never under-count exposure)
+            logger.warning("QHM overnight room unavailable (%s) — fail-closed, QHM buy blocked", e)
+            return None
 
     def _get_quarterly_notional_excl(self, exclude_symbol: str) -> float:
         """Kelly fix: total live notional of other quarterly holds.
