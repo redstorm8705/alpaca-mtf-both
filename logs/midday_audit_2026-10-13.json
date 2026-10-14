@@ -1,0 +1,276 @@
+{
+  "audit_date": "2026-10-13",
+  "run_ts": "2026-10-13T10:30:01.479319-07:00",
+  "entry_analysis": {
+    "entry_count": 3,
+    "exit_count": 2,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AMZN",
+      "PLTR",
+      "EWY"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "NORMAL": 8,
+      "ELEVATED": 20
+    },
+    "last_score": 21,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 72,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-13 16:11:57,331 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-13 16:11:57,334 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-13 16:12:50,775 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$109.09 tracker=$42.19 drift=$+66.90",
+      "2026-10-13 16:12:50,862 | WARNING  | execution.unmanaged_positions | [unmanaged-position] [UBER] still unmanaged: residual 7 (paged)",
+      "2026-10-13 16:18:08,769 | WARNING  | strategy.run_cycle | [ANOMALY-2] [UBER] confirm_gate=6 scans but no entry \u2014 risk.open_positions=3 vs tracker=0 | "
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 2,
+    "losses": 0,
+    "total_pnl": 67.19999999999999,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 33.599999999999994,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "PLTR",
+      "pnl": 50.01999999999998,
+      "entry_price": 181.72,
+      "exit_price": 206.73,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": 12,
+      "mri_level": "NORMAL",
+      "stop": 162.0,
+      "target": 222.69
+    },
+    "worst": {
+      "symbol": "EWY",
+      "pnl": 17.180000000000007,
+      "entry_price": 181.46,
+      "exit_price": 164.28,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 183.18,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "PLTR",
+        "pnl": 50.01999999999998,
+        "entry_price": 181.72,
+        "exit_price": 206.73,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": 12,
+        "mri_level": "NORMAL",
+        "stop": 162.0,
+        "target": 222.69
+      },
+      {
+        "symbol": "EWY",
+        "pnl": 17.180000000000007,
+        "entry_price": 181.46,
+        "exit_price": 164.28,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 183.18,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AMZN": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 224,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:46-09:46"
+        ],
+        "uncovered_windows_pt": [
+          "06:46-06:46"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "LLY": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 199,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:11-10:17"
+        ],
+        "uncovered_windows_pt": [
+          "07:11-07:17"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "PLTR": {
+        "class": "NAKED",
+        "owners": [
+          "core",
+          "other"
+        ],
+        "exposed_min": 91,
+        "uncovered_min": 6,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:36"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:36"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "UBER": {
+        "class": "COVERED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-13",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "NVDA NAKED (broker ground truth)",
+        "detail": "NVDA: no broker stop for 6m of 199m held (07:11-07:17 PT); owners qhm"
+      },
+      {
+        "severity": "critical",
+        "title": "PLTR NAKED (broker ground truth)",
+        "detail": "PLTR: no broker stop for 6m of 91m held (06:30-06:36 PT); owners core/other"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 7,
+    "symbols": [
+      "AMZN",
+      "EWY",
+      "NVDA",
+      "PLTR",
+      "UBER"
+    ],
+    "by_symbol": {
+      "PLTR": {
+        "buy": 0,
+        "sell": 1
+      },
+      "NVDA": {
+        "buy": 1,
+        "sell": 0
+      },
+      "AMZN": {
+        "buy": 3,
+        "sell": 0
+      },
+      "UBER": {
+        "buy": 0,
+        "sell": 1
+      },
+      "EWY": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,42 @@
+Midday Gemini Audit — 2026-10-13
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+- NAKED position (no-broker-stop=6m) | NVDA
+- NAKED position (no-broker-stop=6m) | PLTR
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- **Entry/Exit Integrity**: PLTR entry $181.72 → exit $206.73 (+$50.02) is mathematically inconsistent. A long position with these prices would yield a profit of $25.01 per share, not $50.02. This suggests either a quantity mismatch in the ledger or a calculation error in the `CLOSED TRADE DETAILS` reporting.
+- **P&L Signs**: The EWY trade (entry $181.46 → exit $164.28) resulted in a profit of +$17.18. This is a short position (entry > exit), but the log does not explicitly confirm the direction, though the P&L sign is correct for a short.
+- **Score Correlation**: The EWY trade had a score of 0/12 and resulted in a profit, while the PLTR trade had a 12/12 score and resulted in a profit. The 0/12 score trade suggests a potential entry logic bypass or a failure in the scoring filter.
+
+### ENTRY QUALITY
+- **Score/Filter Bypass**: The EWY trade was executed with a score of 0/12. Given `MIN_LONG_SCORE = 8` and `MIN_SHORT_SCORE = 8`, this entry violates the minimum confluence requirements.
+- **ORB Gate**: The log shows multiple symbols (SOFI, UBER, NFLX, etc.) were blocked by the ORB gate, which is functioning as intended to prevent entries during range-bound conditions.
+
+### EXIT QUALITY
+- **Stop Coverage**: The `BROKER GROUND TRUTH` identifies NVDA and PLTR as `NAKED`. This is a critical failure in the execution layer, as these positions are currently exposed without a broker-side stop, violating the safety invariant.
+
+### MRI ALIGNMENT
+- The session distribution is heavily skewed toward `ELEVATED` (20/28 samples). The bot correctly adjusted the `Dynamic MIN_SCORE` to 9/12, which is appropriate for the current regime.
+
+### LOG ANOMALIES
+- **EOD P&L DRIFT**: `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$109.09 tracker=$42.19 drift=$+66.90`. This indicates a significant discrepancy between the broker's reported P&L and the bot's internal tracker, suggesting a failure in the `portfolio_tracker` to reconcile fills correctly.
+- **Unmanaged Position**: `WARNING | execution.unmanaged_positions | [unmanaged-position] [UBER] still unmanaged: residual 7 (paged)`. This indicates a failure to clean up or track partial positions.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | CRITICAL | P&L Calculation Mismatch | PLTR trade shows $50.02 profit on a $25.01 price delta.**
+- **EXECUTION BUG | HIGH | Score Filter Bypass | EWY entered with 0/12 score despite MIN_SCORE=8.**
+- **INFRASTRUCTURE | HIGH | P&L Reconciliation Failure | EOD drift of +$66.90 between Alpaca and internal tracker.**
+- **EXECUTION BUG | HIGH | Stop Submission Failure | NVDA and PLTR positions are NAKED during RTH.**
+
+### FIX VALIDATION
+- No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Immediate investigation into the `execution.entry_logic` to determine why a 0/12 score trade (EWY) was permitted.
+2. **EXECUTION**: Force a stop-order synchronization for NVDA and PLTR to resolve the `NAKED` status immediately.
+3. **INFRA**: Audit `execution.portfolio_tracker` to identify why the EOD P&L drift is exceeding $60; this suggests the bot is failing to account for specific fills or partials in its internal ledger.
