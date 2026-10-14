@@ -522,6 +522,62 @@ both of them.** Knowing a failure mode provides zero protection against committi
 4. Prefer making the wrong thing **impossible** over making it **forbidden**.
 5. Treat a repeated violation as evidence about the CONTROL, not about the violator.
 
+### NO STATIC-THRESHOLD EXEMPTIONS — BUILD IT DYNAMIC FROM THE START (Rafael mandate 2026-10-14, standing + permanent)
+
+**GUILTY BY DEFAULT.** In a scanned file, every NEW or CHANGED numeric literal (including a negated one, either
+side of a comparison, a default, a keyword argument, a dict value) is a static threshold unless it is provably
+mechanics. A `# PROV:` or `# STATIC-WAIVER:` tag exempts nothing. A decision number must be DERIVED from data or
+PAIRED with a different-signal check-and-balance. The only mechanics let through (`.claude/preship/no_static_scan.py`
+docstring is the exact list):
+- 0 / 1 / -1;
+- a literal passed directly to a statistical estimator fed data (quantile, percentile, rolling, ewm, mean, median,
+  std, var, pct_change, diff, shift, expanding; `tail(n)` only when an estimator follows) — not np.clip / np.where / np.minimum / head() / derive_x(...);
+- range() / sleep() arguments, round()'s digits, int()'s base, string padding, split()'s maxsplit; a subscript index or
+  slice bound on TEXT only (`headline[:120]`, `str(ts)[:10]`, `text.split(",")[2]`; `qualified[:3]` caps
+  entries, `closes[-21]` is a lookback, `ranked[2]` is a pick) — never a literal inside a filter such as `df[df.atr_pct > 0.03]`;
+- unit conversions of DATA (`* 100` / `/ 100` when the immediate operand's own name carries a pct/percent/bps/frac word; 60 / 24 / 3600 / 86400 / 1000 / 1e6
+  with `*`, `/`, `//` against a data operand whose own name ends in a unit — `mins * 60`, `delta.days * 24`; `60 * 60`, `1000 / price` and
+  `day_start_equity / 1000` are thresholds), a square or square root (`** 2`, `** 0.5`), a 0..100 clamp in either nesting
+  of a non-quantity value — `equity / 100`, `min(raw_shares, 100)` and a clamped `qty` are thresholds;
+- `len(x) < 0|1|2` data-sufficiency checks on a DATA series only (df, bars, closes, prices, …; `len(longs) < 2` is a
+  cap), never with a capacity word anywhere inside it, string keys included (`len(state["positions"]) < 2` is a cap); float
+  tolerances (|x| ≤ 1e-6);
+- comparisons, assignments, keyword arguments or defaults tied to a PLUMBING name, and comparisons (only) against a
+  TIME name — see below; a PLUMBING name is (whole words: retries, attempts,
+  paging, workers/threads, poll/sleep, timeout, digits/precision, chunk/batch, version, requests/api,
+  status/code, indent; page/batch/chunk_size; time units — seconds/minutes/hours/ms/wait — only beside an
+  infrastructure word such as request, http, quote, fetch, cache, api, retry, rate); a TIME name is (ttl, timeout,
+  cache, epoch, uptime, latency — not expiry/deadline, which are trade decisions); neither may carry a threshold word (pct,
+  mult, risk, cap, limit, thresh, score, weight, stop, target, budget, slot, lot, reserve, exposure, leverage,
+  frac, gross, atr, max, min, ratio, size, k, n, usd, cushion, floor, ceiling, trigger, band, cutoff, window,
+  lookback, cooldown, hold, held, exit, entry, close, reentry, width, since, open, trade, position, elapsed,
+  confirm, bar) — so `elapsed_minutes > 90` and `CONFIRM_WAIT_BARS = 3` are thresholds;
+- a PAIRED check joined by `and` (not `or`): two comparisons, each with a real literal, on two different
+  signals (`vix > 25 and spy_pct <= -1.0`; a clock's hour and minute are one signal); a 0 / 1 / -1 counts only against a threshold-named signal, so a guard
+  such as `equity > 0`, `qty == 1`, `len(...)` or a plumbing comparison (`_cache_age <= 1800`, `attempt < 3`)
+  is not a signal.
+A number written as a string and parsed (`float(os.environ.get("K", "1.9"))`, `Decimal("0.03")`) is a literal too,
+with the same plumbing exemptions; `float("inf")` / `"nan"` sentinels are not thresholds.
+The gate is DIFF-SCOPED: existing numbers are grandfathered until their line changes, and then the change must
+make them dynamic.
+
+**Scope — also guilty by default** (`preship_gate._in_risk_scope`): every file under `execution/`, `strategy/`,
+`indicators/` and `events/`, every `run_*.py`, `main.py`, `config.py`, `data/gex.py` and `data/market_breadth.py`.
+Only pure I/O and accounting modules are excluded, each by name in `_RISK_SCOPE_EXCLUDED` (broker I/O, fill and
+P&L accounting, ownership-ledger serialisation, state I/O, `portfolio_tracker.py`, `earnings_fetcher.py`). A new
+module is scanned automatically; excluding one is a reviewed edit to that list.
+
+**Enforcement:** `.claude/preship/no_static_scan.py` (local hook and CI mirror share it) carries no tag
+exemption. `.claude/preship/test_no_static_scan.py` runs in CI and fails if a tag exemption returns or a sizing
+file leaves the scan.
+
+**Why:** on 2026-10-14 the Swing capacity change shipped a fixed 1.9× overnight cap, a fixed 3% one-share
+risk and a fixed 2-slot Swing reserve. The 3% line passed on a `# PROV:` tag. The 1.9× `_K` and the 2-slot
+`_LOTS` were not recognised as thresholds at all (name pattern, and 2 was whitelisted). The Swing, QHM and Day
+sizing files were outside the scan entirely. Three cold reviews then showed that any name-based guess leaks
+(KELLY_FRACTION, stop ATR multiples, `equity * 1.9`, `len(lots) >= 4`), hence guilty-by-default. The rule had to force the dynamic build from the start
+instead of leaving it to the CEO to notice.
+
 ### NO-GUESS MANDATE — ROOT-CAUSE BEFORE YOU CLAIM, MECHANICALLY ENFORCED (hardened 2026-08-28)
 
 **NEVER state a hypothesis as fact, and NEVER act on an unverified cause.** A causal, comparative,
