@@ -72,16 +72,26 @@ GATED_SELF = (".claude/preship/", ".claude/settings.json", ".github/")
 # These are the files where a hardcoded numeric DECISION THRESHOLD is the documented
 # no-static-regimes violation (the MRI redesign shipped VIX/TLT/level cutoffs static).
 # _dynamic_ok scans NEW/CHANGED literals in these and blocks an isolated, un-derived,
-# un-tagged threshold. DIFF-SCOPED, so pre-existing thresholds are grandfathered for
+# unpaired threshold (a PROV tag does not exempt since 2026-10-14). DIFF-SCOPED, so pre-existing thresholds are grandfathered for
 # migration — an edit touching no threshold is never blocked, and a static number PAIRED
 # with a different-signal check-and-balance is allowed (Rafael 2026-08-28: "vix 25 and
 # spy -1%"), enforced inside no_static_scan.
-_RISK_SCORING = ("events/macro_risk_index.py", "execution/kelly.py",
-                 "execution/risk_manager.py", "execution/entry_logic.py",
-                 "execution/exit_logic.py", "indicators/", "strategy/")
+# GUILTY BY DEFAULT (cold review rounds 10-12, 2026-10-14): every decision directory is scanned; only pure
+# I/O / accounting modules are excluded, each by name. A per-file allow-list kept missing sizing paths.
+_RISK_SCORING = ("execution/", "strategy/", "indicators/", "events/", "run_",
+                 "data/gex.py", "data/market_breadth.py")
+# Excluded: broker I/O, fill / P&L accounting and state serialisation — they record what happened, they decide
+# nothing about size, stops, capacity, exposure or entry frequency.
+_RISK_SCOPE_EXCLUDED = ("execution/broker.py", "execution/fifo_pnl.py", "execution/fill_helpers.py",
+                        "execution/fill_notifications.py", "execution/fill_reconciler.py",
+                        "execution/ownership_ledger_codec.py", "execution/ownership_snapshot.py",
+                        "execution/state_io.py", "execution/portfolio_tracker.py",
+                        "events/earnings_fetcher.py", "events/__init__.py", "execution/__init__.py")
 
 def _in_risk_scope(path: str) -> bool:
     path = path[2:] if path.startswith("./") else path
+    if path in _RISK_SCOPE_EXCLUDED:
+        return False
     return path.startswith(_RISK_SCORING) or path in ("main.py", "config.py")
 
 def _is_gated(path: str) -> bool:
@@ -524,13 +534,12 @@ def _dynamic_ok(relpath, ref, range_args):
     """DYNAMIC-OPTIMAL gate (remediation Gate 1+2, BGGN 2026-08-25; Rafael 2026-08-28
     block-immediately + pairing rule). Blocks a NEW/CHANGED ISOLATED static numeric DECISION
     THRESHOLD in a risk/scoring file unless it is derived from data, PAIRED with a
-    different-signal check-and-balance (`vix > 25 and spy_pct <= -1.0`), or carries a
-    `# PROV:<id>`/`# STATIC-WAIVER:<id>` tag. The MRI redesign shipped VIX/TLT/level cutoffs as
+    different-signal check-and-balance (`vix > 25 and spy_pct <= -1.0`). A `# PROV:`/`# STATIC-WAIVER:`
+    tag NO LONGER exempts (Rafael 2026-10-14, permanent). The MRI redesign shipped VIX/TLT/level cutoffs as
     hardcoded statics in violation of the permanent no-static-regimes mandate — this makes that
     impossible to ADD going forward. DIFF-SCOPED (only '+' lines) so pre-existing thresholds are
     grandfathered for migration and an edit touching no threshold is never blocked.
-    no_static_scan exempts PROV/WAIVER-tagged, whitelisted, derivation-call and paired
-    literals."""
+    no_static_scan exempts only whitelisted, derivation-call, plumbing and paired literals."""
     if not relpath.endswith(".py"):
         return True, "ok (non-py)"
     if _static_scan is None:
@@ -560,8 +569,8 @@ def _dynamic_ok(relpath, ref, range_args):
     return False, (
         f"NEW isolated static threshold(s) in risk/scoring code — DERIVE from data (a "
         f"derive_*/fit_*/quantile call), PAIR it with a different-signal check-and-balance "
-        f"(e.g. `and spy_pct <= -1.0`), or if genuinely structural tag the line "
-        f"`# PROV:<derivation-id>`: {shown}{more}. "
+        f"(e.g. `and spy_pct <= -1.0`). A `# PROV:` tag does not exempt (Rafael 2026-10-14): "
+        f"{shown}{more}. "
         f"[no-static-regimes mandate, remediation Gate 1+2]")
 
 
@@ -732,7 +741,7 @@ def _changed_gated(range_args, ref_tmpl):
                 fails.append(f"  - {f}: [DESIGN-RECORD] {dr_why}")
         # DYNAMIC-OPTIMAL gate (remediation Gate 1+2, Rafael block-immediately 2026-08-28): no NEW
         # ISOLATED static decision-threshold in risk/scoring code — diff-scoped (pre-existing
-        # grandfathered); a paired/derived/PROV-tagged literal is allowed.
+        # grandfathered); a paired or derived literal is allowed (a PROV tag is not, since 2026-10-14).
         if _in_risk_scope(f) and f.endswith(".py"):
             dyn_good, dyn_why = _dynamic_ok(f, ref_tmpl.format(f), range_args)
             if not dyn_good:

@@ -248,6 +248,8 @@ jobs:
           python3 .claude/preship/test_post_live_due.py
           # market-fact absence claims need same-sentence source evidence (Rafael 2026-10-09: false 'AMD has no liquid inverse ETF')
           python3 .claude/preship/test_no_assume_gate.py
+          # no static-threshold exemptions (Rafael 2026-10-14, permanent): a PROV/STATIC-WAIVER tag must not exempt
+          python3 .claude/preship/test_no_static_scan.py
           # four tier names only — Day / Swing / QHM / F6 (CEO 2026-10-07); fails on a retired name in person-facing text
           python3 tests/test_tier_names.py
           python3 .claude/preship/gai_health.py canary
