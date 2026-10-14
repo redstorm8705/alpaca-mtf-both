@@ -1041,6 +1041,8 @@ SWING_BREAKOUT_BUDGET_PCT = 0.80    # PROV:c2-breakout-2026-09-29 — tier notio
 SWING_BREAKOUT_TOTAL_OVERNIGHT_K = 1.9   # Invariant #11 as amended 2026-10-14 (Rafael chose 1.9 = Thorp; GAI/Taleb 1.75, none 2.0):
                                          # total overnight notional of ALL tiers <= K × equity (below Reg-T 2×); block-only.
                                          # Also bounds Day->Swing promotion (execution/day_promotion.py)
+SWING_RESERVE_LOTS = 2               # PROV:swing-reserve-2026-10-14 — CEO + BGG 4/4: QHM buys leave room for this many
+                                     # Swing breakout slots inside the 1.9x total-overnight cap (QHM never force-sold)
 SWING_BREAKOUT_STOP_ATR = 2.5       # PROV:c2-breakout-2026-09-29 — GTC stop at fill − 2.5 × ATR(14, daily) (lab 8c)
 SWING_BREAKOUT_MAX_RISK_PCT = 0.02  # PROV:c2-breakout-2026-09-29 — per-lot loss at the stop <= 2% of equity (own cap:
                                     # the paper profile sets MAX_PORTFOLIO_RISK_PCT to 4%, which this tier must not inherit)
