@@ -104,10 +104,40 @@ class Decisions(unittest.TestCase):
             self.assertIn("1-share floor", why)
             q, _ = sb.size_order(2520.0, 640.0, 9.5, 0.0, 0.0)         # one share > 25% of equity ($630) → 0
             self.assertEqual(q, 0)
-            q, _ = sb.size_order(2520.0, 600.0, 21.0, 0.0, 0.0)        # 2.5×ATR $52.5 > $50.4 risk cap → 0
-            self.assertEqual(q, 0)
+            with mock.patch.object(sb.config, "SWING_BREAKOUT_MIN1_RISK_PCT", 0.0, create=True):
+                q, _ = sb.size_order(2520.0, 600.0, 21.0, 0.0, 0.0)    # 2.5×ATR $52.5 > $50.4 risk cap → 0
+                self.assertEqual(q, 0)
             q, _ = sb.size_order(2520.0, 511.0, 9.5, 0.0, 2000.0)      # budget room $16 → no floor → 0
             self.assertEqual(q, 0)
+
+    def test_one_share_floor_risk_up_to_three_percent(self):
+        # CEO 2026-10-14: AMD 10/07 was refused ($63.30 stop distance vs a $50 cap). A single share may risk up to
+        # 3% of equity at its stop when the 2% cap buys none; never above 3%, never above the price caps.
+        with mock.patch.multiple(sb.config, SWING_BREAKOUT_MAX_RISK_PCT=0.02, SWING_BREAKOUT_MIN1_RISK_PCT=0.03,
+                                 SWING_BREAKOUT_TOTAL_OVERNIGHT_K=1.9, create=True):
+            q, why = sb.size_order(2620.0, 640.0, 25.32, 0.0, 0.0)    # stop $63.30 ≤ $78.60; $640 ≤ $655 → 1
+            self.assertEqual(q, 1)
+            self.assertIn("stop risk $63", why)
+            q, _ = sb.size_order(2620.0, 640.0, 32.0, 0.0, 0.0)       # stop $80 > 3% ($78.60) → 0
+            self.assertEqual(q, 0)
+            q, _ = sb.size_order(2620.0, 660.0, 25.32, 0.0, 0.0)      # one share > 25% of equity ($655) → 0
+            self.assertEqual(q, 0)
+            q, _ = sb.size_order(2620.0, 640.0, 25.32, 0.0, 0.0, 4400.0)   # K limb room $578 < $640 → 0
+            self.assertEqual(q, 0)
+            q, _ = sb.size_order(2620.0, 300.0, 25.32, 0.0, 0.0)      # cheap share, wide stop: 2% buys 0 → 1 sh
+            self.assertEqual(q, 1)
+
+    def test_size_order_k19_room_for_a_second_lot(self):
+        # 2026-10-13 book: equity $2,620, QHM $3,227 + UBER $499 (other) + MSFT $542 (tier). At 1.75× the total
+        # limb is $318 (< one $524 slot); at 1.9× it is $711 → one more lot fits.
+        with mock.patch.multiple(sb.config, SWING_BREAKOUT_MAX_RISK_PCT=0.02, create=True):
+            with mock.patch.object(sb.config, "SWING_BREAKOUT_TOTAL_OVERNIGHT_K", 1.75, create=True):
+                q, _ = sb.size_order(2620.0, 230.0, 5.0, 499.0, 542.0, 3227.0)
+                self.assertEqual(q, 1)                                   # $318 room → 1 sh at $230
+            with mock.patch.object(sb.config, "SWING_BREAKOUT_TOTAL_OVERNIGHT_K", 1.9, create=True):
+                q, why = sb.size_order(2620.0, 230.0, 5.0, 499.0, 542.0, 3227.0)
+                self.assertEqual(q, 2)                                   # slot $524 → 2 sh at $230
+                self.assertIn("total-limb $710", why)
 
     def test_size_order_invariant11_amended_two_limbs(self):
         # 2026-10-02 live book: equity $2,441, swing $256, QHM $3,175. QHM no longer blocks the 100% limb; the

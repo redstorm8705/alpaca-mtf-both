@@ -1,0 +1,20 @@
+{
+  "change": "swing-capacity-k19",
+  "tier": 1,
+  "paths": [
+    "config.py",
+    "execution/swing_breakout_manager.py",
+    "tests/test_swing_breakout_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/trade_events.jsonl",
+      "pattern": "c2_breakout_55d.*total-limb \\$[0-9]+"
+    }
+  ],
+  "baseline_exempt_reason": "The sizing decision string already exists; proof of this change is a breakout sizing record dated after the deploy whose total-limb equals 1.9 x equity minus all notional (the evaluator compares the dated record), plus, when the floor is used, the new text 'stop risk $N <= $M' that only this code emits.",
+  "expected_rate": "Every breakout entry scan with a signal (once per trading day from 10:05 ET); a second lot is admitted when the K limb room >= one slot",
+  "window_sessions": 5,
+  "window_reason": "Breakout signals are not daily; five sessions allow for days with no signal",
+  "reversal": "Total overnight notional exceeds 1.9 x equity after a breakout entry, a lot risks more than 3% of equity at its stop, or a promotion/entry is sized against the old 1.75 limb"
+}

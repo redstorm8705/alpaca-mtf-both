@@ -1034,10 +1034,13 @@ SWING_BREAKOUT_TOP_N = 10           # PROV:c2-breakout-2026-09-29 — lab 8c uni
 SWING_BREAKOUT_SLOT_PCT = 0.20      # PROV:c2-breakout-2026-09-29 — one slot = 20% of equity (board risk seat)
 SWING_BREAKOUT_MAX_SLOTS = 4        # PROV:c2-breakout-2026-09-29 — at most 4 concurrent breakout lots
 SWING_BREAKOUT_MIN1_MAX_PCT = 0.25  # PROV:c2-breakout-2026-09-29 — 1-share floor: a name whose one share exceeds the slot
-                                    # may enter as 1 share if that share <= 25% of equity (and the 2% stop-risk cap holds)
+                                    # may enter as 1 share if that share <= 25% of equity (and the stop-risk cap below holds)
+SWING_BREAKOUT_MIN1_RISK_PCT = 0.03  # PROV:swing-min1-risk-2026-10-14 — CEO (BGG: Thorp+Taleb 3%, GAI 2.5%, Gro no): a 1-sh lot may risk up to
+                                     # 3% of equity at its stop when 2% buys zero shares (AMD 10/07: $63 stop vs $50 cap)
 SWING_BREAKOUT_BUDGET_PCT = 0.80    # PROV:c2-breakout-2026-09-29 — tier notional <= min(80%, 100% − other swing/day notional; QHM/F6 excluded)
-SWING_BREAKOUT_TOTAL_OVERNIGHT_K = 1.75  # Invariant #11 as amended 2026-10-02 (Rafael-approved, BGG 4/4: Gro/Thorp/Shaw 1.75, GAI 1.6):
-                                         # total overnight notional of ALL tiers <= K × equity (below Reg-T 2×); block-only
+SWING_BREAKOUT_TOTAL_OVERNIGHT_K = 1.9   # Invariant #11 as amended 2026-10-14 (Rafael chose 1.9 = Thorp; GAI/Taleb 1.75, none 2.0):
+                                         # total overnight notional of ALL tiers <= K × equity (below Reg-T 2×); block-only.
+                                         # Also bounds Day->Swing promotion (execution/day_promotion.py)
 SWING_BREAKOUT_STOP_ATR = 2.5       # PROV:c2-breakout-2026-09-29 — GTC stop at fill − 2.5 × ATR(14, daily) (lab 8c)
 SWING_BREAKOUT_MAX_RISK_PCT = 0.02  # PROV:c2-breakout-2026-09-29 — per-lot loss at the stop <= 2% of equity (own cap:
                                     # the paper profile sets MAX_PORTFOLIO_RISK_PCT to 4%, which this tier must not inherit)
