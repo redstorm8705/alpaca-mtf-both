@@ -1,0 +1,19 @@
+{
+  "change": "fill-notifier-ux-pnl",
+  "tier": 1,
+  "paths": [
+    "alerts.py",
+    "execution/fill_notifications.py",
+    "tests/test_fill_notifications.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/fill_notifications_cron.log",
+      "pattern": "change_id=fill-notifier-ux-pnl card symbol=[A-Z]+ tier=[a-z0-9]+ fills=[1-9][0-9]* pnl_status=(ok|opening|unavailable|none)"
+    }
+  ],
+  "expected_rate": "On every poll that finds one or more unseen Alpaca FILL activities dated today (ET); each card shows 12-hour PT time, realized P/L on closing fills, one card per order per poll",
+  "window_sessions": 2,
+  "window_reason": "The next broker execution should exercise the notifier; two sessions allow for a no-trade day",
+  "reversal": "A posted card shows a fill from an earlier trading date, a realized P/L that disagrees with Alpaca-fills FIFO, a loss shown as a gain, or a confirmed same-day fill with no card"
+}
