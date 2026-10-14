@@ -1,5 +1,6 @@
 # ruff: noqa: E501
 from types import SimpleNamespace
+import json
 import threading
 import time
 
@@ -172,6 +173,25 @@ def test_corrupt_journal_fails_closed():
     ppb.JOURNAL_PATH.write_text('{"schema":1,"reservations":{"x":{}}}')
     with pytest.raises(ppb.PendingProtectedBuyError):
         ppb.assert_reduction_clear("NVDA")
+
+
+@pytest.mark.parametrize("bad_coid", [None, True, 7, [], {}, "", "F6", "QH-NVDA-b-1-x"])
+def test_malformed_client_id_fails_closed_without_ownership_guard(bad_coid):
+    """Journal validation is type-safe and has no ownership-guard import edge."""
+    ppb.JOURNAL_PATH.write_text(
+        '{"schema":1,"reservations":{"x":{'
+        '"status":"reserved","symbol":"NVDA","qty":1,'
+        f'"client_order_id":{json.dumps(bad_coid)},'
+        '"order_id":null,"created_at":"2026-10-14T00:00:00+00:00",'
+        '"baseline_f6_qty":0}}}'
+    )
+    with pytest.raises(ppb.PendingProtectedBuyError, match="invalid client ID"):
+        ppb.load()
+
+
+def test_reserve_rejects_bare_f6_prefix():
+    with pytest.raises(ppb.PendingProtectedBuyError, match="invalid F6 reservation"):
+        ppb.reserve("NVDA", 1, "F6", 0)
 
 
 def test_bind_rejects_wrong_identity_and_retains_reservation():

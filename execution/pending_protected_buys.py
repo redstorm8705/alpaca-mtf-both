@@ -19,8 +19,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from execution.ownership_guard import tier_of_coid
-
 logger = logging.getLogger(__name__)
 _CHANGE = "change_id=f6-pending-buy-reservation"
 
@@ -61,6 +59,16 @@ def _identity(value) -> str:
     return ""
 
 
+def _is_f6_coid(value) -> bool:
+    """Validate the canonical F6 prefix without importing the ledger guard.
+
+    The pending-intent journal sits below ownership reconciliation, so keeping
+    this parser local makes the dependency one-way: ownership_guard may consult
+    this journal, while loading this journal never imports ownership_guard.
+    """
+    return isinstance(value, str) and value.startswith("F6-")
+
+
 @contextlib.contextmanager
 def _locked():
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -91,7 +99,7 @@ def _validate(data: dict) -> dict:
         if not isinstance(row.get("symbol"), str) or not row["symbol"]:
             raise PendingProtectedBuyError(f"pending F6 journal {rid} has invalid symbol")
         coid = row.get("client_order_id")
-        if not isinstance(coid, str) or tier_of_coid(coid) != "forever6":
+        if not isinstance(coid, str) or not _is_f6_coid(coid):
             raise PendingProtectedBuyError(f"pending F6 journal {rid} has invalid client ID")
         qty = row.get("qty")
         if not isinstance(qty, int) or isinstance(qty, bool) or qty < 1:
@@ -154,7 +162,7 @@ def _save(data: dict) -> None:
 def reserve(symbol: str, qty: int, client_order_id: str, baseline_f6_qty: float) -> str:
     symbol = str(symbol or "").upper()
     if (not symbol or not isinstance(qty, int) or isinstance(qty, bool) or qty < 1
-            or tier_of_coid(client_order_id) != "forever6"
+            or not _is_f6_coid(client_order_id)
             or not isinstance(baseline_f6_qty, (int, float)) or isinstance(baseline_f6_qty, bool)
             or not math.isfinite(float(baseline_f6_qty)) or baseline_f6_qty < 0
             or abs(float(baseline_f6_qty) - round(float(baseline_f6_qty))) > 1e-6):
