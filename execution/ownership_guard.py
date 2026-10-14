@@ -416,6 +416,15 @@ def check_never_sell_floor(
 
     side: "sell" (reduce a long) or "short" (open/increase a short).
     """
+    # A pre-submit F6 reservation is protected intent whose fill may not yet be in
+    # the canonical ledger.  Consult it before the ordinary zero-floor keystone;
+    # unreadable/corrupt state is ambiguity on a protected buy and fails closed.
+    try:
+        from execution.pending_protected_buys import assert_reduction_clear
+        assert_reduction_clear(symbol)
+    except Exception as e:  # noqa: BLE001 - every journal ambiguity must block
+        logger.critical("[%s] reducing order blocked by pending F6 reservation state: %s", symbol, e)
+        return GuardResult("REJECT", 0.0, f"pending F6 ownership unresolved: {e}")
     if qty is None or qty <= _QTY_EPS:
         return GuardResult("REJECT", 0.0, "non-positive qty")
     if tier not in _TIERS:

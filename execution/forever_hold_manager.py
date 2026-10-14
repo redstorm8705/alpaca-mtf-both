@@ -169,6 +169,17 @@ class ForeverHoldManager:
                     f"full ledger replay failed: {sync.get('reason') or sync.get('error') or sync}"
                 )
 
+            from execution.pending_protected_buys import load as _load_pending_f6
+            _pending_rows = [
+                row for row in _load_pending_f6()["reservations"].values()
+                if row["status"] in {"reserved", "submitted"}
+            ]
+            if _pending_rows:
+                return self._startup_reconcile_failed(
+                    "F6 protected-buy reservation(s) unresolved",
+                    pending=tuple(sorted(row["client_order_id"] for row in _pending_rows)),
+                )
+
             open_orders = self.broker.get_open_orders()
             if open_orders is None:
                 return self._startup_reconcile_failed("open-order read failed")
@@ -412,31 +423,127 @@ class ForeverHoldManager:
                 continue
             # CASH-ONLY 1-share market buy, tier-tagged "forever6" (never-sell attribution).
             # Signed: ChatGPT/Codex, 2026-09-27.
-            from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
+            from execution.tier_capital_allocator import (
+                live_admit,
+                live_bind,
+                live_release,
+                live_release_proven_no_order,
+            )
+            from execution.order_admission import active_reductions, symbol_order_gate
+            from execution import pending_protected_buys as _pending_f6
+            _coid = _bk._make_idem_id("forever6", sym, "buy")
             _capital = live_admit("forever6", "forever6", sym, "buy", 1, px_reserve,
-                                  stop_price=px * 0.01)
+                                  stop_price=px * 0.01, client_order_id=_coid)
             if not _capital.approved:
                 skipped.append({**p, "skip": f"allocator: {_capital.reason}"})
                 continue
+            _reservation_written = False
             try:
-                order = _bk.submit_market_order(
-                    sym, 1, "buy", tier="forever6",
-                    client_order_id=live_order_id(_capital.lease),
-                )
-                if order is None:
-                    order = live_release(_capital.lease, "submit_none")
-                else:
-                    live_bind(_capital.lease, order)
+                with symbol_order_gate(sym):
+                    # Reducers clear only in run_ledger_sync after their exact fills
+                    # are reflected by the canonical ownership replay.  A terminal
+                    # broker status alone can precede that replay and is not enough.
+                    _unsettled_reducers = active_reductions(sym)
+                    if _unsettled_reducers:
+                        live_release(_capital.lease, "pre_submit_reducing_intent")
+                        skipped.append({**p, "skip": "reducing order admission unresolved"})
+                        logger.warning(
+                            "[F6] BUY BLOCKED %s: %d reducing admission(s) unresolved",
+                            sym, len(_unsettled_reducers),
+                        )
+                        continue
+                    # A broker-resting sell can execute after this buy fills and consume
+                    # the new protected share without entering a fresh guard.  Refuse the
+                    # buy instead of cancelling another tier's protection.
+                    _open = _bk.get_open_orders(sym, nested=True)
+                    if _open is None:
+                        raise RuntimeError("open-order state unreadable")
+                    _reducing = []
+                    _all_open = []
+                    for _parent in _open:
+                        _all_open.append(_parent)
+                        _all_open.extend(list(getattr(_parent, "legs", None) or []))
+                    for _o in _all_open:
+                        _symbol = str(getattr(_o, "symbol", "") or "").upper()
+                        _side = str(getattr(getattr(_o, "side", ""), "value", getattr(_o, "side", ""))).lower()
+                        if _symbol != sym or _side not in {"buy", "sell", "sell_short"}:
+                            raise RuntimeError("open-order identity is malformed")
+                        if _side in {"sell", "sell_short"}:
+                            _reducing.append(str(getattr(_o, "id", "unknown")))
+                    if _reducing:
+                        live_release(_capital.lease, "pre_submit_reducing_order")
+                        skipped.append({**p, "skip": "live reducing order exists"})
+                        logger.warning("[F6] BUY BLOCKED %s: live reducing order(s) %s", sym, _reducing)
+                        continue
+
+                    from execution import ownership_guard as _og
+                    _ledger = _og.load_ledger()
+                    _entry = (_ledger.get("positions") or {}).get(sym)
+                    _baseline = _og.tier_qty(_ledger, sym, "forever6")
+                    if (not math.isfinite(_baseline) or _baseline < 0
+                            or abs(_baseline - round(_baseline)) > _EPS
+                            or (_entry is not None and abs(float(_entry.get("drift", 0) or 0)) > _EPS)):
+                        raise RuntimeError("baseline F6 ownership is unresolved")
+                    _reservation = _pending_f6.reserve(sym, 1, _coid, _baseline)
+                    _reservation_written = True
+                    order = _bk.submit_market_order(
+                        sym, 1, "buy", tier="forever6", client_order_id=_coid,
+                        distinguish_rejection=True,
+                    )
+                    if order is _bk.ORDER_DEFINITIVELY_REJECTED:
+                        # Alpaca explicitly declined before accepting an order.
+                        # This is the only no-order result that can safely retire
+                        # both durable intents without fill replay.  Stop the batch
+                        # so a buying-power/auth failure is not repeated by symbol.
+                        if not live_release_proven_no_order(
+                            _capital.lease, "broker_definitive_reject"
+                        ):
+                            raise RuntimeError(
+                                "allocator failed to persist definitive-reject release"
+                            )
+                        _pending_f6.release_definitive_reject(_reservation, _coid)
+                        skipped.append({**p, "skip": "broker definitively rejected order"})
+                        skipped.extend(
+                            {**q, "skip": "stopped after broker rejection"}
+                            for q in plan[i + 1:]
+                        )
+                        logger.error(
+                            "[F6] BUY REJECTED %s — reservations released from explicit "
+                            "broker proof; stopping starter batch",
+                            sym,
+                        )
+                        break
+                    if order is None:
+                        # Exact-ID lookup is the only permitted recovery. Absence is
+                        # ambiguous and leaves both reservations active.
+                        order = live_release(_capital.lease, "submit_none")
+                        if order is None:
+                            order = _bk.get_order_by_client_order_id(_coid)
+                    if order is not None:
+                        _pending_f6.bind(_reservation, order)
+                        live_bind(_capital.lease, order)
             except Exception as e:
-                order = live_release(_capital.lease, "submit_none")
+                order = None
+                if not _reservation_written:
+                    live_release(_capital.lease, "pre_submit_reservation_failed")
+                else:
+                    # Once protected intent exists, an exception may follow an
+                    # accepted broker request.  Run both exact-ID recovery paths:
+                    # live_release releases the capital lease only for a proven
+                    # terminal-zero order and otherwise retains/binds it; the broker
+                    # lookup supplies that same exact order to the ownership journal.
+                    order = live_release(_capital.lease, "submit_none")
+                    if order is None:
+                        order = _bk.get_order_by_client_order_id(_coid)
+                    if order is not None:
+                        _pending_f6.bind(_reservation, order)
+                        live_bind(_capital.lease, order)
                 if order is None:
-                    logger.error("[F6] BUY EXCEPTION %s: %s — STOPPING starter (fail-closed)", sym, e)
+                    logger.error("[F6] BUY EXCEPTION %s: %s — STOPPING starter (fail-closed; exact-ID recovery unresolved)", sym, e)
                     skipped.extend({**q, "skip": "stopped after broker exception"} for q in plan[i + 1:])
                     break
-                logger.warning(
-                    "[F6] BUY response failed for %s but exact client ID recovered order %s",
-                    sym, getattr(order, "id", "unknown"),
-                )
+                logger.warning("[F6] BUY EXCEPTION %s recovered exact order %s by client ID",
+                               sym, getattr(order, "id", None))
             if order is None:
                 # broker returned None → NOT a confirmed order. Never-mask: do not count it placed,
                 # and do NOT keep placing (a systemic fault would repeat down the plan).
