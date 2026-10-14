@@ -572,7 +572,7 @@ def _free_share_stop_ok(err: str, qty: int, foreign_stop_qty: float) -> "int | N
 
 # ── Order submission ──────────────────────────────────────────────────────────
 
-@serialized_symbol_order(failure_value=None, side_position=1)
+@serialized_symbol_order(failure_value=None, side_parameter="side")
 def submit_market_order(
     symbol: str,
     qty: int,
@@ -696,7 +696,7 @@ def submit_market_order(
     return None
 
 
-@serialized_symbol_order(failure_value=None, side_position=1)
+@serialized_symbol_order(failure_value=None, side_parameter="side")
 def submit_limit_order(
     symbol: str,
     qty: int,
@@ -824,7 +824,7 @@ def submit_limit_order(
 WASH_REJECTED = object()
 
 
-@serialized_symbol_order(failure_value=None, side_position=1)
+@serialized_symbol_order(failure_value=None, side_parameter="side")
 def submit_bracket_entry(
     symbol: str,
     qty: int,

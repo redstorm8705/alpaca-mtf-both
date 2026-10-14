@@ -17,6 +17,7 @@ import threading
 import json
 import math
 import uuid
+import inspect
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -322,14 +323,21 @@ def reconcile_reductions(fills: list, orders: list, coid_map: dict,
 
 
 def serialized_symbol_order(*, failure_value=None, reducing: bool = False,
-                            side_position: int | None = None):
+                            side_parameter: str | None = None):
     """Decorator for broker paths whose first positional argument is ``symbol``."""
     def decorate(fn):
+        signature = inspect.signature(fn)
+
         @wraps(fn)
         def wrapped(symbol, *args, **kwargs):
             is_reducing = reducing
-            if side_position is not None:
-                raw_side = args[side_position] if len(args) > side_position else kwargs.get("side", "")
+            if side_parameter is not None:
+                # Bind by the declared parameter name instead of indexing the
+                # post-symbol ``args`` tuple.  This makes positional and keyword
+                # calls equivalent and prevents signature edits from silently
+                # changing which value is interpreted as the order side.
+                bound = signature.bind_partial(symbol, *args, **kwargs)
+                raw_side = bound.arguments.get(side_parameter, "")
                 is_reducing = str(raw_side).lower() in {"sell", "sell_short", "short"}
             if is_reducing:
                 import config
@@ -340,6 +348,15 @@ def serialized_symbol_order(*, failure_value=None, reducing: bool = False,
                 return fn(symbol, *args, **kwargs)
             try:
                 with symbol_order_gate(symbol):
+                    # Make the admission wrapper itself the first fail-closed
+                    # barrier.  Broker functions retain their local assertions
+                    # as defense in depth, but a newly decorated reducing path
+                    # cannot omit the pending protected-buy check.
+                    try:
+                        from execution.pending_protected_buys import assert_reduction_clear
+                        assert_reduction_clear(symbol)
+                    except Exception:
+                        return failure_value
                     stack = getattr(_TLS, "reduction_stack", None)
                     if stack is None:
                         stack = []

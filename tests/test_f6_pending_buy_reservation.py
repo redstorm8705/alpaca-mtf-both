@@ -212,6 +212,30 @@ def test_pending_reservation_blocks_direct_sell_before_broker(monkeypatch):
     assert broker.submit_market_order("NVDA", 1, "sell", tier="intraday") is None
 
 
+@pytest.mark.parametrize("keyword_side", [False, True])
+def test_side_parameter_binding_admits_buys_and_blocks_sells(monkeypatch, keyword_side):
+    """The decorator identifies side by name for positional and keyword calls."""
+    import config
+    monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
+    calls = []
+
+    @order_admission.serialized_symbol_order(
+        failure_value="blocked", side_parameter="side",
+    )
+    def submit(symbol, qty, side):
+        calls.append((symbol, qty, side))
+        return "submitted"
+
+    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    if keyword_side:
+        assert submit("NVDA", 1, side="sell") == "blocked"
+        assert submit("NVDA", 1, side="buy") == "submitted"
+    else:
+        assert submit("NVDA", 1, "sell") == "blocked"
+        assert submit("NVDA", 1, "buy") == "submitted"
+    assert calls == [("NVDA", 1, "buy")]
+
+
 def test_pending_reservation_blocks_f6_trim_at_its_chokepoint(monkeypatch):
     """F6 trim must fail before position reads or its delegated sell path."""
     import config
