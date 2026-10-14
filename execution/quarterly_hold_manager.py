@@ -155,6 +155,13 @@ _EARNINGS_TRIM_TIER2_MULT           = 2.0    # Tier 2 fires at this multiple of 
 _EARNINGS_TRIM_ATR_FALLBACK_MULT    = 6.25   # fallback target = this x the 14-week ATR (as % of price), when option data is unavailable. Derived: the intraday target:stop ratio's upper end (2.5x, since this is explicitly WIDER than intraday) applied to QHM's own 2.5x-ATR stop basis = 2.5 * 2.5 = 6.25x ATR — not an invented number.
 _EARNINGS_TRIM_WINDOW_OUTER_BOUND_DAYS = 21  # never evaluate the trim further out than this even if a run-up is underway (board+GAI dynamic-window outer bound, 2026-08-05); the existing 5-day stop-cancel gate (_maybe_enter_earnings_hold) naturally takes over from this mechanism once a position leaves ACTIVE state
 _EARNINGS_TRIM_STATE_PATH           = _ROOT / "data" / "state" / "qhm_earnings_trim.json"
+# OWNER TRIM (CEO 2026-10-14, board Thorp + Shaw + Gro + GAI 4/4 on LLY): an operator-armed partial sale of a quarterly
+# hold, written by scripts/qhm_owner_trim.py. The bot executes it with the same reserve -> cancel stop -> sell ->
+# confirm -> restore stop -> ledger reduction sequence as the earnings trim, so the stray-sell guard and the ownership
+# ledger never fight a hand-placed order.
+_OWNER_TRIM_PATH                    = _ROOT / "data" / "state" / "qhm_owner_trims.json"
+_OWNER_TRIM_LOCK_RETRIES = 5                    # x 0.1 s: the CLI holds the lock for milliseconds
+_OWNER_TRIM_FILL_POLL_TIMEOUT_SECONDS = 15.0   # same bounded fill poll as the earnings trim (trading-thread budget)
 # Earnings-date source log + UNKNOWN page, once per symbol per ET day (design record
 # logs/design_records/qhm_earnings_dates_fix_2026-10-12.md).
 _EARNINGS_SRC_LOGGED: dict = {}
@@ -944,6 +951,11 @@ class QuarterlyHoldManager:
                         "QuarterlyHoldManager: %s QHM ownership proof unavailable; "
                         "skipping ACTIVE mutations this cycle", symbol,
                     )
+                    continue
+
+                # OWNER TRIM: an operator-armed partial sale. When it runs this cycle, no other stop-mutating
+                # work runs on this hold until the next cycle (it just cancelled and restored the stop).
+                if self._maybe_owner_trim(pos):
                     continue
 
                 # EARNINGS PROFIT-TAKE: evaluated BEFORE the day-5 stop-cancel below so it has
@@ -3062,6 +3074,255 @@ class QuarterlyHoldManager:
         except Exception as e:
             logger.warning("QHM earnings-trim: %s ATR fallback failed: %s", symbol, e)
             return None
+
+    def _load_owner_trims(self) -> "Optional[dict]":
+        """{} when no request file exists; None when it exists but is unreadable (callers then do nothing)."""
+        if not _OWNER_TRIM_PATH.exists():
+            return {}
+        try:
+            d = json.loads(_OWNER_TRIM_PATH.read_text())
+        except Exception as e:  # RC-3
+            logger.critical("QHM owner-trim: %s unreadable (%s) — no owner trim this cycle", _OWNER_TRIM_PATH, e)
+            return None
+        return d if isinstance(d, dict) else None
+
+    def _set_owner_trim(self, symbol: str, expect_status: "Optional[str]" = None, **fields) -> bool:
+        """Re-read, merge `fields` into `symbol`'s request, atomic write. True only on a confirmed write. With
+        `expect_status`, writes only if the request is still in that status (a request re-armed by the operator CLI
+        mid-trim is never overwritten)."""
+        import fcntl
+        try:
+            _lk = open(str(_OWNER_TRIM_PATH) + ".lock", "w")
+        except Exception as e:  # RC-3
+            logger.error("QHM owner-trim: lock unavailable for %s: %s", symbol, e)
+            return False
+        try:
+            # shared with scripts/qhm_owner_trim.py: no lost read-modify-write. NON-BLOCKING with a short bounded retry
+            # — this runs on the trading thread, which must never wait on another process (adversarial review)
+            for _attempt in range(_OWNER_TRIM_LOCK_RETRIES):
+                try:
+                    fcntl.flock(_lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.1)
+            else:
+                logger.warning("QHM owner-trim: request file busy — %s not updated this cycle", symbol)
+                return False                  # the finally below releases (a no-op) and closes the lock file
+            d = self._load_owner_trims()
+            if d is None:
+                return False
+            rec = dict(d.get(symbol) or {})
+            if expect_status is not None and rec.get("status") != expect_status:
+                logger.warning("QHM owner-trim: %s request is %r, not %r — not overwritten",
+                               symbol, rec.get("status"), expect_status)
+                return False
+            rec.update(fields)
+            rec["updated_at"] = self._now_et().isoformat()
+            d[symbol] = rec
+            _OWNER_TRIM_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _OWNER_TRIM_PATH.with_suffix(f".json.{os.getpid()}.tmp")
+            with open(tmp, "w") as f:
+                json.dump(d, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp), str(_OWNER_TRIM_PATH))
+            return True
+        except Exception as e:  # RC-3
+            logger.error("QHM owner-trim: state write failed for %s: %s", symbol, e)
+            return False
+        finally:
+            try:
+                fcntl.flock(_lk, fcntl.LOCK_UN)
+                _lk.close()
+            except Exception as _ue:  # RC-3
+                logger.warning("QHM owner-trim: lock release failed: %s", _ue)
+
+    def _maybe_owner_trim(self, pos: HoldPosition) -> bool:
+        """Execute an operator-armed partial sale of an ACTIVE long hold when its trigger price is reached, or at
+        market on/after its deadline date. Request (written by scripts/qhm_owner_trim.py): {"qty": int, "trigger_price":
+        float or null, "deadline": "YYYY-MM-DD", "status": "armed"}. Always leaves at least one share and its stop.
+        Returns True iff a trim was ATTEMPTED this cycle (the caller then skips other stop work on this hold).
+        RTH only. Never raises."""
+        if self.dry_run or pos.state != HoldState.ACTIVE or pos.direction != "long":
+            return False
+        try:
+            reqs = self._load_owner_trims()
+            req = (reqs or {}).get(pos.symbol)
+            if not isinstance(req, dict) or req.get("status") != "armed":
+                return False
+            try:
+                qty = int(req["qty"])
+                trigger = float(req["trigger_price"]) if req.get("trigger_price") is not None else None
+                deadline = date.fromisoformat(str(req.get("deadline")))
+            except (TypeError, ValueError, KeyError) as e:
+                self._set_owner_trim(pos.symbol, status="rejected", reason=f"bad request: {e}")
+                self._alert(":warning: QHM %s owner trim REJECTED — bad request (%s)" % (pos.symbol, e))
+                return False
+            if req.get("entry_day") != pos.entry_day:
+                self._set_owner_trim(pos.symbol, status="rejected",
+                                     reason=f"armed for the hold entered {req.get('entry_day')}, not {pos.entry_day}")
+                self._alert(":warning: QHM %s owner trim REJECTED — it was armed for a different hold (entered %s; "
+                            "this one %s)" % (pos.symbol, req.get("entry_day"), pos.entry_day))
+                return False
+            if qty < 1 or qty >= pos.qty_filled:
+                self._set_owner_trim(pos.symbol, status="rejected",
+                                     reason=f"qty {qty} must be >= 1 and leave at least one of {pos.qty_filled} shares")
+                self._alert(":warning: QHM %s owner trim REJECTED — qty %s vs %s held (must leave >= 1 share)"
+                            % (pos.symbol, qty, pos.qty_filled))
+                return False
+            try:
+                from execution.broker import is_market_open as _is_market_open
+                if not _is_market_open():
+                    return False
+            except Exception as _mkt_e:  # RC-3: fail closed (no trim) but log
+                logger.warning("QHM owner-trim: market-open check failed for %s (%s) — skipped", pos.symbol, _mkt_e)
+                return False
+            # QHM must be the ONLY holder: every quantity check below reads the whole broker position, so a share
+            # co-held by another tier (e.g. a Day lot) would be misread and its stop cancelled (cold-2nd 2026-10-14).
+            # Wait — a co-hold is usually intraday — and page once per day.
+            _broker_qty = self._earnings_trim_broker_qty(pos)
+            if _broker_qty != pos.qty_filled:
+                _k = (pos.symbol, self._now_et().date().isoformat(), "owner_trim_coheld")
+                if _k not in _EARNINGS_SRC_LOGGED:
+                    _EARNINGS_SRC_LOGGED[_k] = True
+                    self._alert(":warning: QHM %s owner trim waiting: broker holds %s shares, QHM owns %s (another "
+                                "tier co-holds, or unreadable) — retries each cycle" % (pos.symbol, _broker_qty,
+                                                                                        pos.qty_filled))
+                return False
+            today = self._now_et().date()
+            reason = ""
+            if today >= deadline:
+                reason = f"deadline {deadline.isoformat()} reached — selling at market"
+            elif trigger is not None:
+                try:   # a FRESH last trade / 1-min bar only — never the position's stale lastday_price fallback
+                    from data.live_price import live_price as _live_price
+                    _lp = _live_price(pos.symbol)
+                    live = float(_lp.price) if _lp is not None else None
+                except Exception as _lpe:  # RC-3: no fresh price -> no trigger this cycle
+                    logger.warning("QHM owner-trim: %s live price unavailable: %s", pos.symbol, _lpe)
+                    live = None
+                if live and live >= trigger:
+                    reason = f"trigger ${trigger:.2f} reached (last ${live:.2f})"
+            if not reason:
+                return False
+            self._execute_owner_trim(pos, qty, reason)
+            return True
+        except Exception as e:  # RC-3
+            logger.warning("QHM owner-trim error for %s: %s", pos.symbol, e)
+            return False
+
+    def _execute_owner_trim(self, pos: HoldPosition, trim_qty: int, reason: str) -> None:
+        """Same discipline as _execute_earnings_trim_tier1: RESERVE-BEFORE-SELL (a confirmed 'reserved' write before
+        any order; a failure afterwards leaves it 'reserved' for manual review, never auto-retried), NAKED-STOP
+        INVARIANT (every path after the stop cancel leaves a resting stop or PENDING_STOP_REPLACE + alert), and FILL
+        CONFIRMATION by broker quantity before the stop is restored. Never raises."""
+        try:
+            if not self._set_owner_trim(pos.symbol, status="reserved", reason=reason):
+                logger.error("QHM owner-trim: %s reservation FAILED to persist — no sell this cycle", pos.symbol)
+                return
+            from execution.broker import (
+                cancel_order as _cancel_order,
+                get_open_orders as _get_open_orders,
+                partial_close_position,
+            )
+            import time as _time
+
+            _orig_qty = pos.qty_filled
+            _orig_stop = pos.stop_price
+            floor_stop = pos.avg_entry_price * (1 - _HARD_FLOOR_PCT)
+            _restore_px = round(max(_orig_stop, floor_stop), 2) if _orig_stop > 0 else round(floor_stop, 2)
+
+            if pos.stop_order_id:
+                if not _cancel_order(str(pos.stop_order_id)):
+                    self._alert(":rotating_light: QHM %s owner trim: stop cancel failed — nothing sold, stop intact, "
+                                "request stuck 'reserved' (manual review)" % pos.symbol)
+                    return
+                pos.stop_order_id = None
+                _held = self._earnings_trim_broker_qty(pos)
+                if _held is None:
+                    self._earnings_trim_restore_stop(pos, _orig_qty, _restore_px, "owner-trim position-read-failed")
+                    return
+                if _held < _orig_qty:      # the stop fired during the cancel: never trim on top of it
+                    if _held >= 1:
+                        try:
+                            self._resync_from_alpaca(pos)
+                        except Exception as _rs_e:  # RC-3
+                            logger.warning("QHM owner-trim: %s resync failed: %s", pos.symbol, _rs_e)
+                        self._earnings_trim_restore_stop(pos, _held, _restore_px, "owner-trim stop-fired-during-cancel")
+                    return
+
+            if not partial_close_position(pos.symbol, trim_qty, tier="qhm"):
+                self._alert(":rotating_light: QHM %s owner trim: sell FAILED after stop cancel — stop restored, "
+                            "request stuck 'reserved' (manual review)" % pos.symbol)
+                _q = self._earnings_trim_broker_qty(pos)
+                if _q is None or _q >= 1:
+                    self._earnings_trim_restore_stop(pos, _q if _q else _orig_qty, _restore_px, "owner-trim sell-failed")
+                return
+
+            _target_qty = _orig_qty - trim_qty
+            _deadline = _time.monotonic() + _OWNER_TRIM_FILL_POLL_TIMEOUT_SECONDS
+            _time.sleep(2)
+            _now_qty = self._earnings_trim_broker_qty(pos)
+            while _time.monotonic() < _deadline:
+                if _now_qty is not None and _now_qty <= _target_qty:
+                    break
+                _time.sleep(1)
+                _now_qty = self._earnings_trim_broker_qty(pos)
+            _confirmed_qty = _now_qty if (_now_qty is not None and _now_qty <= _target_qty) else None
+            if _confirmed_qty is None:
+                try:
+                    for _o in (_get_open_orders(pos.symbol) or []):     # ONLY this tier's own (QH-) sells
+                        if (str(getattr(_o, "side", "")).lower().endswith("sell")
+                                and str(getattr(_o, "client_order_id", "") or "").startswith("QH-")):
+                            _cancel_order(str(getattr(_o, "id", "")))
+                except Exception as _ce:  # RC-3
+                    logger.warning("QHM owner-trim: %s could not cancel the pending sell: %s", pos.symbol, _ce)
+                _q2 = self._earnings_trim_broker_qty(pos)
+                if _q2 is None or _q2 >= 1:
+                    self._earnings_trim_restore_stop(pos, _q2 if _q2 else _orig_qty, _restore_px,
+                                                     "owner-trim sell-unconfirmed")
+                self._alert(":rotating_light: QHM %s owner trim: sell UNCONFIRMED — pending order cancelled, stop "
+                            "restored, request stuck 'reserved' (manual review)" % pos.symbol)
+                return
+
+            try:
+                self._resync_from_alpaca(pos)
+            except Exception as _rs_e:  # RC-3
+                logger.warning("QHM owner-trim: %s post-trim resync failed: %s", pos.symbol, _rs_e)
+            try:
+                from execution import ownership_guard as _og
+                _og.apply_authorized_tier_reduction(pos.symbol, "qhm", float(_confirmed_qty), "owner_trim")
+            except Exception as _hc_e:  # RC-3
+                logger.warning("QHM owner-trim: %s ledger reduction failed: %s", pos.symbol, _hc_e)
+            if _confirmed_qty >= 1:
+                self._earnings_trim_restore_stop(pos, _confirmed_qty, _restore_px, "owner-trim post-sell stop")
+            else:
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+            if not self._set_owner_trim(pos.symbol, expect_status="reserved", status="done",
+                                        sold_qty=_orig_qty - _confirmed_qty, remaining_qty=_confirmed_qty):
+                self._alert(":rotating_light: QHM %s owner trim EXECUTED but the 'done' write failed — verify and "
+                            "clear manually" % pos.symbol)
+                return
+            logger.warning("QHM OWNER TRIM: %s sold %d share(s) (%s); %d left, stop $%.2f",
+                           pos.symbol, _orig_qty - _confirmed_qty, reason, _confirmed_qty, _restore_px)
+            self._alert(":moneybag: QHM %s owner trim: sold %d share(s) (%s); %d left with stop $%.2f"
+                        % (pos.symbol, _orig_qty - _confirmed_qty, reason, _confirmed_qty, _restore_px))
+            try:
+                import trade_logger
+                trade_logger.log_event("partial_exit", symbol=pos.symbol, size=_orig_qty - _confirmed_qty,
+                                       data_source="alpaca_data", tier="qhm", exit_reason="owner_trim",
+                                       detail=reason, remaining_qty=_confirmed_qty)
+            except Exception as _le:  # RC-3
+                logger.warning("QHM owner-trim: %s event not logged: %s", pos.symbol, _le)
+        except Exception as e:  # RC-3
+            logger.warning("QHM owner-trim execution error for %s: %s", pos.symbol, e)
+            if pos.stop_order_id is None:      # the stop was cancelled before the error: never leave the hold naked
+                _q = self._earnings_trim_broker_qty(pos)
+                if _q is None or _q >= 1:
+                    _floor = pos.avg_entry_price * (1 - _HARD_FLOOR_PCT)
+                    _px = round(max(pos.stop_price, _floor), 2) if pos.stop_price > 0 else round(_floor, 2)
+                    self._earnings_trim_restore_stop(pos, _q if _q else pos.qty_filled, _px, "owner-trim error")
 
     def _maybe_earnings_trim(self, pos: HoldPosition, today_str: str) -> bool:
         """EARNINGS PROFIT-TAKE: realize profit ahead of an earnings print via a dynamic,
