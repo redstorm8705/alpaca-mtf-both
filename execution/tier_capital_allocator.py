@@ -492,7 +492,7 @@ class TierCapitalAllocator:
             worst_loss,
             now,
             now + self.policy.lease_ttl_seconds,
-            f"{_prefix}-{req.symbol}-{_lease_id[:20]}",
+            req.client_order_id or f"{_prefix}-{req.symbol}-{_lease_id[:20]}",
         )
         return Decision(True, "approved", lease)
 
@@ -714,6 +714,10 @@ class TierCapitalAllocator:
             not math.isfinite(req.risk_price_bound) or req.risk_price_bound <= 0
         ):
             return "invalid risk price bound"
+        if req.client_order_id:
+            expected = {"daytrade": "DT-", "swing": "IN-", "qhm": "QH-", "forever6": "F6-"}[req.tier]
+            if not req.client_order_id.startswith(expected):
+                return "client order ID tier mismatch"
         return ""
 
     def _decision(self, approved: bool, reason: str, request: EntryRequest) -> Decision:
@@ -868,6 +872,7 @@ def live_admit(
     exempt_existing_notional: float = 0.0,
     regime_evidence: dict[str, Any] | None = None,
     risk_price_bound: float = 0.0,
+    client_order_id: str = "",
 ) -> Decision:
     """Live caller bridge. Disabled only for backwards-compatible unit imports; enabled config fails closed."""
     import config
@@ -922,6 +927,7 @@ def live_admit(
             risk_price_bound=risk_price_bound,
             overnight=overnight,
             exempt_existing_notional=exempt_existing_notional,
+            client_order_id=client_order_id,
             regime_evidence=_evidence,
         )
     )
@@ -973,6 +979,20 @@ def live_release(lease: Lease | None, reason: str) -> Any | None:
         return None
     _LIVE_ALLOCATOR.release(lease.id, reason)
     return None
+
+
+def live_release_proven_no_order(lease: Lease | None, reason: str) -> bool:
+    """Release a live lease only for caller-proven pre-accept rejection.
+
+    Unlike ``live_release``, this exposes the durable write result so a caller
+    coordinating another journal can keep that second journal active when the
+    allocator release did not persist.  A disabled allocator produces no lease.
+    """
+    if lease is None:
+        return True
+    if _LIVE_ALLOCATOR is None:
+        return False
+    return bool(_LIVE_ALLOCATOR.release(lease.id, reason))
 
 
 def _load_regime_evidence() -> dict[str, Any]:
