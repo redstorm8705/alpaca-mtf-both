@@ -1035,7 +1035,7 @@ SWING_BREAKOUT_SLOT_PCT = 0.20      # PROV:c2-breakout-2026-09-29 — one slot =
 SWING_BREAKOUT_MAX_SLOTS = 4        # PROV:c2-breakout-2026-09-29 — at most 4 concurrent breakout lots
 SWING_BREAKOUT_MIN1_MAX_PCT = 0.25  # PROV:c2-breakout-2026-09-29 — 1-share floor: a name whose one share exceeds the slot
                                     # may enter as 1 share if that share <= 25% of equity (and the stop-risk cap below holds)
-SWING_BREAKOUT_MIN1_RISK_PCT = 0.03  # CEO 2026-10-14 (BGG: Thorp+Taleb 3%, GAI 2.5%, Gro no): a 1-share lot may risk up to
+SWING_BREAKOUT_MIN1_RISK_PCT = 0.03  # PROV:swing-min1-risk-2026-10-14 — CEO (BGG: Thorp+Taleb 3%, GAI 2.5%, Gro no): a 1-sh lot may risk up to
                                      # 3% of equity at its stop when 2% buys zero shares (AMD 10/07: $63 stop vs $50 cap)
 SWING_BREAKOUT_BUDGET_PCT = 0.80    # PROV:c2-breakout-2026-09-29 — tier notional <= min(80%, 100% − other swing/day notional; QHM/F6 excluded)
 SWING_BREAKOUT_TOTAL_OVERNIGHT_K = 1.9   # Invariant #11 as amended 2026-10-14 (Rafael chose 1.9 = Thorp; GAI/Taleb 1.75, none 2.0):
