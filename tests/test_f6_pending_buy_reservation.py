@@ -212,6 +212,22 @@ def test_pending_reservation_blocks_direct_sell_before_broker(monkeypatch):
     assert broker.submit_market_order("NVDA", 1, "sell", tier="intraday") is None
 
 
+def test_pending_reservation_blocks_f6_trim_at_its_chokepoint(monkeypatch):
+    """F6 trim must fail before position reads or its delegated sell path."""
+    import config
+    monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
+    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    monkeypatch.setattr(
+        broker, "get_open_position", lambda _symbol: pytest.fail("position was read")
+    )
+    monkeypatch.setattr(
+        broker, "partial_close_position", lambda *_a, **_k: pytest.fail("sell was delegated")
+    )
+
+    assert broker.submit_f6_trim("NVDA", 1) is False
+    assert order_admission.active_reductions("NVDA") == ()
+
+
 def test_pre_submit_blocked_sell_does_not_leak_reducer_admission(monkeypatch):
     import config
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)

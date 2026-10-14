@@ -2230,6 +2230,16 @@ def submit_f6_trim(symbol: str, qty: int) -> bool:
     if qty < 1:
         logger.warning(f"[{symbol}] submit_f6_trim called with qty={qty} < 1 — skipping.")
         return False
+    # Keep the F6 trim chokepoint independently fail-closed, even though its
+    # delegated partial_close_position() path repeats this check.  The outer
+    # serialized_symbol_order decorator holds the same per-symbol lock across
+    # both checks, so no protected buy can reserve between them.
+    try:
+        from execution.pending_protected_buys import assert_reduction_clear
+        assert_reduction_clear(symbol)
+    except Exception as e:
+        logger.critical(f"[{symbol}] F6 trim blocked by unresolved F6 ownership: {e}")
+        return False
     try:
         from execution import ownership_guard as _og
     except Exception as e:
