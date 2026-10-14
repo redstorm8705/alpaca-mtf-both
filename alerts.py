@@ -373,8 +373,8 @@ def send_slack_delivery(message: str) -> bool:
         logger.warning(f"[ALERT no-op] {message[:120]}")
         return False
     message = _sanitize(message)
-    ts = datetime.now(PT).strftime("%H:%M PT")
-    ok = _send_slack_chunked(f"{message}\n— {ts}")
+    # No send-time suffix: the broker fill card carries its own fill time in 12-hour PT (CEO 2026-10-14).
+    ok = _send_slack_chunked(message)
     if not ok:
         logger.warning(f"send_slack_delivery failed: {message[:120]}")
     return ok
