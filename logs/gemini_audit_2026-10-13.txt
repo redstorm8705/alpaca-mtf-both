@@ -1,0 +1,65 @@
+Nightly Gemini Audit — 2026-10-13
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['main.py', 'execution/unmanaged_positions.py', 'execution/portfolio_tracker.py', 'execution/broker.py', 'execution/stop_protection.py', 'execution/orphan_manager.py', 'execution/exit_logic.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+1. execution/unmanaged_positions.py | [UBER] residual 7 shares held at Alpaca with no manager (broker-unverified) | UBER
+2. execution/portfolio_tracker.py | FIFO orphan: closing fill for AMZN has no prior lot and no tracker record | AMZN
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+*   **[DRAM] No daily data — long/short entry blocked (fail-closed):** Occurs repeatedly (e.g., 19:37:57, 19:38:27, 19:45:21, 19:52:17, 19:59:42). The bot is attempting to trade a symbol without daily data, which is a data-integrity failure.
+*   **FIFO orphan (AMZN):** Occurs at 19:39:08, 19:45:55, 19:53:31, and 20:00:09. This indicates the ledger is failing to match closing fills to existing lots, leading to P&L drift and potential risk-management bypass.
+*   **EOD P&L DRIFT:** Drift of $+53.76 at 19:39:20, 19:46:08, 19:53:43, and 20:00:22. While the header notes this is expected pre-heal, the persistence of the FIFO orphan for AMZN suggests this drift is not purely timing-related but caused by the unmatched fills.
+*   **ledger_sync wall-time:** 15.6s and 16.0s at 19:40:16 and 20:00:18. This is significantly high for a ledger sync, suggesting potential performance degradation in the ledger processing loop.
+
+### PERFORMANCE AUDIT
+*   **AMZN (2026-10-13):** Entry 261.87, Exit 259.68. P&L: -13.14. The trade was closed at a loss, but the FIFO orphan logs suggest the tracker failed to associate the exit with the entry, leading to the "orphan" status.
+*   **PLTR (2026-10-13):** Exit 206.73. P&L: 35.14. The trade was closed via `external_close_drift_autoheal`. The P&L appears correct, but the reliance on "autoheal" for a 12-pt score trade indicates a failure in the primary exit path.
+*   **Score→Outcome:** The bot is currently heavily reliant on "external_close" and "autoheal" mechanisms rather than standard target/stop triggers, which masks the effectiveness of the 12-pt scoring system.
+
+### TRADE INTEGRITY
+*   **AMZN (2026-10-13):** The trade is recorded as an "orphan" in the portfolio tracker. The entry was at 06:46:17 and exit at 10:42:02. The tracker failed to link these, resulting in the "fill unmatched" warning.
+*   **UBER (2026-10-13):** 7 shares remain unmanaged. This is a recurring issue (see `unmanaged_positions` log) that has persisted for multiple cycles.
+
+### MODIFIED FILE FINDINGS
+*   **execution/unmanaged_positions.py:** The logic for `_day_tier_claims` relies on `day_tier_logger.open_trades_from_log_checked()`. If the log is incomplete, it raises a `ValueError`. The audit shows this is triggering, but the "page" mechanism is failing to resolve the UBER residual.
+*   **execution/portfolio_tracker.py:** The `_load_log` function contains a warning about double-records (open AND closed). This confirms that the FIFO reconciliation logic is failing to correctly pop trades from the open list when they are closed.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H1: FIXED (Deleted)
+*   P5-H2: TRIGGERED (AMZN FIFO orphan)
+*   P5-H3: TRIGGERED (AMZN orphan)
+*   P5-H4: UNTOUCHED
+*   P5-H5: FIXED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | CRITICAL | execution/portfolio_tracker.py | FIFO reconciliation failure |** The `_load_log` function detects double-records (same entry_time in open and closed), but the bot continues to operate, leading to P&L drift and orphan fills.
+*   **INFRASTRUCTURE | HIGH | execution/unmanaged_positions.py | Page suppression |** The `check_unmanaged` function is failing to clear the `unmanaged-position` alarm for UBER, despite the log showing it is still unmanaged.
+
+### FIX VALIDATION
+*   **FIX VALIDATION: FAIL.** The "autoheal" mechanism for PLTR and the FIFO reconciliation logic are not preventing the accumulation of orphan trades (AMZN) or unmanaged positions (UBER).
+
+### RECOMMENDED ACTIONS
+1.  **Immediate Manual Reconciliation:** Manually reconcile the AMZN orphan fills and the UBER unmanaged position in the Alpaca paper account to reset the ledger state.
+2.  **FIFO Logic Audit:** Investigate `execution/fifo_pnl.py` to determine why closing fills are not matching with entry lots for AMZN.
+3.  **Data Integrity:** Investigate why [DRAM] is missing daily data; the bot should not be attempting to trade symbols that fail the daily data gate.
+4.  **Performance:** Investigate the `ledger_sync` wall-time (16s); this is likely causing the bot to miss the 15-min scan window, leading to stale data.
+5.  **Unmanaged Positions:** Debug `execution/unmanaged_positions.py` to ensure the `_page` function is correctly firing and that the state file is being updated.
+================================================================================
+BROKER GROUND TRUTH (2026-10-13, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AMZN   COVERED                  owners=day exposed=235m no-broker-stop=0m [06:46-06:46] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   NAKED                    owners=qhm exposed=349m no-broker-stop=6m [07:11-07:17] rejected_stop_orders=0
+  PLTR   NAKED                    owners=core/other exposed=91m no-broker-stop=6m [06:30-06:36] rejected_stop_orders=0
+  UBER   COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
