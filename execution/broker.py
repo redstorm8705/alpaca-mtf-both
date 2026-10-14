@@ -12,6 +12,8 @@ import time
 import uuid
 import logging
 import math
+import ast
+import json
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -22,8 +24,24 @@ from alpaca.trading.requests import (
     StopLossRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus, OrderClass
+from execution.order_admission import serialized_symbol_order
 
 logger = logging.getLogger(__name__)
+
+
+def _note_reduction_ack(order) -> None:
+    from execution.order_admission import note_reduction_ack
+    note_reduction_ack(order)
+
+
+def _note_reduction_not_submitted() -> None:
+    from execution.order_admission import note_reduction_not_submitted
+    note_reduction_not_submitted()
+
+
+def _note_reduction_attempted() -> None:
+    from execution.order_admission import note_reduction_attempted
+    note_reduction_attempted()
 
 
 # ── Protective-stop submission sentinels ──────────────────────────────────────
@@ -83,6 +101,12 @@ PROTECTION_ALREADY_HELD = _ProtectionSentinel("PROTECTION_ALREADY_HELD")
 # never-mask-a-loss rule intact (we never assert unverified protection) while avoiding an
 # unthrottled false 'UNPROTECTED' page on transient API noise.
 PROTECTION_UNKNOWN = _ProtectionSentinel("PROTECTION_UNKNOWN")
+
+# Opt-in market-submit outcome used by F6's durable pre-submit reservation.
+# Existing callers keep the historical None contract.  F6 requests this identity
+# sentinel so a broker-proven rejection can be distinguished from a timeout/lost
+# response, where an order may exist and ownership must remain reserved.
+ORDER_DEFINITIVELY_REJECTED = object()
 
 
 # ── Singleton client ──────────────────────────────────────────────────────────
@@ -185,7 +209,7 @@ def get_open_position(symbol: str):
         raise  # activates fail-open logic already written in main.py callers
 
 
-def get_open_orders(symbol: str | None = None) -> "list | None":
+def get_open_orders(symbol: str | None = None, *, nested: bool = False) -> "list | None":
     """
     Return list of open (pending) orders, optionally filtered by symbol.
     Used by position reconciliation to detect pending orders before entry.
@@ -193,7 +217,7 @@ def get_open_orders(symbol: str | None = None) -> "list | None":
     """
     client = _get_trading_client()
     try:
-        request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=nested)
         orders = client.get_orders(filter=request)
         if symbol:
             return [o for o in orders if o.symbol == symbol]  # type: ignore[union-attr]
@@ -396,6 +420,33 @@ def _is_retryable(error_str: str) -> bool:
     return False
 
 
+def _is_explicit_alpaca_reject(error_str: str) -> bool:
+    """True only for a parseable Alpaca rejection envelope with a 4xxxxxxx code."""
+    text = str(error_str or "").strip()
+    candidates = [text]
+    left, right = text.find("{"), text.rfind("}")
+    if 0 <= left < right:
+        candidates.append(text[left:right + 1])
+    for candidate in candidates:
+        payload = None
+        try:
+            payload = json.loads(candidate)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            try:
+                payload = ast.literal_eval(candidate)
+            except (ValueError, SyntaxError):
+                continue
+        if not isinstance(payload, dict):
+            continue
+        code = payload.get("code")
+        if isinstance(code, bool) or not isinstance(code, (int, str)):
+            continue
+        code_text = str(code)
+        if len(code_text) == 8 and code_text.isdigit() and code_text.startswith("4"):
+            return True
+    return False
+
+
 def _parse_insufficient_qty(err: str) -> "tuple[int | None, int | None, int | None]":
     """Parse (held_for_orders, available, existing_qty) from an Alpaca 40310000
     'insufficient qty available' rejection body. Alpaca returns this error for TWO
@@ -521,22 +572,33 @@ def _free_share_stop_ok(err: str, qty: int, foreign_stop_qty: float) -> "int | N
 
 # ── Order submission ──────────────────────────────────────────────────────────
 
+@serialized_symbol_order(failure_value=None, side_position=1)
 def submit_market_order(
     symbol: str,
     qty: int,
     side: str,          # "buy" or "sell"
     tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
     client_order_id: str | None = None,
+    distinguish_rejection: bool = False,
 ) -> object:
     """
     Submit a plain market order with retry (max 3 attempts, 1s / 2s / 4s backoff).
     Distinguishes retryable errors (rate limits, transient network) from
     non-retryable (shorting disabled, insufficient funds).
-    Returns order object or None on failure.
+    Returns an order object or None on failure.  When ``distinguish_rejection``
+    is true, a broker-proven pre-accept rejection returns the identity sentinel
+    ``ORDER_DEFINITIVELY_REJECTED``; ambiguous outcomes still return None.
     """
     if qty <= 0:
         logger.warning(f"[{symbol}] Skipping order: qty={qty}")
         return None
+    if str(side).lower() in {"sell", "sell_short", "short"}:
+        try:
+            from execution.pending_protected_buys import assert_reduction_clear
+            assert_reduction_clear(symbol)
+        except Exception as e:
+            logger.critical(f"[{symbol}] SELL market order blocked by unresolved F6 ownership: {e}")
+            return None
 
     client     = _get_trading_client()
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
@@ -554,6 +616,7 @@ def submit_market_order(
                 time_in_force=TimeInForce.DAY,
                 client_order_id=_idem_id,
             )
+            _note_reduction_attempted()
             order = client.submit_order(order_data)
             logger.info(
                 f"[{symbol}] {side.upper()} {qty} shares @ MARKET | Order ID: {order.id}"  # type: ignore[union-attr]
@@ -577,13 +640,24 @@ def submit_market_order(
                 # Not a shorting restriction — an opposite-side market/stop order rests on the symbol.
                 logger.error(f"[{symbol}] {side.upper()} market order rejected — WASH-TRADE rule (an "
                              f"opposite-side market/stop order rests on {symbol}); not cached as a short block: {e}")
-                return None
+                _note_reduction_not_submitted()
+                return ORDER_DEFINITIVELY_REJECTED if distinguish_rejection else None
             elif "40310000" in err or "not allowed to short" in err:
                 # 40310000 also covers held_for_orders ("insufficient qty available": a resting stop
                 # reserves the shares). Only a SELL can be a short restriction — a BUY (e.g. covering a
                 # short, EWY 2026-10-08) or a held-qty reject must never poison the short-block cache.
                 _el = err.lower()
-                if side == "sell" and "insufficient qty" not in _el and "held_for_orders" not in _el:
+                _known_403 = (
+                    _is_explicit_alpaca_reject(err)
+                    or "not allowed to short" in _el
+                    or ("40310000" in err and any(
+                        phrase in _el for phrase in (
+                            "insufficient qty", "held_for_orders", "buying power", "shorting"
+                        )
+                    ))
+                )
+                if (_known_403 and side == "sell" and "insufficient qty" not in _el
+                        and "held_for_orders" not in _el):
                     # Cache the block — prevents retry on every subsequent scan cycle.
                     # 40310000 is issued both for account-level and per-symbol restrictions.
                     _short_blocked_symbols.add(symbol)
@@ -594,9 +668,21 @@ def submit_market_order(
                 else:
                     logger.error(f"[{symbol}] {side.upper()} market order rejected (40310000, not a short "
                                  f"restriction — not cached as a short block). Alpaca: {e}")
+                if _known_403:
+                    _note_reduction_not_submitted()
+                if distinguish_rejection and _known_403:
+                    return ORDER_DEFINITIVELY_REJECTED
                 return None
             elif not _is_retryable(err):
                 logger.error(f"[{symbol}] Order failed (non-retryable): {e}")
+                # Only a structured Alpaca 4xx application code proves the broker
+                # declined before acceptance.  AttributeError from a malformed/None
+                # response, EOF, 5xx, and unknown transports remain ambiguous.
+                explicit_reject = _is_explicit_alpaca_reject(err)
+                if explicit_reject:
+                    _note_reduction_not_submitted()
+                if distinguish_rejection and explicit_reject:
+                    return ORDER_DEFINITIVELY_REJECTED
                 return None
 
             wait = 1 * (2 ** attempt)   # 1s, 2s, 4s
@@ -610,6 +696,7 @@ def submit_market_order(
     return None
 
 
+@serialized_symbol_order(failure_value=None, side_position=1)
 def submit_limit_order(
     symbol: str,
     qty: int,
@@ -634,6 +721,33 @@ def submit_limit_order(
     if qty <= 0 or not (0 < limit_price < 99_999):
         logger.warning(f"[{symbol}] Limit order rejected: qty={qty}, price={limit_price}")
         return None
+    if str(side).lower() in {"sell", "sell_short", "short"}:
+        try:
+            from execution.pending_protected_buys import assert_reduction_clear
+            assert_reduction_clear(symbol)
+        except Exception as e:
+            logger.critical(f"[{symbol}] SELL limit order blocked by unresolved F6 ownership: {e}")
+            return None
+        import config
+        if getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
+            try:
+                from execution import ownership_guard as _og
+                _pos = get_open_position(symbol)
+                _net = abs(float(_pos.qty)) if _pos is not None else 0.0
+                _position_side = str(getattr(getattr(_pos, "side", ""), "value",
+                                             getattr(_pos, "side", ""))).lower()
+                _guard_side = "sell" if _position_side == "long" else "short"
+                _res = _og.check_never_sell_floor(
+                    symbol, tier, int(qty), _guard_side, alpaca_net_qty=_net,
+                )
+                if _res.action == "REJECT" or int(_res.qty) != int(qty):
+                    logger.critical(
+                        f"[{symbol}] SELL limit order refused by ownership guard: {_res.reason}"
+                    )
+                    return None
+            except Exception as e:
+                logger.critical(f"[{symbol}] SELL limit ownership check failed closed: {e}")
+                return None
 
     client     = _get_trading_client()
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
@@ -658,6 +772,7 @@ def submit_limit_order(
 
     for _attempt in range(3):
         try:
+            _note_reduction_attempted()
             order = client.submit_order(order_data)
             logger.info(
                 f"[{symbol}] LIMIT {side.upper()} {qty} @ ${limit_price:.2f} | "
@@ -681,13 +796,17 @@ def submit_limit_order(
             if _is_wash_trade_reject(err):
                 logger.error(f"[{symbol}] LIMIT {side.upper()} rejected — WASH-TRADE rule (an opposite-side "
                              f"market/stop order rests on {symbol}): {e}")
+                _note_reduction_not_submitted()
                 return None
             if "40310000" in err or "not allowed to short" in err:
                 logger.warning(f"[{symbol}] Limit order rejected — shorting not enabled")
+                _note_reduction_not_submitted()
                 return None
             elif not _is_retryable(err):
                 # H-7: non-retryable errors (buying power, auth) must not burn 2s sleep × 3
                 logger.error(f"[{symbol}] submit_limit_order failed (non-retryable): {e}")
+                if _is_explicit_alpaca_reject(err):
+                    _note_reduction_not_submitted()
                 return None
             elif _attempt < 2:
                 logger.warning(
@@ -705,6 +824,7 @@ def submit_limit_order(
 WASH_REJECTED = object()
 
 
+@serialized_symbol_order(failure_value=None, side_position=1)
 def submit_bracket_entry(
     symbol: str,
     qty: int,
@@ -729,6 +849,9 @@ def submit_bracket_entry(
     WASH_REJECTED when the wash-trade rule still rejects it (the caller then routes to its ETF fallback), or None on
     any other failure. Never raises."""
     try:
+        if str(side).lower() in {"sell", "sell_short", "short"}:
+            from execution.pending_protected_buys import assert_reduction_clear
+            assert_reduction_clear(symbol)
         if qty <= 0:
             logger.warning(f"[{symbol}] bracket entry rejected: qty={qty}")
             return None
@@ -763,6 +886,7 @@ def submit_bracket_entry(
         )
         for _attempt in range(3):
             try:
+                _note_reduction_attempted()
                 order = client.submit_order(order_data)
                 logger.info(f"[{symbol}] BRACKET ENTRY {side.upper()} {qty} @ ${_lim:.2f} (TP ${_tp:.2f} / "
                             f"STOP ${_stop:.2f}) | Order ID: {order.id}")  # type: ignore[union-attr]
@@ -776,9 +900,12 @@ def submit_bracket_entry(
                 if _is_wash_trade_reject(err):
                     logger.error(f"[{symbol}] BRACKET ENTRY rejected — WASH-TRADE rule (an opposite-side "
                                  f"market/stop order rests on {symbol}): {e}")
+                    _note_reduction_not_submitted()
                     return WASH_REJECTED
                 if not _is_retryable(err):
                     logger.error(f"[{symbol}] submit_bracket_entry failed (non-retryable): {e}")
+                    if _is_explicit_alpaca_reject(err):
+                        _note_reduction_not_submitted()
                     return None
                 if _attempt < 2:
                     logger.warning(f"[{symbol}] submit_bracket_entry attempt {_attempt + 1}/3 failed (retryable): "
@@ -793,6 +920,7 @@ def submit_bracket_entry(
         return None
 
 
+@serialized_symbol_order(failure_value=None, reducing=True)
 def submit_oco_exit(
     symbol: str,
     qty: int,
@@ -849,6 +977,13 @@ def submit_oco_exit(
         )
         return None
 
+    try:
+        from execution.pending_protected_buys import assert_reduction_clear
+        assert_reduction_clear(symbol)
+    except Exception as e:
+        logger.critical(f"[{symbol}] OCO exit blocked by unresolved F6 ownership: {e}")
+        return None
+
     client   = _get_trading_client()
     _idem_id = _make_idem_id(tier, symbol, _side_str)   # tier-tagged, reused across retries
     order_data = LimitOrderRequest(
@@ -865,6 +1000,7 @@ def submit_oco_exit(
 
     for _attempt in range(3):
         try:
+            _note_reduction_attempted()
             order = client.submit_order(order_data)
             logger.info(
                 f"[{symbol}] OCO EXIT {_side_str.upper()} {qty} (TP ${_tp:.2f} / STOP ${_stop:.2f}) "
@@ -881,6 +1017,8 @@ def submit_oco_exit(
                 return None
             if not _is_retryable(err):
                 logger.error(f"[{symbol}] submit_oco_exit failed (non-retryable): {e}")
+                if _is_explicit_alpaca_reject(err):
+                    _note_reduction_not_submitted()
                 return None
             if _attempt < 2:
                 logger.warning(
@@ -912,6 +1050,13 @@ def _floor_bound_stop_qty(symbol: str, qty: int, side: str, tier: str) -> int:
     guarantees the "0 = fail closed" contract holds even then: any unexpected raise fails
     CLOSED (skip the sell-stop) for a protected symbol and OPEN (submit requested qty) for
     a non-protected one — it never propagates out and crashes the stop-submission path."""
+    if str(side).lower() == "sell":
+        try:
+            from execution.pending_protected_buys import assert_reduction_clear
+            assert_reduction_clear(symbol)
+        except Exception as e:
+            logger.critical(f"[{symbol}] sell-stop blocked by unresolved F6 ownership: {e}")
+            return 0
     import config
     if not getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
         return qty
@@ -996,6 +1141,7 @@ def _floor_bound_stop_qty_impl(symbol: str, qty: int, side: str, tier: str) -> i
     return _bq if _bq >= 1 else 0
 
 
+@serialized_symbol_order(failure_value=None, reducing=True)
 def submit_gtc_stop_order(
     symbol: str,
     qty: int,
@@ -1066,6 +1212,7 @@ def submit_gtc_stop_order(
     )
 
     try:
+        _note_reduction_attempted()
         order = client.submit_order(order_data)
         logger.info(
             f"[{symbol}] GTC STOP submitted: {side.upper()} {qty} @ ${stop_price:.2f} | "
@@ -1085,6 +1232,7 @@ def submit_gtc_stop_order(
                 alert_gtc_failed(symbol, side, stop_price, f"wash-trade reject (opposite-side order exists): {e}")
             except Exception as _wae:
                 logger.error(f"[{symbol}] alert_gtc_failed send failed: {_wae}")
+            _note_reduction_not_submitted()
             return None
         if "40310000" in err or "insufficient qty available" in err.lower():
             # GTC-RACE: cancel+resubmit timing race — held_for_orders not yet released.
@@ -1147,6 +1295,7 @@ def submit_gtc_stop_order(
                             f"the qty is held by a stable live reducing order, most likely a "
                             f"valid protective stop. Returning PROTECTION_ALREADY_HELD."
                         )
+                        _note_reduction_not_submitted()
                         return PROTECTION_ALREADY_HELD
                     if _hs == _HOLD_UNKNOWN:
                         logger.warning(
@@ -1156,6 +1305,7 @@ def submit_gtc_stop_order(
                             f"Returning PROTECTION_UNKNOWN; caller should route this to its "
                             f"throttled unknown-state path. Original: {e}"
                         )
+                        _note_reduction_not_submitted()
                         return PROTECTION_UNKNOWN
                     logger.error(
                         f"[{symbol}] GTC stop FAILED (40310000) and allow_cancel_blocking="
@@ -1164,6 +1314,7 @@ def submit_gtc_stop_order(
                         f"cancelling, NOT claiming protection. Position may be unprotected. "
                         f"Original: {e}"
                     )
+                    _note_reduction_not_submitted()
                     return None
                 # Bare "insufficient qty available" text WITHOUT a 40310000 code — cannot prove
                 # the qty is held at all, so never claim protection.
@@ -1173,6 +1324,7 @@ def submit_gtc_stop_order(
                     f"orders, NOT claiming protection. Position may be unprotected. "
                     f"Original: {e}"
                 )
+                _note_reduction_not_submitted()
                 return None
 
             # QTY-MISMATCH SELF-HEAL (2026-08-01, SMCI naked-stop 2026-07-29): the same
@@ -1210,6 +1362,7 @@ def submit_gtc_stop_order(
                         time_in_force=TimeInForce.GTC,
                         client_order_id=_idem_id,
                     )
+                    _note_reduction_attempted()
                     order = client.submit_order(_corrected)
                     if order:   # submit_order raises on failure; guard mirrors submit_market_order
                         logger.info(
@@ -1252,6 +1405,7 @@ def submit_gtc_stop_order(
                 _avail2 = _free_share_stop_ok(err, qty, _foreign_stop_qty)
                 if _avail2 is not None:
                     try:
+                        _note_reduction_attempted()
                         _rem = client.submit_order(StopOrderRequest(
                             symbol=symbol,
                             qty=_avail2,
@@ -1289,6 +1443,7 @@ def submit_gtc_stop_order(
             for _poll in range(60):   # 60 × 1s = 60s max (was 10 × 500ms = 5s)
                 time.sleep(1)
                 try:
+                    _note_reduction_attempted()
                     order = client.submit_order(order_data)
                     logger.info(
                         f"[{symbol}] GTC STOP submitted (after {3 + _poll + 1}s hold-clear): "
@@ -1325,6 +1480,7 @@ def submit_gtc_stop_order(
         return None
 
 
+@serialized_symbol_order(failure_value=None, reducing=True)
 def submit_day_stop_order(
     symbol: str,
     qty: int,
@@ -1387,6 +1543,7 @@ def submit_day_stop_order(
         client_order_id=_make_idem_id(tier, symbol, side),
     )
     try:
+        _note_reduction_attempted()
         order = client.submit_order(order_data)
         logger.info(
             f"[{symbol}] DAY STOP submitted: {side.upper()} {qty} @ ${stop_price:.2f} | "
@@ -1408,6 +1565,7 @@ def submit_day_stop_order(
                 alert_gtc_failed(symbol, side, stop_price, f"DAY stop wash-trade reject (opposite-side order exists): {e}")
             except Exception as _wae:
                 logger.error(f"[{symbol}] alert_gtc_failed send failed: {_wae}")
+            _note_reduction_not_submitted()
             return None
         if "40310000" in err or "insufficient" in err.lower():
             # OPT-OUT GUARD (2026-07-20): see submit_gtc_stop_order. A protection-asserting
@@ -1427,6 +1585,7 @@ def submit_day_stop_order(
                             f"the qty is held by a stable live reducing order, most likely a "
                             f"valid protective stop. Returning PROTECTION_ALREADY_HELD."
                         )
+                        _note_reduction_not_submitted()
                         return PROTECTION_ALREADY_HELD
                     if _hs == _HOLD_UNKNOWN:
                         logger.warning(
@@ -1436,6 +1595,7 @@ def submit_day_stop_order(
                             f"Returning PROTECTION_UNKNOWN; caller should route this to its "
                             f"throttled unknown-state path. Original: {e}"
                         )
+                        _note_reduction_not_submitted()
                         return PROTECTION_UNKNOWN
                     logger.error(
                         f"[{symbol}] DAY stop FAILED (40310000) and allow_cancel_blocking="
@@ -1444,6 +1604,7 @@ def submit_day_stop_order(
                         f"cancelling, NOT claiming protection. Position may be unprotected. "
                         f"Original: {e}"
                     )
+                    _note_reduction_not_submitted()
                     return None
                 logger.error(
                     f"[{symbol}] DAY stop FAILED (insufficient, non-40310000 — e.g. buying "
@@ -1451,6 +1612,7 @@ def submit_day_stop_order(
                     f"orders. This is a GENUINE placement failure, position may be "
                     f"unprotected. Original: {e}"
                 )
+                _note_reduction_not_submitted()
                 return None
             # QTY-MISMATCH SELF-HEAL (2026-08-01) — mirror of submit_gtc_stop_order. A DAY stop
             # can hit the same PERMANENT qty mismatch (tracker qty > broker qty). The single
@@ -1477,6 +1639,7 @@ def submit_day_stop_order(
                         time_in_force=TimeInForce.DAY,
                         client_order_id=_make_idem_id(tier, symbol, side),
                     )
+                    _note_reduction_attempted()
                     order = client.submit_order(_corrected)
                     if order:   # submit_order raises on failure; guard mirrors submit_market_order
                         logger.info(
@@ -1513,6 +1676,7 @@ def submit_day_stop_order(
                     _dfree = _free_share_stop_ok(err, qty, _dfstop)
                     if _dfree is not None:
                         try:
+                            _note_reduction_attempted()
                             _drem = client.submit_order(StopOrderRequest(
                                 symbol=symbol, qty=_dfree, side=order_side,
                                 stop_price=round(stop_price, 2), time_in_force=TimeInForce.DAY,
@@ -1536,6 +1700,7 @@ def submit_day_stop_order(
                                  f"nothing cancelled. Original: {e}")
                     return None
             try:
+                _note_reduction_attempted()
                 order = client.submit_order(order_data)
                 logger.info(
                     f"[{symbol}] DAY STOP submitted (retry): {side.upper()} {qty} @ ${stop_price:.2f} | "
@@ -1574,6 +1739,7 @@ def _status_str(order) -> str:
     return str(getattr(_st, "value", _st)).lower()
 
 
+@serialized_symbol_order(failure_value=None, reducing=True)
 def replace_stop_order(
     symbol: str,
     order_id: str,
@@ -1605,6 +1771,12 @@ def replace_stop_order(
     the order now in force is adopted ONLY when it carries exactly the requested stop price (and
     qty, when given) and is still live — a stale id replaced EARLIER at another price is never
     reported as a successful move (cold-2nd: that would set a breakeven flag the broker lacks)."""
+    try:
+        from execution.pending_protected_buys import assert_reduction_clear
+        assert_reduction_clear(symbol)
+    except Exception as e:
+        logger.critical(f"[{symbol}] stop replacement blocked by unresolved F6 ownership: {e}")
+        return None
     if (not order_id or not isinstance(stop_price, (int, float)) or not math.isfinite(stop_price)
             or stop_price <= 0
             or (qty is not None and (not isinstance(qty, (int, float)) or not math.isfinite(qty)
@@ -1633,6 +1805,7 @@ def replace_stop_order(
             _fields["client_order_id"] = _make_idem_id(_tier, symbol, _side_s)
     req = ReplaceOrderRequest(**_fields)
     try:
+        _note_reduction_attempted()
         new_order = client.replace_order_by_id(order_id, req)
         logger.info(
             f"[{symbol}] STOP REPLACED in place: {order_id} → {getattr(new_order, 'id', '?')} "
@@ -1888,6 +2061,7 @@ def _cohold_own_cap(symbol: str, tier: str) -> "int | None":
         return None
 
 
+@serialized_symbol_order(failure_value=False, reducing=True)
 def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
                            *, _bypass_floor: bool = False, _return_order: bool = False,
                            position_side: "str | None" = None, _cohold_checked: bool = False):
@@ -1915,6 +2089,13 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
     if qty < 1:
         logger.warning(f"[{symbol}] partial_close_position called with qty={qty} < 1 — skipping to prevent zero-share order.")
         return False  # match existing bool return contract; None breaks type-annotated callers
+
+    try:
+        from execution.pending_protected_buys import assert_reduction_clear
+        assert_reduction_clear(symbol)
+    except Exception as e:
+        logger.critical(f"[{symbol}] partial close blocked by unresolved F6 ownership: {e}")
+        return False
 
     # NEVER-SELL-FLOOR bounding (increment 4a). DORMANT unless OWNERSHIP_GUARD_ENFORCE.
     # _bypass_floor=True skips this (the chokepoint close_position already bounded qty).
@@ -1965,7 +2146,9 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
             time_in_force=TimeInForce.DAY,
             client_order_id=_make_idem_id(tier, symbol, _side_str),
         )
+        _note_reduction_attempted()
         order = client.submit_order(order_data)
+        _note_reduction_ack(order)
         logger.info(f"[{symbol}] Partial close: {qty} shares | Order ID: {order.id}")  # type: ignore[union-attr]
         return order if _return_order else True
     except Exception as e:
@@ -1993,6 +2176,7 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
                 f"already closed externally or by concurrent process. "
                 f"Returning True so the caller's exit-recording path runs."
             )
+            _note_reduction_not_submitted()
             return True
         if _is_wash_trade_reject(err):
             logger.error(f"[{symbol}] Partial close REJECTED by the wash-trade rule (an opposite-side "
@@ -2010,7 +2194,9 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
             freed = cancel_open_orders_for_symbol(symbol, only_tier=_only_tier)
             logger.info(f"[{symbol}] Freed {freed} blocking order(s). Retrying partial close…")
             try:
+                _note_reduction_attempted()
                 order = client.submit_order(order_data)
+                _note_reduction_ack(order)
                 logger.info(
                     f"[{symbol}] Partial close retry OK: {qty} shares | Order ID: {order.id}"  # type: ignore[union-attr]
                 )
@@ -2024,6 +2210,7 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
         return False
 
 
+@serialized_symbol_order(failure_value=False, reducing=True)
 def submit_f6_trim(symbol: str, qty: int) -> bool:
     """THE sole authorized bypass for forever6's never-sell floor (F6 exit increment,
     2026-08-05). This is the ONLY function in this codebase permitted to pass
@@ -2095,7 +2282,9 @@ def _raw_close_position(symbol: str, only_tier: "str | None" = None) -> bool:
     """
     client = _get_trading_client()
     try:
-        client.close_position(symbol)
+        _note_reduction_attempted()
+        _close_order = client.close_position(symbol)
+        _note_reduction_ack(_close_order)
         logger.info(f"[{symbol}] Position closed.")
         return True
     except Exception as e:
@@ -2114,6 +2303,7 @@ def _raw_close_position(symbol: str, only_tier: "str | None" = None) -> bool:
                 f"already closed externally or by concurrent process. "
                 f"Returning True so record_exit() cleans up tracker."
             )
+            _note_reduction_not_submitted()
             return True
         # Bug 4 fix: auto-cancel blocking orders on 40310000 and retry once.
         if "40310000" in err:
@@ -2125,7 +2315,9 @@ def _raw_close_position(symbol: str, only_tier: "str | None" = None) -> bool:
             freed = cancel_open_orders_for_symbol(symbol, only_tier=only_tier)
             logger.info(f"[{symbol}] Freed {freed} blocking order(s). Retrying close…")
             try:
-                client.close_position(symbol)
+                _note_reduction_attempted()
+                _close_order = client.close_position(symbol)
+                _note_reduction_ack(_close_order)
                 logger.info(f"[{symbol}] Position closed (retry after 40310000 clear).")
                 return True
             except Exception as retry_e:
@@ -2413,6 +2605,7 @@ def _cohold_bounded_close(symbol: str, tier: str, own_qty: "int | None" = None,
         return None
 
 
+@serialized_symbol_order(failure_value=False, reducing=True)
 def close_position(symbol: str, *, tier: str = "intraday", own_qty: "int | None" = None,
                    own_side: "str | None" = None) -> bool:
     """Close an open position — THE never-sell-floor CHOKEPOINT (increment 4a).
@@ -2431,6 +2624,12 @@ def close_position(symbol: str, *, tier: str = "intraday", own_qty: "int | None"
     the Day tier's share count on a co-held symbol stays unreadable (design record
     cohold_unreadable_claim_retry_2026-10-11.md); without them that case keeps the full close plus a page.
     """
+    try:
+        from execution.pending_protected_buys import assert_reduction_clear
+        assert_reduction_clear(symbol)
+    except Exception as e:
+        logger.critical(f"[{symbol}] close blocked by unresolved F6 ownership: {e}")
+        return False
     import config
     if tier != "daytrade":
         _bounded = _cohold_bounded_close(symbol, tier, own_qty, own_side)
@@ -2531,9 +2730,20 @@ def close_position_for_tier(symbol: str, tier: str = "intraday") -> bool:
 
 
 def close_all_positions() -> bool:
-    """Close all open positions. Used for kill switch."""
+    """Emergency kill-switch liquidation across every tier.
+
+    This is the one deliberate ownership/admission bypass: its purpose is to
+    reduce all account exposure immediately, including F6, after the kill switch
+    has fired.  It must never be used for routine tier exits.  Alpaca atomically
+    cancels resting orders before closing positions; the canonical ledger replay
+    is responsible for recording the emergency fills afterward.
+    """
     client = _get_trading_client()
     try:
+        logger.critical(
+            "[EMERGENCY_OWNERSHIP_BYPASS] account-wide kill-switch liquidation requested; "
+            "all tier floors and pending-order admission checks intentionally bypassed"
+        )
         client.close_all_positions(cancel_orders=True)
         logger.info("All positions closed.")
         return True
