@@ -231,6 +231,25 @@ def sync_once() -> dict:
                           qhm_holdings=qhm_holdings, positions_settled=positions_settled,
                           transfers=transfers)
 
+        # Stay filesystem-dormant while F6 is dark.  If a journal already exists
+        # (for example after an emergency flag-off), continue exact reconciliation
+        # so active protection cannot be abandoned by configuration alone.
+        import config as _config
+        from execution import order_admission as _oa
+        from execution import pending_protected_buys as _ppb
+        if bool(getattr(_config, "FOREVER6_ENABLED", False)) or _oa._REDUCTION_PATH.exists():
+            stage = "reducing_admission_reconcile"
+            _pending_reducers = _oa.reconcile_reductions(fills, orders, coid_map, led)
+            if _pending_reducers["pending"]:
+                logger.warning("ledger_sync: %d reducing admission(s) remain unresolved",
+                               len(_pending_reducers["pending"]))
+        if bool(getattr(_config, "FOREVER6_ENABLED", False)) or _ppb.JOURNAL_PATH.exists():
+            stage = "pending_f6_reconcile"
+            _pending_f6 = _ppb.reconcile(fills, orders, coid_map, led)
+            if _pending_f6["pending"]:
+                logger.warning("ledger_sync: %d F6 protected-buy reservation(s) remain unresolved",
+                               len(_pending_f6["pending"]))
+
         stage = "instrument"
         elapsed = round(time.monotonic() - t0, 2)
 

@@ -1,0 +1,32 @@
+{
+  "change": "f6-pending-buy-reservation",
+  "tier": 1,
+  "paths": [
+    "execution/forever_hold_manager.py",
+    "execution/order_admission.py",
+    "execution/pending_protected_buys.py",
+    "execution/broker.py",
+    "execution/exit_logic.py",
+    "execution/ownership_guard.py",
+    "execution/tier_capital_allocator.py",
+    "run_ledger_sync.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change_id=f6-pending-buy-reservation"
+    }
+  ],
+  "expected_rate": "Dormant until F6 is enabled; after enablement, one reserve/bind/accounted-release lifecycle per accepted F6 starter buy.",
+  "window_sessions": 10,
+  "reversal": "An F6 buy lacks an active reservation before broker submit, a reducing order is admitted while a reservation is unresolved, or a reservation releases without exact fill replay and baseline-plus-fill F6 ownership.",
+  "metrics": [
+    {
+      "name": "F6 protected-buy ownership handoff",
+      "source": "logs/mtf_bot.log, pending_protected_buys.json, reducing_order_admissions.json, canonical ownership ledger, and Alpaca order/fill history",
+      "direction": "none",
+      "bound": "Zero unreserved F6 submits, zero releases without exact order/fill provenance, zero reductions crossing an unresolved F6 reservation."
+    }
+  ],
+  "verification": "tests/test_f6_pending_buy_reservation.py"
+}
