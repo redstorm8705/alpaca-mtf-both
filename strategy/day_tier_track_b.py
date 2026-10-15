@@ -320,6 +320,52 @@ def _iex_holes_ok(df) -> "tuple[bool, str]":
         return False, f"hole check error: {e!r}"
 
 
+_MARKET_REF = "SPY"          # the market reference whose own bars tell a FEED gap apart from a single-name halt
+_ref_cache: dict = {}        # (minute of now) -> the reference's bar timestamps (one fetch per runner tick-minute)
+
+
+def _market_wide_gap(df, open_et, n) -> "tuple[bool, str]":
+    """Whether EVERY missing 5m slot in `df` is also missing from the market reference's (SPY) IEX frame — a
+    data-feed gap (2026-10-15: no IEX or SIP bars for ANY name 12:57-14:10 ET; every Track-B name then read as a
+    HALT for the rest of the session) rather than a halt of this one name. Also requires no missing slot among the
+    newest _HOLE_RECENT_BARS slots and none inside the opening range, the same rules _iex_holes_ok applies (the
+    trigger's opening range, volume baseline and drive window must not straddle the gap). A slot the reference HAS but this name lacks = a name-specific gap
+    -> False (halt). Residual: a name halted entirely INSIDE a market-wide gap that has reopened is not visible
+    here; the freshness check still catches one that is still halted. Never raises; any error -> False (skip)."""
+    try:
+        import pandas as pd
+        from data.fetcher import fetch_bars_window
+        if str(getattr(df, "attrs", {}).get("symbol", "")).upper() == _MARKET_REF:
+            return False, "the reference itself has the gap"
+        step = pd.Timedelta(seconds=_BAR_SECONDS)
+        have = set(df.index)
+        missing = [t for t in pd.date_range(df.index[0], df.index[-1], freq=step) if t not in have]
+        if not missing:
+            return True, "contiguous"
+        from strategy.day_tier_momentum_trigger import _OR_BARS
+        # The trigger takes the opening range BY POSITION (df.iloc[:_OR_BARS]); a gap inside it would build the range
+        # (and the stop's structural level) from the wrong bars -> skip, as _iex_holes_ok does (cold-2nd 2026-10-15).
+        if missing[0] < df.index[0] + step * _OR_BARS:
+            return False, "market-wide gap inside the opening range"
+        key = n.replace(second=0, microsecond=0)
+        ref = _ref_cache.get(key)
+        if ref is None:
+            ref_df = fetch_bars_window(_MARKET_REF, config.TF_5M, open_et, n, feed="iex")
+            if ref_df is None or getattr(ref_df, "empty", True):
+                return False, "market reference frame unavailable"
+            ref = set(ref_df.index)
+            _ref_cache.clear()
+            _ref_cache[key] = ref
+        name_only = [t for t in missing if t in ref]
+        if name_only:
+            return False, f"{len(name_only)} bar(s) missing for this name while {_MARKET_REF} traded (first {name_only[0]})"
+        if missing[-1] > df.index[-1] - step * _HOLE_RECENT_BARS:
+            return False, f"market-wide feed gap ends within the newest {_HOLE_RECENT_BARS} bars — wait for fresh bars"
+        return True, f"{len(missing)} bar(s) missing market-wide ({_MARKET_REF} too, {missing[0]}..{missing[-1]}) — feed gap, not a halt"
+    except Exception as e:  # noqa: BLE001
+        return False, f"market-gap check error: {e!r}"
+
+
 def build_session_frame(symbol: str, now_et: "datetime | None" = None):
     """Today's RTH 5m frame FROM the 09:30 ET open (the momentum trigger's INPUT CONTRACT). Fetches via
     data.fetcher.fetch_bars_window(feed="iex", RAW) over [today 09:30 ET, now] — IEX because it is the only
@@ -390,10 +436,14 @@ def build_session_frame(symbol: str, now_et: "datetime | None" = None):
         if len(df) < expected:
             ok, why = _iex_holes_ok(df)
             if not ok:
-                logger.info("[%s] day-tier TRACK-B frame: non-contiguous (%d bars, expected %d — %s — a HALT) — skip",
-                            symbol, len(df), expected, why)
-                return None
-            logger.info("[%s] day-tier TRACK-B frame: %s — kept (IEX had no prints; not a halt)", symbol, why)
+                df.attrs["symbol"] = symbol
+                gap_ok, gap_why = _market_wide_gap(df, open_et, n)
+                if not gap_ok:
+                    logger.info("[%s] day-tier TRACK-B frame: non-contiguous (%d bars, expected %d — %s; %s — a HALT) — skip",
+                                symbol, len(df), expected, why, gap_why)
+                    return None
+                why = gap_why
+            logger.info("[%s] day-tier TRACK-B frame: %s — kept (not a halt)", symbol, why)
         # END-OF-FRAME FRESHNESS (halt / feed-stall guard — adversarial B1): internal contiguity does NOT
         # catch a name that halted mid-session and is STILL halted now — it returns a contiguous but STALE
         # frame whose newest bar predates `now` by many minutes, which the momentum trigger would read as a
