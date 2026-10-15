@@ -11379,3 +11379,11 @@ OCI deployment at `137.131.51.250`: v1 source SHA `78aaef8e19765d432aa74570e5cf2
 - Cold second-agent: 20 rounds; rounds 1-19 FAIL each found a realistic laundering path (now a test case in `test_no_static_scan.py`); round 20 PASS. Final Gro+GAI preship APPROVE on all 5 files (GAI quota-limited, NVIDIA substitute on 3).
 - Design record for the dynamic replacements: `logs/design_records/dynamic_capacity_2026-10-14.md` (dynamic overnight cap K next).
 - Queued: UBER ownership-ledger tier mis-split (day +54 / swing -72 vs real Day short -18).
+
+## 2026-10-14 — Dynamic overnight cap K (Claude)
+- Invariant #11 total limb: fixed K 1.9 -> `execution/overnight_capacity.overnight_k()` = min(1.9 ceiling, K_dyn), tighten-only; refreshed by `run_overnight_k.py` (cron 12:15/21:15 UTC weekdays, `scripts/install_overnight_k_cron.sh`).
+- Design variant D aligned 4/4 (Thorp + Taleb seats, Gro after counter-prompt, GAI). Computed from the account's OWN holdings' full split-adjusted history; VIX is the only market-wide input.
+- Cold-2nd: R1 FAIL (same-day overwrite), R2-R4 PASS. Adversarial: FAIL (flat-book loosening; then halt-gap erased a crash), rev4 PASS. Preship Gro+GAI APPROVE all files (day_promotion after evidence counter-prompt).
+- Live probe OCI: K_raw 2.448 -> K_dyn 1.9 (no change today). Margin-call buffer at 1.9x corrected to 29.6% (m 0.327).
+- Known static choices left: 5-session horizon/loosening window, median record-jump. Follow-ups: stale-state Slack escalation, tier_capital_allocator 0.40 overnight cap not linked to K.
+- LLY trim investigation: manual Alpaca trim fights the QHM stray-sell guard; a stop "replace" leaves LLY with no stop (stop-repair does not treat "replaced" as terminal). Needs a bot-side operator trim.

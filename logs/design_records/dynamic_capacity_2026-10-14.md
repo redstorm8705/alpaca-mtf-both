@@ -30,5 +30,17 @@ Size/frequency/concurrency delta: tighten-only (can only reduce) -> not risk-pat
 Reversal criterion: K_dyn below 1.9 on a calm day (VIX near its median, no book drawdown), or a margin call
 while K_dyn allowed the exposure.
 
+## Item 1 revised under the no-static rule (2026-10-14, BGGN aligned 4/4: Thorp + Taleb seats, Gro, GAI)
+The fixed `M = 2` and fixed 504/252-session windows are static numbers, so they were replaced:
+- stress_hist = WORST-EVER 5-session loss of today's book weights (equity-denominated, sum = book leverage) over each
+  name's FULL split-adjusted history x R, where R = MEDIAN record-jump ratio (each new worst-5-session record / the
+  previous record, counting only records above the median |5-session move|). Today R = 1.197 (12 records since 2016).
+- VIX scale = max(1, VIX / median VIX over full history). d_book = max(stress_hist x VIX scale, concentration) /
+  book leverage (weights are equity-denominated, so the division is correct — verified at source).
+- K_dyn = min(1.9, K_raw), rolling 5-session minimum; short-history names take the book's largest worst-day.
+Replay (502 sessions): A original 27 days < 1.9, low 1.47; B worst-ever only 10 / 1.62; C x max jump 1.607
+94 / 1.26 (Gro's first pick); D x median jump 22 / 1.484 (chosen; Gro moved to D after counter-prompt).
+Correction: margin-call drop at K = 1.9 with live m = 0.327 is 29.6% of long value, not ~32% (that used m = 0.30).
+
 ## Status
-Item 1 next to build through the full gate. Items 2-3 follow through the board.
+Item 1 (variant D) now building through the full gate. Items 2-3 follow through the board.

@@ -231,7 +231,8 @@ def select_promotions(equity: float) -> list:
             return out
         agg_risk = swing_risk
         max_n = int(_cfg("DAYTRADE_PROMOTION_MAX_PER_DAY", 3))
-        k_total = float(_cfg("SWING_BREAKOUT_TOTAL_OVERNIGHT_K", 1.75))
+        from execution.overnight_capacity import overnight_k
+        k_total = overnight_k()               # dynamic, tighten-only Invariant #11 total limb (<= the 1.9 ceiling)
         from strategy.day_tier_side import compute_side_bias
         from data.live_price import live_price
         for sym, tgt in targets.items():
