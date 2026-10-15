@@ -23,6 +23,14 @@ from execution.ownership_ledger_codec import (
 from scripts import migrate_ownership_ledger_v2 as migration
 
 
+def inc(*args):
+    return guard.apply_authorized_tier_fill_increase(*args)
+
+
+def qhm_qty():
+    return guard.load_canonical_ledger()["positions"]["NVDA"]["tiers"]["qhm"]["qty"]
+
+
 def ledger_v1() -> dict:
     tiers = {}
     for tier, qty in (
@@ -200,6 +208,33 @@ class GuardBoundaryTests(unittest.TestCase):
             guard.load_canonical_ledger()["positions"]["NVDA"]["tiers"]["qhm"]["qty"],
             3,
         )
+
+    # QHM add fill credited at once (Claude 2026-10-15: an NVDA add was cut back
+    # by a stale ledger read)
+    def test_exact_qhm_fill_increase_supports_coheld_symbol_and_is_idempotent(self):
+        guard._LEDGER_PATH.write_bytes(dumps(ledger_v1(), target=2))  # QHM=3, net=10
+        self.assertTrue(inc("NVDA", "qhm", 1, 11, "order-add-1"))
+        entry = guard.load_canonical_ledger()["positions"]["NVDA"]
+        self.assertEqual(entry["tiers"]["qhm"]["qty"], 4)
+        self.assertEqual((entry["alpaca_net_qty"], entry["drift"]), (11, 0))
+        self.assertTrue(inc("NVDA", "qhm", 1, 11, "order-add-1"))
+        self.assertEqual(qhm_qty(), 4)
+
+    def test_exact_qhm_fill_increase_rejects_unexplained_net_delta_and_bad_input(self):
+        guard._LEDGER_PATH.write_bytes(dumps(ledger_v1(), target=2))
+        self.assertFalse(inc("NVDA", "qhm", 1, 12, "order-add-1"))
+        self.assertFalse(inc("NVDA", "intraday", 1, 11, "add-1"))
+        self.assertFalse(inc("NVDA", "qhm", 0, 10, "order-add-1"))
+        self.assertFalse(inc("NVDA", "qhm", 1.5, 11.5, "order-add-1"))
+        self.assertFalse(inc("NVDA", "qhm", 1, float("nan"), "add-1"))
+        self.assertEqual(qhm_qty(), 3)
+
+    def test_exact_qhm_fill_increase_creates_an_absent_symbol(self):
+        guard._LEDGER_PATH.write_bytes(dumps(ledger_v1(), target=2))
+        self.assertTrue(inc("AAPL", "qhm", 2, 2, "order-add-2"))
+        led = guard.load_ledger()
+        self.assertEqual(guard.tier_qty(led, "AAPL", "qhm"), 2.0)
+        self.assertEqual(guard.tier_qty(led, "NVDA", "qhm"), 3.0)
 
     def test_invalid_candidate_leaves_current_and_backup_unchanged(self):
         original = dumps(ledger_v1(), target=1)

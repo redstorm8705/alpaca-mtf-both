@@ -2944,6 +2944,22 @@ class QuarterlyHoldManager:
                     "terminal — exact recovery remains pending." % pos.symbol
                 )
                 return 0
+        # Credit the confirmed fill to QHM's ledger claim NOW (2026-10-15 NVDA): the ledger otherwise catches up only
+        # on the 20-minute sync, and the next cycle's ownership read would cut QHM back to the pre-add count and
+        # shrink the stop. Refused (net moved by anything else) -> the hint path below still protects this add.
+        if _filled >= 1:
+            try:
+                from execution.ownership_guard import apply_authorized_tier_fill_increase
+                _pn_after = self.broker.get_position(pos.symbol)
+                _net_after = self._whole_share_qty(getattr(_pn_after, "qty", None)) if _pn_after else None
+                if _net_after is None or not apply_authorized_tier_fill_increase(
+                        pos.symbol, "qhm", _filled, _net_after, str(_add.id)):
+                    logger.critical("QHM %s: %s ledger credit for +%d not applied (net %s) — "
+                                    "the next cycle may under-count QHM", label, pos.symbol, _filled, _net_after)
+                    self._alert(":rotating_light: QHM %s %s filled +%d but the ownership ledger was not "
+                                "credited — check the stop covers every QHM share" % (pos.symbol, label, _filled))
+            except Exception as _lc_e:  # RC-3
+                logger.critical("QHM %s: %s ledger credit error: %s", label, pos.symbol, _lc_e)
         # Resync to Alpaca truth (full/partial/no fill), resubmit the stop for the
         # ACTUAL held qty. Branch 3 (resubmit fails) => PENDING inside the helper.
         _actual_after_add = self._strict_resync_qty(

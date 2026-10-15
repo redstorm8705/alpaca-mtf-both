@@ -99,7 +99,12 @@ def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label=
         live_release=lambda *_a, **_kw: True,
         live_order_id=lambda _lease: "QH-NVDA-test",
     )
-    with mock.patch.dict(sys.modules, {"execution.broker": fake_broker_mod}), \
+    credits = []
+    fake_guard_mod = SimpleNamespace(
+        apply_authorized_tier_fill_increase=lambda *a: credits.append(a) or True)
+    m._ledger_credits = credits
+    with mock.patch.dict(sys.modules, {"execution.ownership_guard": fake_guard_mod}), \
+            mock.patch.dict(sys.modules, {"execution.broker": fake_broker_mod}), \
             mock.patch.dict(sys.modules, {"execution.tier_capital_allocator": fake_allocator_mod}), \
             mock.patch("time.sleep"), mock.patch("time.monotonic", side_effect=lambda: float(next(clock))):
         got = m._stop_safe_add(pos, add_qty, 230.0, label)
@@ -107,6 +112,19 @@ def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label=
 
 
 class StopSafeAdd(unittest.TestCase):
+    def test_filled_add_credits_the_ledger_with_the_exact_fill_and_broker_net(self):
+        pos, d = _pos(qty=2), FakeDispatcher()
+        m = _mgr(pos, FakeBroker(3), d, resync_qty=3)
+        got, _ = _run(m, pos, add_qty=1)
+        self.assertEqual(got, 1)
+        self.assertEqual(m._ledger_credits, [("NVDA", "qhm", 1, 3, "add-1")])
+
+    def test_unfilled_add_credits_nothing(self):
+        pos, d = _pos(qty=2), FakeDispatcher()
+        m = _mgr(pos, FakeBroker(2), d)
+        _run(m, pos, add_qty=1, order=SimpleNamespace(status="canceled", filled_qty=0))
+        self.assertEqual(m._ledger_credits, [])
+
     def test_market_closed_defers_untouched(self):
         pos, d = _pos(), FakeDispatcher()
         got, cancels = _run(_mgr(pos, FakeBroker(2), d), pos, market_open=False)
