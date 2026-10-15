@@ -11413,3 +11413,5 @@ OCI deployment at `137.131.51.250`: v1 source SHA `78aaef8e19765d432aa74570e5cf2
   `FOREVER6_ENABLED=False`; no F6 journal exists while dormant; `mtf-bot`, `mtf-writer`, `mtf-http`, and nginx active;
   `DEPLOY_OK:ce0e203f44deac2ed3d974af224d28579ee1f4ef`. OCI does not install pytest, so no OCI pytest pass is claimed.
   Status is **deployed, unexercised** until a separately gated F6 enablement.
+
+- 2026-10-15 Claude: #658 QHM data-derived dip zones (execution/dip_zones.py, run_dip_zones.py cron, QHM _maybe_dip_add trigger). Board 3-1 (Thorp A; Taleb/Gro/GAI pooled floor C) + cold-2nd PASS + adversarial PASS + preship Gro/GAI APPROVE + CI pass. Deployed 127b2f1, first refresh 36 names. Follow-ups: freshness monitor; min-pool-size guard on partial outage (adversarial nit 2).
