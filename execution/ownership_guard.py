@@ -960,6 +960,81 @@ def apply_authorized_tier_fill_reduction(
         )
         return False
 
+def apply_authorized_tier_fill_increase(
+    symbol: str,
+    tier: str,
+    filled_qty: float,
+    fresh_net: float,
+    source: str,
+) -> bool:
+    """Credit an exact, strategy-owned BUY fill to a protected tier's claim at once (Claude 2026-10-15).
+
+    Why: the ledger is otherwise rebuilt only by the 20-minute ledger_sync cron. On 2026-10-15 a QHM NVDA dip-add
+    filled at 14:27 UTC; QHM's next per-cycle ownership read (14:35) still saw the pre-add ledger (qhm=1), cut QHM's
+    count back to 1 and resized the stop to 1 share, and the 14:40 sync then trusted that count and filed the new share
+    under intraday — leaving one share with no stop and no managing tier.
+
+    Mirror of apply_authorized_tier_fill_reduction: the caller supplies the filled quantity of its own exact order and a
+    broker-verified post-fill net. The write is accepted only when that net equals the complete ledger total PLUS the
+    fill, which proves no unrelated concurrent change is being credited to this tier. Replay-safe on `source` (the
+    order id). A symbol absent from the ledger is created with every tier at zero. Never raises; True iff the claim
+    reflects the fill afterwards."""
+    sym = str(symbol).upper()
+    if tier not in _PROTECTED_TIERS:
+        return False
+    try:
+        fill = float(filled_qty)
+        net = float(fresh_net)
+    except (TypeError, ValueError):
+        return False
+    import math
+
+    if (not math.isfinite(fill) or not fill.is_integer() or fill <= 0
+            or not math.isfinite(net) or net < -_QTY_EPS):
+        return False
+    try:
+        with _ledger_write_lock(timeout_s=1.5):
+            ledger = load_ledger()
+            ent = ledger.setdefault("positions", {}).get(sym)
+            if not ent:
+                ent = {"alpaca_net_qty": 0.0, "drift": 0.0,
+                       "tiers": {t: {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None} for t in _TIERS}}
+                ledger["positions"][sym] = ent
+            tiers = ent.setdefault("tiers", {})
+            current = float(tiers.get(tier, {}).get("qty", 0.0) or 0.0)
+            ledger_total = sum(
+                float(tiers.get(name, {}).get("qty", 0.0) or 0.0)
+                for name in _TIERS
+            )
+            if (str(tiers.get(tier, {}).get("last_fill_id") or "") == source
+                    and abs(ledger_total - net) <= _QTY_EPS):
+                return True
+            expected_net = ledger_total + fill
+            if abs(expected_net - net) > _QTY_EPS:
+                logger.critical(
+                    "authorized fill increase refused for %s: ledger=%g fill=%g "
+                    "expects net=%g, broker net=%g",
+                    sym, ledger_total, fill, expected_net, net,
+                )
+                return False
+            tiers.setdefault(tier, {"qty": 0.0, "avg_cost": 0.0, "last_fill_id": None})
+            tiers[tier]["qty"] = round(current + fill, 6)
+            tiers[tier]["last_fill_id"] = source
+            ent["alpaca_net_qty"] = round(net, 6)
+            ent["drift"] = round(net - expected_net, 6)
+            save_ledger(ledger)
+            logger.warning(
+                "authorized exact fill increase: %s/%s %g→%g fill=%g net=%g src=%s",
+                sym, tier, current, current + fill, fill, net, source,
+            )
+            return True
+    except Exception as exc:
+        logger.critical(
+            "authorized exact fill increase failed for %s/%s: %s", sym, tier, exc
+        )
+        return False
+
+
 # ── Heal / audit tool — full replay, refuse to shrink a protected floor ────────
 def _fill_time_key(f: dict) -> str:
     """Sort key for a fill — Alpaca activities carry `transaction_time` (ISO-8601,
