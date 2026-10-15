@@ -1,0 +1,220 @@
+{
+  "audit_date": "2026-10-14",
+  "run_ts": "2026-10-14T10:30:02.426296-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "UBER",
+      "NFLX"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 29,
+    "levels": {
+      "ELEVATED": 26,
+      "STRESSED": 3
+    },
+    "last_score": 49,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 48,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-14 16:16:05,492 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-14 16:16:05,494 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-14 16:18:07,687 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$20.95 tracker=$0.00 drift=$+20.95",
+      "2026-10-14 16:20:16,559 WARNING ledger_sync ledger_sync wall-time 15.0s (fills=768 orders=3119)",
+      "2026-10-14 16:24:29,477 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 20.880000000000194,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 20.880000000000194,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "UBER",
+      "pnl": 20.880000000000194,
+      "entry_price": 70.12,
+      "exit_price": 68.96,
+      "size": 18.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 70.7,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "UBER",
+      "pnl": 20.880000000000194,
+      "entry_price": 70.12,
+      "exit_price": 68.96,
+      "size": 18.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 70.7,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "UBER",
+        "pnl": 20.880000000000194,
+        "entry_price": 70.12,
+        "exit_price": 68.96,
+        "size": 18.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 70.7,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "LLY": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NFLX": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 150,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "11:00-11:00"
+        ],
+        "uncovered_windows_pt": [
+          "08:00-08:00"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "UBER": {
+        "class": "COVERED",
+        "owners": [
+          "day",
+          "other"
+        ],
+        "exposed_min": 98,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:10-10:10"
+        ],
+        "uncovered_windows_pt": [
+          "07:10-07:10"
+        ],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-14",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 6,
+    "symbols": [
+      "NFLX",
+      "UBER"
+    ],
+    "by_symbol": {
+      "UBER": {
+        "buy": 1,
+        "sell": 1
+      },
+      "NFLX": {
+        "buy": 0,
+        "sell": 0
+      }
+    }
+  }
+}
