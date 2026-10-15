@@ -167,8 +167,8 @@ _OWNER_TRIM_FILL_POLL_TIMEOUT_SECONDS = 15.0   # same bounded fill poll as the e
 _EARNINGS_SRC_LOGGED: dict = {}
 
 _DIP_ADD_ENABLED           = True   # LIVE (Rafael 2026-07-13): adds on dips below avg
-_DIP_ADD_RUNG_A_PCT        = 0.02   # <= cost_avg*(1-0.02): small add, capped AT target
-_DIP_ADD_RUNG_B_PCT        = 0.05   # <= cost_avg*(1-0.05): aggressive add to ceiling
+# Rung A / Rung B trigger levels are DATA-DERIVED per stock (execution/dip_zones.py, refreshed daily by
+# run_dip_zones.py; Claude 2026-10-15, board + Gro + GAI aligned) — they replaced the fixed -2% / -5%.
 _DIP_ADD_CEILING_MULT      = 1.375  # Rung B ceiling = 1.375x target (27.5% @ 20%)
 _DIP_ADD_STOP_FLOOR_PCT    = 0.15   # STOP adding below first-entry*(1-0.15); escalate
 _DIP_ADD_MAX_PER_QUARTER   = 3      # anti-osc: max dip-adds per position per quarter
@@ -2480,7 +2480,8 @@ class QuarterlyHoldManager:
 
     def _maybe_dip_add(self, pos: HoldPosition, today_str: str) -> None:
         """DIP-ADD: buy more of a conviction hold on weakness below cost average.
-        Two rungs (A -2% small-to-target, B -5% aggressive-to-ceiling), a HARD pre-fill
+        Two rungs at each stock's own data-derived dip zones (execution/dip_zones.py: A small-to-target, B
+        aggressive-to-ceiling), a HARD pre-fill
         %-equity ceiling + a quarterly max-shares cap, a -15% first-entry stop-adding
         floor, and anti-oscillation (max N/quarter, >= K days apart, none within ~7 days
         of the earnings exit). DORMANT unless _DIP_ADD_ENABLED. Never raises into the
@@ -2505,9 +2506,17 @@ class QuarterlyHoldManager:
                     pos.symbol, live_price, _DIP_ADD_STOP_FLOOR_PCT * 100, floor_price)
                 return
 
-            # Trigger off COST AVERAGE. Rung B (deeper) implies Rung A.
-            rung_b = live_price <= pos.avg_entry_price * (1 - _DIP_ADD_RUNG_B_PCT)
-            rung_a = live_price <= pos.avg_entry_price * (1 - _DIP_ADD_RUNG_A_PCT)
+            # Trigger off COST AVERAGE against this stock's own past-year zones. Rung B (deeper) implies Rung A.
+            # No zone (missing / unreadable state, unknown symbol) -> no add: fail closed.
+            from execution.dip_zones import zones_for
+            _zones = zones_for(pos.symbol)
+            if _zones is None:
+                logger.warning("QHM dip-add: %s has no data-derived dip zone — no add this cycle", pos.symbol)
+                return
+            _zone_a, _zone_b = _zones
+            _dip = live_price / pos.avg_entry_price - 1
+            rung_b = _dip <= _zone_b
+            rung_a = _dip <= _zone_a
             if not rung_a:
                 return
 
