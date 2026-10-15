@@ -59,6 +59,16 @@ def _identity(value) -> str:
     return ""
 
 
+def _number(value) -> float:
+    """Parse broker/ledger numeric evidence without accepting JSON booleans."""
+    if isinstance(value, bool):
+        return math.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return math.nan
+
+
 def _is_f6_coid(value) -> bool:
     """Validate the canonical F6 prefix without importing the ledger guard.
 
@@ -198,11 +208,8 @@ def bind(reservation_id: str, order) -> None:
         coid = str(_field(order, "client_order_id", "") or "")
         symbol = str(_field(order, "symbol", "") or "").upper()
         side = str(getattr(_field(order, "side", ""), "value", _field(order, "side", ""))).lower()
-        try:
-            qty = float(_field(order, "qty", 0) or 0)
-            filled = float(_field(order, "filled_qty", 0) or 0)
-        except (TypeError, ValueError):
-            qty = filled = math.nan
+        qty = _number(_field(order, "qty", 0))
+        filled = _number(_field(order, "filled_qty", 0))
         status = str(getattr(_field(order, "status", ""), "value", _field(order, "status", ""))).lower()
         if (not oid or coid != row["client_order_id"] or symbol != row["symbol"] or side != "buy"
                 or not math.isfinite(qty) or qty != row["qty"]
@@ -273,8 +280,12 @@ def assert_reduction_clear(symbol: str) -> None:
 def reconcile(fills: list, orders: list, coid_map: dict, ledger_result: dict) -> dict:
     """Release only on exact broker identity and same-pass fill-replay provenance."""
     by_coid: dict[str, list] = {}
+    by_oid: dict[str, list] = {}
     for order in orders or []:
         by_coid.setdefault(str(_field(order, "client_order_id", "") or ""), []).append(order)
+        order_id = _identity(_field(order, "id", ""))
+        if order_id:
+            by_oid.setdefault(order_id, []).append(order)
     released: list[str] = []
     pending: list[str] = []
     with _locked():
@@ -292,14 +303,13 @@ def reconcile(fills: list, orders: list, coid_map: dict, ledger_result: dict) ->
             symbol = str(_field(order, "symbol", "") or "").upper()
             side = str(getattr(_field(order, "side", ""), "value", _field(order, "side", ""))).lower()
             status = str(getattr(_field(order, "status", ""), "value", _field(order, "status", ""))).lower()
-            try:
-                qty = float(_field(order, "qty", 0) or 0)
-                filled = float(_field(order, "filled_qty", 0) or 0)
-            except (TypeError, ValueError):
-                qty = filled = math.nan
+            qty = _number(_field(order, "qty", 0))
+            filled = _number(_field(order, "filled_qty", 0))
             valid = (oid and coid == row["client_order_id"] and symbol == row["symbol"] and side == "buy"
                      and status in KNOWN_ORDER_STATUSES and math.isfinite(qty) and qty == row["qty"]
-                     and math.isfinite(filled) and 0 <= filled <= qty)
+                     and math.isfinite(filled) and 0 <= filled <= qty
+                     and len(by_oid.get(oid, [])) == 1
+                     and coid_map.get(oid) == row["client_order_id"])
             if not valid or (row["order_id"] is not None and row["order_id"] != oid):
                 pending.append(rid)
                 continue
@@ -313,28 +323,29 @@ def reconcile(fills: list, orders: list, coid_map: dict, ledger_result: dict) ->
                 if isinstance(f, dict) and _identity(f.get("order_id")) == oid
             ]
             ids = [_identity(f.get("id")) for f in exact_fills]
-            try:
-                fill_quantities = [float(f.get("qty", 0) or 0) for f in exact_fills]
-                fill_qty = sum(fill_quantities)
-            except (TypeError, ValueError):
-                fill_quantities = []
-                fill_qty = math.nan
-            positions = ledger_result.get("positions") or {}
-            symbol_absent = symbol not in positions
+            fill_quantities = [_number(f.get("qty", 0)) for f in exact_fills]
+            fill_qty = sum(fill_quantities)
+            positions_value = ledger_result.get("positions")
+            positions: dict = positions_value if isinstance(positions_value, dict) else {}
+            positions_valid = isinstance(positions_value, dict)
+            symbol_absent = positions_valid and symbol not in positions
             entry = positions.get(symbol, {})
             drift = entry.get("drift")
             net = entry.get("alpaca_net_qty")
             try:
-                f6_claim = float(entry["tiers"]["forever6"]["qty"])
-                tier_sum = sum(float(entry["tiers"][tier]["qty"])
+                f6_claim = _number(entry["tiers"]["forever6"]["qty"])
+                tier_sum = sum(_number(entry["tiers"][tier]["qty"])
                                for tier in ("intraday", "daytrade", "qhm", "forever6"))
-            except (KeyError, TypeError, ValueError):
+                drift = _number(entry["drift"])
+                net = _number(entry["alpaca_net_qty"])
+            except (KeyError, TypeError):
                 f6_claim = tier_sum = math.nan
+                drift = net = math.nan
             ledger_clean = (
                 ledger_result.get("healed") is True
                 and coid_map.get(oid) == row["client_order_id"]
-                and drift is not None and math.isfinite(float(drift)) and abs(float(drift)) <= 1e-6
-                and net is not None and math.isfinite(float(net))
+                and math.isfinite(drift) and abs(drift) <= 1e-6
+                and math.isfinite(net)
                 and math.isfinite(tier_sum) and abs(tier_sum - float(net)) <= 1e-6
                 and math.isfinite(f6_claim)
             )

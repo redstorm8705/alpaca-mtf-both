@@ -70,6 +70,47 @@ def test_terminal_zero_absent_symbol_requires_zero_baseline():
     }
 
 
+@pytest.mark.parametrize(
+    "ledger_result",
+    [
+        {"healed": True},
+        {"healed": True, "positions": []},
+        {"healed": False, "positions": {}},
+    ],
+)
+def test_terminal_zero_buy_requires_authoritative_symbol_absence(ledger_result):
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    broker_order = order(status="rejected", filled=0)
+    ppb.bind(rid, broker_order)
+    assert ppb.reconcile([], [broker_order], {"order-1": rid}, ledger_result) == {
+        "released": [], "pending": [rid],
+    }
+
+
+@pytest.mark.parametrize("coid_map", [{}, {"order-1": "F6-WRONG"}])
+def test_terminal_zero_buy_requires_exact_order_join(coid_map):
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    broker_order = order(status="rejected", filled=0)
+    ppb.bind(rid, broker_order)
+    assert ppb.reconcile(
+        [], [broker_order], coid_map, {"healed": True, "positions": {}},
+    ) == {"released": [], "pending": [rid]}
+
+
+def test_terminal_zero_buy_rejects_duplicate_broker_order_identity():
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    broker_order = order(status="rejected", filled=0)
+    ppb.bind(rid, broker_order)
+    conflicting = SimpleNamespace(
+        id="order-1", client_order_id="F6-OTHER-b-1-conflict", symbol="NVDA",
+        side="buy", qty=1, filled_qty=0, status="rejected",
+    )
+    assert ppb.reconcile(
+        [], [broker_order, conflicting], {"order-1": rid},
+        {"healed": True, "positions": {}},
+    ) == {"released": [], "pending": [rid]}
+
+
 def test_terminal_zero_with_exact_fill_stays_pending():
     rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
     broker_order = order(status="canceled", filled=0)
@@ -747,6 +788,69 @@ def test_acknowledged_but_not_list_visible_reducer_blocks_f6(monkeypatch):
     assert order_admission.active_reductions("NVDA") == ()
 
 
+def test_terminal_zero_reducer_releases_when_clean_replay_omits_symbol(monkeypatch):
+    """A manual flatten must not leave a canceled reducer blocking F6 forever."""
+    import config
+    monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
+
+    @order_admission.serialized_symbol_order(failure_value=None, reducing=True)
+    def submit_reducer(symbol):
+        return SimpleNamespace(
+            id="sell-1", client_order_id="IN-NVDA-s-1-x", symbol=symbol,
+            status="accepted", side="sell", qty=1,
+        )
+
+    assert submit_reducer("NVDA").id == "sell-1"
+    terminal = SimpleNamespace(
+        id="sell-1", client_order_id="IN-NVDA-s-1-x", symbol="NVDA",
+        status="canceled", side="sell", qty=1, filled_qty=0,
+    )
+    result = order_admission.reconcile_reductions(
+        [], [terminal], {"sell-1": "IN-NVDA-s-1-x"},
+        {"healed": True, "positions": {}},
+    )
+
+    assert result["pending"] == []
+    assert len(result["released"]) == 1
+    assert order_admission.active_reductions("NVDA") == ()
+
+
+@pytest.mark.parametrize(
+    "ledger_result",
+    [
+        {"healed": True},
+        {"healed": True, "positions": []},
+        {"healed": False, "positions": {}},
+    ],
+)
+def test_terminal_zero_reducer_requires_authoritative_symbol_absence(
+    monkeypatch, ledger_result,
+):
+    """Missing, malformed, or unhealed replay evidence remains fail-closed."""
+    import config
+    monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
+
+    @order_admission.serialized_symbol_order(failure_value=None, reducing=True)
+    def submit_reducer(symbol):
+        return SimpleNamespace(
+            id="sell-1", client_order_id="IN-NVDA-s-1-x", symbol=symbol,
+            status="accepted", side="sell", qty=1,
+        )
+
+    submit_reducer("NVDA")
+    terminal = SimpleNamespace(
+        id="sell-1", client_order_id="IN-NVDA-s-1-x", symbol="NVDA",
+        status="canceled", side="sell", qty=1, filled_qty=0,
+    )
+    result = order_admission.reconcile_reductions(
+        [], [terminal], {"sell-1": "IN-NVDA-s-1-x"}, ledger_result,
+    )
+
+    assert result["released"] == []
+    assert len(result["pending"]) == 1
+    assert len(order_admission.active_reductions("NVDA")) == 1
+
+
 def test_malformed_boolean_fill_identity_cannot_release_either_journal(monkeypatch):
     import config
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
@@ -790,6 +894,88 @@ def test_malformed_boolean_fill_identity_cannot_release_either_journal(monkeypat
     assert ppb.reconcile(
         [malformed_buy], [buy], {"buy-1": rid}, ledger,
     ) == {"released": [], "pending": [rid]}
+
+
+@pytest.mark.parametrize("bad", [True, False])
+@pytest.mark.parametrize("field", ["qty", "filled_qty"])
+def test_boolean_order_quantities_cannot_bind_or_release_journals(bad, field):
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-bool-order", 0)
+    malformed_buy = order(coid=rid, oid="buy-1")
+    setattr(malformed_buy, field, bad)
+    with pytest.raises(ppb.PendingProtectedBuyError, match="does not exactly match"):
+        ppb.bind(rid, malformed_buy)
+    assert ppb.load()["reservations"][rid]["status"] == "reserved"
+
+    reduction_id = order_admission._begin_reduction("AAPL", "test")
+    malformed_sell = SimpleNamespace(
+        id="sell-1", client_order_id="IN-AAPL-s-1-bool-order", symbol="AAPL",
+        status="accepted", side="sell", qty=1, filled_qty=0,
+    )
+    setattr(malformed_sell, field, bad)
+    # Binding only consumes the submitted quantity; filled_qty is proven later.
+    if field == "qty":
+        with pytest.raises(ValueError, match="identity is incomplete"):
+            order_admission._bind_reduction(reduction_id, malformed_sell)
+        assert len(order_admission.active_reductions("AAPL")) == 1
+
+
+@pytest.mark.parametrize("bad", [True, False])
+@pytest.mark.parametrize("evidence", ["order_qty", "order_filled", "fill_qty", "ledger_drift"])
+def test_boolean_reconciliation_evidence_keeps_both_journals_pending(bad, evidence):
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-bool-proof", 0)
+    buy = order(coid=rid, oid="buy-1")
+    ppb.bind(rid, buy)
+    terminal_buy = order(coid=rid, oid="buy-1")
+    buy_fill = {
+        "id": "buy-fill", "order_id": "buy-1", "symbol": "NVDA",
+        "side": "buy", "qty": 1,
+    }
+    buy_ledger = clean_ledger(net=1, f6=1)
+
+    reduction_id = order_admission._begin_reduction("AAPL", "test")
+    accepted_sell = SimpleNamespace(
+        id="sell-1", client_order_id="IN-AAPL-s-1-bool-proof", symbol="AAPL",
+        status="accepted", side="sell", qty=1, filled_qty=0,
+    )
+    order_admission._bind_reduction(reduction_id, accepted_sell)
+    terminal_sell = SimpleNamespace(
+        id="sell-1", client_order_id="IN-AAPL-s-1-bool-proof", symbol="AAPL",
+        status="filled", side="sell", qty=1, filled_qty=1,
+    )
+    sell_fill = {
+        "id": "sell-fill", "order_id": "sell-1", "symbol": "AAPL",
+        "side": "sell", "qty": 1,
+    }
+    sell_ledger = {
+        "healed": True,
+        "positions": {"AAPL": {"drift": 0, "alpaca_net_qty": 0, "tiers": {
+            "intraday": {"qty": 0}, "daytrade": {"qty": 0},
+            "qhm": {"qty": 0}, "forever6": {"qty": 0},
+        }}},
+    }
+
+    if evidence == "order_qty":
+        terminal_buy.qty = bad
+        terminal_sell.qty = bad
+    elif evidence == "order_filled":
+        terminal_buy.filled_qty = bad
+        terminal_sell.filled_qty = bad
+    elif evidence == "fill_qty":
+        buy_fill["qty"] = bad
+        sell_fill["qty"] = bad
+    else:
+        buy_ledger["positions"]["NVDA"]["drift"] = bad
+        sell_ledger["positions"]["AAPL"]["drift"] = bad
+
+    assert ppb.reconcile(
+        [buy_fill], [terminal_buy], {"buy-1": rid}, buy_ledger,
+    ) == {"released": [], "pending": [rid]}
+    reducer_result = order_admission.reconcile_reductions(
+        [sell_fill], [terminal_sell], {"sell-1": "IN-AAPL-s-1-bool-proof"},
+        sell_ledger,
+    )
+    assert reducer_result["released"] == []
+    assert reducer_result["pending"] == [reduction_id]
 
 
 @pytest.mark.parametrize(

@@ -43,7 +43,6 @@ from execution.broker import (
     get_open_orders,
     get_open_position,
     get_order,
-    get_trading_client,
     partial_close_position,
     replace_stop_order,
     resolve_live_order,
@@ -1250,35 +1249,19 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
 def _submit_gtc_limit_partial(symbol: str, qty: int, side: str, limit_price: float):
     """
     Submit a GTC limit order for tranche partial exits.
-    broker.py's submit_limit_order only supports DAY TIF — this uses
-    get_trading_client() directly for GTC+limit.
+    Routes through broker.submit_limit_order so the shared per-symbol admission
+    gate, pending-F6 reservation check, and normal ownership guard all span the
+    final decision through broker acknowledgement.
     side: "sell" for long positions, "buy" for short positions.
     Returns order object or None on failure.
     """
-    from alpaca.trading.requests import LimitOrderRequest
-    from alpaca.trading.enums import OrderSide, TimeInForce
     if qty <= 0 or not (0 < limit_price < 99_999):
         logger.warning(f"[{symbol}] GTC limit partial skipped: qty={qty}, price={limit_price}")
         return None
-    try:
-        client     = get_trading_client()
-        order_side = OrderSide.SELL if side == "sell" else OrderSide.BUY
-        order_data = LimitOrderRequest(
-            symbol=symbol,
-            qty=qty,
-            side=order_side,
-            limit_price=round(limit_price, 2),
-            time_in_force=TimeInForce.GTC,
-        )
-        order = client.submit_order(order_data)
-        logger.info(
-            f"[{symbol}] GTC LIMIT PARTIAL submitted: {side.upper()} {qty} @ "
-            f"${limit_price:.2f} | Order ID: {order.id}"  # type: ignore[union-attr]
-        )
-        return order
-    except Exception as e:
-        logger.error(f"[{symbol}] GTC limit partial failed: {e}")
-        return None
+    return submit_limit_order(
+        symbol, qty, side, limit_price,
+        tier="intraday", time_in_force="gtc",
+    )
 
 
 # _submit_gtc_stop_close extracted to execution/lifecycle.py (Phase 2 Extraction 7).

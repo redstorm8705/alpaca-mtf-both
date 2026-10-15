@@ -91,6 +91,16 @@ def _identity(value) -> str:
     return ""
 
 
+def _number(value) -> float:
+    """Parse broker/ledger numeric evidence without accepting JSON booleans."""
+    if isinstance(value, bool):
+        return math.nan
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return math.nan
+
+
 @contextlib.contextmanager
 def _reduction_file_lock():
     _REDUCTION_LOCK.parent.mkdir(parents=True, exist_ok=True)
@@ -197,10 +207,7 @@ def _bind_reduction(rid: str, order) -> None:
     coid = _value(order, "client_order_id", None)
     status = str(getattr(_value(order, "status", ""), "value", _value(order, "status", ""))).lower()
     side = str(getattr(_value(order, "side", ""), "value", _value(order, "side", ""))).lower()
-    try:
-        qty = float(_value(order, "qty", 0) or 0)
-    except (TypeError, ValueError):
-        qty = float("nan")
+    qty = _number(_value(order, "qty", 0))
     if (not oid or not symbol or not status or side not in {"buy", "sell", "sell_short"}
             or not math.isfinite(qty) or qty <= 0):
         raise ValueError("acknowledged reducing order identity is incomplete")
@@ -257,11 +264,8 @@ def reconcile_reductions(fills: list, orders: list, coid_map: dict,
             osym = str(_value(order, "symbol", "") or "").upper()
             status = str(getattr(_value(order, "status", ""), "value", _value(order, "status", ""))).lower()
             side = str(getattr(_value(order, "side", ""), "value", _value(order, "side", ""))).lower()
-            try:
-                qty = float(_value(order, "qty", 0) or 0)
-                filled = float(_value(order, "filled_qty", 0) or 0)
-            except (TypeError, ValueError):
-                qty = filled = float("nan")
+            qty = _number(_value(order, "qty", 0))
+            filled = _number(_value(order, "filled_qty", 0))
             coid = str(_value(order, "client_order_id", "") or "")
             if (oid != row["order_id"] or osym != row["symbol"] or status not in _TERMINAL
                     or side != row.get("side") or not math.isfinite(qty) or qty != row.get("qty")
@@ -276,19 +280,19 @@ def reconcile_reductions(fills: list, orders: list, coid_map: dict,
                 if _identity(_value(f, "order_id", "")) == oid
             ]
             ids = [_identity(_value(f, "id", "")) for f in exact_fills]
+            fill_qtys = [_number(_value(f, "qty", 0)) for f in exact_fills]
+            fill_qty = sum(fill_qtys)
+            positions_value = ledger_result.get("positions")
+            positions: dict = positions_value if isinstance(positions_value, dict) else {}
+            positions_valid = isinstance(positions_value, dict)
+            symbol_absent = positions_valid and osym not in positions
+            entry = positions.get(osym, {})
             try:
-                fill_qtys = [float(_value(f, "qty", 0) or 0) for f in exact_fills]
-                fill_qty = sum(fill_qtys)
-            except (TypeError, ValueError):
-                fill_qtys = []
-                fill_qty = float("nan")
-            entry = (ledger_result.get("positions") or {}).get(osym, {})
-            try:
-                drift = float(entry["drift"])
-                net = float(entry["alpaca_net_qty"])
-                tier_sum = sum(float(entry["tiers"][tier]["qty"])
+                drift = _number(entry["drift"])
+                net = _number(entry["alpaca_net_qty"])
+                tier_sum = sum(_number(entry["tiers"][tier]["qty"])
                                for tier in ("intraday", "daytrade", "qhm", "forever6"))
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError):
                 drift = net = tier_sum = float("nan")
             replay_clean = (
                 ledger_result.get("healed") is True
@@ -309,7 +313,23 @@ def reconcile_reductions(fills: list, orders: list, coid_map: dict,
                 and math.isfinite(fill_qty) and abs(fill_qty - filled) <= 1e-6
             )
             if filled == 0:
-                proven = status in {"canceled", "expired", "rejected"} and not exact_fills and replay_clean
+                # A clean canonical replay can legitimately omit a symbol after an
+                # emergency/manual close flattened it before this reducer reached a
+                # terminal zero-fill state.  Treat that authoritative absence as the
+                # zero-position equivalent of a clean row.  Missing or malformed
+                # ``positions`` remains fail-closed.
+                zero_replay_clean = (
+                    replay_clean
+                    or (
+                        ledger_result.get("healed") is True
+                        and symbol_absent
+                    )
+                )
+                proven = (
+                    status in {"canceled", "expired", "rejected"}
+                    and not exact_fills
+                    and zero_replay_clean
+                )
             else:
                 proven = replay_clean and fills_exact and not (status == "filled" and abs(filled - qty) > 1e-6)
             if not proven:
