@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-13 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-15 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,31 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-15, OpenAI Codex signed) — F6 protected-buy ownership prerequisite deployed (#650/#651/#652)
+
+The F6 pending-buy reservation architecture is merged and deployed on OCI as three dependency-ordered PRs: #650
+foundation, #651 broker admission, and #652 canonical reconciliation. The split was required because the original
+#648 exceeded the CI reviewer context limit; #648 is closed as superseded. Live OCI is at merge `ce0e203`, with
+`mtf-bot`, `mtf-writer`, `mtf-http`, and nginx active. **F6 remains disabled**
+(`FOREVER6_ENABLED=False`), no dormant journal was created, and the new paths are deployed but unexercised.
+
+The resulting contract is: reserve an F6 buy durably before broker submit; serialize buys and reductions per symbol;
+keep ambiguous submits reserved; block reductions while a protected buy is unresolved; and release either journal
+only after exact, unique order identity plus the same healed canonical ownership replay. A canceled zero-fill reducer
+may clear when that replay authoritatively omits the now-flat symbol. Missing, malformed, Boolean, duplicate, or
+wrong-order evidence stays pending. The remaining direct Swing GTC partial now routes through broker admission.
+
+Gate evidence: Board APPROVE and independent mechanical/cold APPROVE on exact tree
+`a0c60ab73ff196a34477d32ecf66cc6ff4ce1907`; reviewers found and fixed the zero-fill permanent lock, Python Boolean
+quantity coercion, and absent/wrong/duplicate order joins. Google AI Studio APPROVE on every gated file; Groq waived
+under Rafael's explicit approval; GitHub CI passed. Local final suite: 269 tests + 42 subtests, compile, Ruff E/W/F/B,
+mypy and diff checks PASS. OCI Python 3.10 compile/import PASS; OCI has no pytest, which is recorded rather than
+reported as a server-side test pass.
+
+**⏩ EXACT NEXT ACTION:** do not rebuild or enable F6 from this handoff. Claude may audit #650/#651/#652 and fold the
+contract into its existing F6/go-live work. Any F6 enablement remains a separate risk-path change with a fresh gate;
+the current production behavior is intentionally unchanged.
 
 ## ⏩ LATEST (2026-10-13 night, OpenAI Codex signed) — every broker fill now pages Slack (#629/#631/#632)
 

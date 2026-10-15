@@ -11393,3 +11393,23 @@ OCI deployment at `137.131.51.250`: v1 source SHA `78aaef8e19765d432aa74570e5cf2
 - Live probe OCI: K_raw 2.448 -> K_dyn 1.9 (no change today). Margin-call buffer at 1.9x corrected to 29.6% (m 0.327).
 - Known static choices left: 5-session horizon/loosening window, median record-jump. Follow-ups: stale-state Slack escalation, tier_capital_allocator 0.40 overnight cap not linked to K.
 - LLY trim investigation: manual Alpaca trim fights the QHM stray-sell guard; a stop "replace" leaves LLY with no stop (stop-repair does not treat "replaced" as terminal). Needs a bot-side operator trim.
+# 2026-10-15 — F6 protected-buy reservation prerequisite deployed (OpenAI Codex)
+
+- **Scope:** completed the dormant F6 ownership prerequisite without changing Claude's entry/exit strategy or enabling
+  F6. PR #650 added durable pending-buy and reducing-order journals plus per-symbol order admission; #651 wired broker
+  submit/recovery and the F6 starter path; #652 reconciles both journals after the same canonical ledger replay and
+  routes the remaining direct GTC partial through broker admission. Original PR #648 was closed as superseded after
+  exceeding the CI context ceiling.
+- **Adversarial corrections:** Board rejected a canceled zero-fill reducer that could remain active forever after a
+  manual/emergency flatten removed the symbol row. Mechanical review rejected Python Boolean quantities
+  (`float(True) == 1.0`) and then an absent-symbol terminal-zero path that could release on a missing/wrong COID map.
+  Final code releases only on exact unique order identity, no contradictory fills, and healed canonical ownership;
+  malformed/missing/Boolean/duplicate/wrong evidence remains pending.
+- **Gate:** exact final staged tree `a0c60ab73ff196a34477d32ecf66cc6ff4ce1907`; Board APPROVE; independent
+  mechanical/cold APPROVE; Google AI Studio APPROVE on every gated file; Groq waived by Rafael; GitHub preship PASS.
+  Local final validation: 269 tests + 42 subtests, Python compile, Ruff E/W/F/B, mypy `--warn-unreachable`, and diff
+  check PASS.
+- **Deployment:** OCI fast-forwarded to `ce0e203f44deac2ed3d974af224d28579ee1f4ef`; Python 3.10 compile/import PASS;
+  `FOREVER6_ENABLED=False`; no F6 journal exists while dormant; `mtf-bot`, `mtf-writer`, `mtf-http`, and nginx active;
+  `DEPLOY_OK:ce0e203f44deac2ed3d974af224d28579ee1f4ef`. OCI does not install pytest, so no OCI pytest pass is claimed.
+  Status is **deployed, unexercised** until a separately gated F6 enablement.

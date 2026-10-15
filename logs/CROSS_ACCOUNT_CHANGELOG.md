@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-15 00:20 PT]` **OpenAI Codex:** deployed the F6 protected-buy ownership prerequisite as three review-sized PRs: durable reservation and per-symbol admission, exact broker wiring/recovery, and canonical ledger reconciliation. Reviewers found and fixed a permanent zero-fill lock, Boolean quantity coercion, and ambiguous order joins before approval. F6 remains disabled and the paths are deployed, unexercised. — PRs #650/#651/#652 / `ce0e203` — order admission, pending-buy journal, broker/F6 manager, ledger sync, exit routing, tests, post-live record
+
 - `[2026-10-13 14:50 PT]` **OpenAI Codex:** shipped a broker-authoritative once-per-minute Slack notifier for every Alpaca stock fill after EWY's reconciled sell went silent. Live activation sent 38 cards; a Python 3.10 timestamp fix recovered exactly five more with zero duplicates, then canonicalized all 43 acknowledgment timestamps and stopped recurring normalization noise. Board/cold/Groq/GAI/CI passed; signed handoff is current in Master Brain. — PRs #629/#631/#632/#633 / `5cf234c` — fill notifier, OCI cron, timestamp/state hardening, tests, design/post-live records, handoff
 
 - `[2026-10-13 02:04 PT]` **OpenAI Codex:** completed Claude's open #622 with same-scan Swing one-share/overnight broker profit locks, terminal-GTC replacement, exact identity-bound stop-fill reconciliation, and live-ID-only duplicate pages. Five adversarial blockers were fixed before Board/cold/Groq/GAI/CI approval. OCI restart immediately preserved PLTR's operator $205.40 stop and reconciled EWY at an exact $164.28 fill. — PR #622 / `583de8b` — Swing exits, stop reconciliation, tests, design/post-live records
