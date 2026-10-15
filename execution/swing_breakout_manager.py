@@ -181,7 +181,8 @@ def size_order(equity: float, price: float, atr: float, other_notional: float, t
     """Whole shares for one slot. Every bound is a floor; any bad input → 0 (skip).
     `other_notional` = every non-tier position EXCEPT the buy-and-hold tiers; `protected_notional` = QHM + F6.
     Invariant #11 as amended (Rafael approved 2026-10-02, BGG 4/4): swing/day ≤ 100% of equity with QHM/F6
-    excluded, AND total overnight notional (all tiers) ≤ SWING_BREAKOUT_TOTAL_OVERNIGHT_K × equity."""
+    excluded, AND total overnight notional (all tiers) ≤ K × equity, K = overnight_capacity.overnight_k() (data-derived,
+    never above the SWING_BREAKOUT_TOTAL_OVERNIGHT_K ceiling)."""
     try:
         if not all(math.isfinite(x) for x in (equity, price, atr, other_notional, tier_notional, protected_notional)):
             return 0, "non-finite sizing input"
@@ -189,7 +190,8 @@ def size_order(equity: float, price: float, atr: float, other_notional: float, t
             return 0, "non-positive sizing input"
         slot = float(_cfg("SWING_BREAKOUT_SLOT_PCT", 0.20)) * equity
         room_tier = min(float(_cfg("SWING_BREAKOUT_BUDGET_PCT", 0.80)) * equity, equity - other_notional) - tier_notional
-        room_total = (float(_cfg("SWING_BREAKOUT_TOTAL_OVERNIGHT_K", 1.75)) * equity
+        from execution.overnight_capacity import overnight_k
+        room_total = (overnight_k() * equity                  # dynamic, tighten-only total limb (<= the ceiling)
                       - (other_notional + protected_notional + tier_notional))
         budget = min(room_tier, room_total)
         risk_cap = float(_cfg("SWING_BREAKOUT_MAX_RISK_PCT", 0.02)) * equity

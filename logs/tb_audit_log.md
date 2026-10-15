@@ -11385,3 +11385,11 @@ OCI deployment at `137.131.51.250`: v1 source SHA `78aaef8e19765d432aa74570e5cf2
 - New operator-armed partial sale of a quarterly hold (`scripts/qhm_owner_trim.py` -> `quarterly_hold_manager._maybe_owner_trim/_execute_owner_trim`), reusing the earnings-trim tier-1 sequence. Purpose: trim LLY 2 -> 1 (board Thorp + Shaw, Gro, GAI 4/4), impossible by hand because the stray-sell guard cancels manual sells and a stop "replace" stalls stop repair.
 - Cold-2nd: R1 FAIL (co-held symbol: the trim would cancel another tier's stop), R2/R3 PASS. Adversarial: R1 FAIL (stale lastday_price trigger, request outliving its hold, no lock, error after stop cancel), R2/R3 PASS (probes P1-P8). Gro+GAI preship APPROVE.
 - Known: stop-repair does not treat a "replaced" stop as terminal (manual Alpaca replace leaves a hold with no stop) — queued separately.
+
+## 2026-10-14 — Dynamic overnight cap K (Claude)
+- Invariant #11 total limb: fixed K 1.9 -> `execution/overnight_capacity.overnight_k()` = min(1.9 ceiling, K_dyn), tighten-only; refreshed by `run_overnight_k.py` (cron 12:15/21:15 UTC weekdays, `scripts/install_overnight_k_cron.sh`).
+- Design variant D aligned 4/4 (Thorp + Taleb seats, Gro after counter-prompt, GAI). Computed from the account's OWN holdings' full split-adjusted history; VIX is the only market-wide input.
+- Cold-2nd: R1 FAIL (same-day overwrite), R2-R4 PASS. Adversarial: FAIL (flat-book loosening; then halt-gap erased a crash), rev4 PASS. Preship Gro+GAI APPROVE all files (day_promotion after evidence counter-prompt).
+- Live probe OCI: K_raw 2.448 -> K_dyn 1.9 (no change today). Margin-call buffer at 1.9x corrected to 29.6% (m 0.327).
+- Known static choices left: 5-session horizon/loosening window, median record-jump. Follow-ups: stale-state Slack escalation, tier_capital_allocator 0.40 overnight cap not linked to K.
+- LLY trim investigation: manual Alpaca trim fights the QHM stray-sell guard; a stop "replace" leaves LLY with no stop (stop-repair does not treat "replaced" as terminal). Needs a bot-side operator trim.

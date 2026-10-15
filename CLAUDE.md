@@ -1541,10 +1541,14 @@ the board output in plain language without losing the directional conclusion.
 11. **Overnight exposure budget (amended 2026-10-02 — Rafael-approved, board Thorp+Shaw 2-0 + Gro + GAI;
     K raised 1.75 → 1.9 on 2026-10-14 — Rafael's decision after a BGG split: Thorp 1.9, GAI/Taleb 1.75, none 2.0):**
     swing/day tiers ≤ 100% of account equity in overnight positions, with the buy-and-hold tiers (QHM, F6)
-    EXCLUDED from that 100%; AND total overnight notional across ALL tiers ≤ 1.9× equity
-    (`SWING_BREAKOUT_TOTAL_OVERNIGHT_K`, below the Reg-T 2× overnight limit; a margin call needs a ~32% book-wide
-    drop at 1.9× vs ~39% at 1.75×). Block-only: a breach stops NEW entries; it never forces a sale. Changing K or
-    either limb requires a board vote.
+    EXCLUDED from that 100%; AND total overnight notional across ALL tiers ≤ K × equity, where K is DYNAMIC and
+    tighten-only (2026-10-14, board Thorp + Taleb + Gro + GAI 4/4, variant D): `execution/overnight_capacity.
+    overnight_k()` = min(ceiling 1.9 = `SWING_BREAKOUT_TOTAL_OVERNIGHT_K`, a 5-session rolling minimum of the
+    margin-call-derived K from the book's worst-ever 5-session loss × its median record jump × VIX scale), refreshed
+    by `run_overnight_k.py` before the open; missing state → 1.9, stale → the last good K. The ceiling stays below the
+    Reg-T 2× overnight limit; at 1.9× with the live maintenance ratio 0.327 a margin call needs a 29.6% drop in long
+    value. Block-only: a breach stops NEW entries; it never forces a sale. Raising the ceiling, or changing either
+    limb, requires a board vote.
 12. **VIX-adjusted stop widening (continuous curve, since 2026-06-24):** ATR stop multiplier
     widens via `scalar = min(1.0 + max(0, VIX - 20) × 0.1, 2.0)` — continuous, not a discrete
     step function. Anchors preserved: VIX=25→1.5×, VIX=30→2.0× (hard cap). Target scales
