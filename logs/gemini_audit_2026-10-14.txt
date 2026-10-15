@@ -1,0 +1,63 @@
+Nightly Gemini Audit — 2026-10-14
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['alerts.py', 'run_fill_notifications.py', 'config.py', 'execution/fill_notifications.py', 'execution/swing_breakout_manager.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but the persistent `EOD P&L DRIFT` and the `ANOMALY-2` confirm-gate warnings indicate a synchronization issue between the tracker and the broker.
+
+### LOG ANOMALIES
+*   **[ANOMALY-2] [NFLX] confirm_gate=8 scans but no entry**: Occurred multiple times (19:39:15, 19:46:10, 19:53:39). The log indicates `risk.open_positions=2` vs `tracker=0`. This suggests the `portfolio_tracker` is failing to sync with the actual broker state, causing the entry logic to block due to a perceived (but non-existent) position limit or sync error.
+*   **EOD P&L DRIFT**: The drift of `+$20.95` is consistent across the logs. While the header states this is "expected" pre-heal, the persistence of this exact value across multiple cycles (19:33:54, 19:40:42, 19:48:19, 19:55:09) suggests the `portfolio_tracker` is not updating its internal state correctly during the RTH session.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `UBER` short trade (14:09:05) shows a realized P&L of `20.88` in the `TRADE EVENTS` list. The `EOD SNAPSHOT` telemetry confirms this with three short fills totaling `20.94` (3.54 + 11.6 + 5.8). The math is consistent.
+*   **Score Correlation**: The `RBLX` short signal (19:40:15, 19:54:41) consistently shows a 10/12 to 12/12 score, indicating the scoring system is correctly identifying high-conviction setups.
+*   **Stop/Target**: The `NFLX` short (19:47:03) was blocked by the `RULE 1` premarket red lockout, which is correct behavior per the `execution.entry_logic` rules.
+
+### TRADE INTEGRITY
+*   **No issues found**: All recorded trades in the `TRADE EVENTS` list show correct P&L signs and logical entry/exit prices.
+
+### MODIFIED FILE FINDINGS
+*   **alerts.py**: The `_sanitize` function correctly implements the jargon-replacement logic. However, the `_post_slack_payload` function uses `**(payload or {})` which is safe, but the `send_slack_blocks` function has a potential logic gap: if `blocks` is provided but empty, it falls back to a plain-text send. This is acceptable given the "never fail to alert" mandate.
+*   **execution/fill_notifications.py**: The `_tier_for_fill` function performs a bounded search of 500 orders. If a bracket parent order is older than the 2-day `after` window, the tier will be returned as `unavailable`. This is a known limitation but could lead to misattribution of P&L for long-held swing positions.
+*   **execution/swing_breakout_manager.py**: The `size_order` function uses `math.floor` for `q_slot` and `q_risk`. This is correct for whole-share sizing. The logic for the "1-share floor" correctly checks `one_risk_cap` before allowing a 1-share entry, which is a robust safety check.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: OBSOLETE (PDT deleted)
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+*   **P5-M1**: UNTOUCHED
+*   **P5-M2**: UNTOUCHED
+*   **P5-M3**: UNTOUCHED
+*   **P5-L1**: UNTOUCHED
+*   **P5-L2**: UNTOUCHED
+*   **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/portfolio_tracker.py | Tracker-Broker sync failure | The `portfolio_tracker` fails to reconcile `open_positions` with the broker in real-time, leading to `ANOMALY-2` blocks. The tracker should force a full sync when `risk.open_positions` != `tracker.open_positions` for more than 2 cycles.**
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Investigate `portfolio_tracker` sync**: The `ANOMALY-2` blocks are preventing valid entries. Force a full `portfolio_tracker` sync if the position count mismatch persists for > 10 minutes.
+2.  **Verify `qhm_grandfathered.json`**: Ensure the grandfathered shares for LLY/GEV are correctly recorded to prevent the `QHM` cap from blocking new-money entries.
+3.  **Monitor `fill_notifications`**: Ensure the `_fetch_fills_range` pagination is not hitting the 200-page limit on high-volume days.
+4.  **Review `swing_breakout` state**: The `_last_good_qhm_symbols` fallback is working, but ensure the state file is not being corrupted by concurrent writes.
+================================================================================
+BROKER GROUND TRUTH (2026-10-14, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NFLX   COVERED                  owners=day exposed=298m no-broker-stop=0m [08:00-08:00, 12:58-12:58] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  UBER   COVERED                  owners=day/other exposed=98m no-broker-stop=0m [07:10-07:10] rejected_stop_orders=0
