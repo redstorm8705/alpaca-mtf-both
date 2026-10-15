@@ -1009,6 +1009,76 @@ class QuarterlyHoldManager:
 
         self._save_state()
 
+    def run_extended_hours_check(self) -> int:
+        """Pre-market dip-add pass (owner 2026-10-15: "waiting until the open doesn't make sense if we're already in the
+        QHM buy zone"). Called from run_cycle's closed-market branch every cycle; does nothing outside Alpaca's
+        pre-market session as the calendar reports it. AFTER-HOURS IS OFF: a 1-year replay (10 names, real SIP 5-min
+        bars) found after-hours triggers bought a median 0.97% worse than the next open with a -0.34% median
+        20-session return, while pre-market triggers matched the open (median +0.05%) — board Harris + Thorp seats,
+        Gro, GAI chose pre-market only (design record qhm_extended_hours_adds_2026-10-15.md). Per ACTIVE hold it runs the same
+        ownership proof the regular-hours check runs (stop coverage from one order-book snapshot, external-close
+        detection, strict quantity resync) and then the unchanged dip-add rules with extended=True. Dip-adds only:
+        no trims, trailing lock, earnings or max-hold work here. Returns the number of holds evaluated. Never raises."""
+        if not _DIP_ADD_ENABLED or self.dry_run:
+            return 0
+        try:
+            from execution.broker import extended_session_now
+            if extended_session_now(premarket_only=True) is not True:
+                return 0
+            _snapshot = self._get_open_orders()
+            if _snapshot is None:
+                logger.warning("QHM extended-hours pass: order book unreadable — no adds this cycle")
+                return 0
+            _today = self._now_et().strftime("%Y-%m-%d")
+            n = 0
+            for symbol, pos in list(self._positions.items()):
+                if pos.state != HoldState.ACTIVE:
+                    continue
+                if pos.stop_recovery_requires_qty_proof or pos.ambiguous_add_client_order_id:
+                    continue
+                try:
+                    _skip, _blocked = self._reconcile_stop_coverage(pos, _snapshot)
+                    if _blocked or pos.state != HoldState.ACTIVE:
+                        continue
+                    if self._detect_external_close(pos, ReconcileResult()):
+                        continue
+                    if self._strict_resync_qty(pos) is None:
+                        continue
+                    n += 1
+                    self._maybe_dip_add(pos, _today, extended=True)
+                except Exception as e:  # RC-3: one symbol never stops the rest
+                    logger.warning("QHM extended-hours pass error for %s: %s", symbol, e, exc_info=True)
+            self._save_state()
+            return n
+        except Exception as e:  # RC-3
+            logger.warning("QHM extended-hours pass failed: %s", e)
+            return 0
+
+    def _extended_quote_ok(self, symbol: str, live_price: float) -> bool:
+        """Outside regular hours the book is thin. Add only when the quoted spread is no wider than the stock's own
+        median daily move (execution/dip_zones.typical_move_for), i.e. crossing it costs less than an ordinary day's
+        move, and the fresh print sits inside the quote. Unreadable quote or yardstick -> False (no add)."""
+        try:
+            from data.alpaca_data import get_latest_quote
+            from execution.dip_zones import typical_move_for
+            move = typical_move_for(symbol)
+            q = get_latest_quote(symbol)
+            if move is None or not q:
+                logger.info("QHM extended dip-add: %s quote or typical move unavailable — no add", symbol)
+                return False
+            bid, ask = float(q["bid"]), float(q["ask"])
+            if not (0 < bid <= ask):
+                return False
+            spread = (ask - bid) / ((ask + bid) / 2)
+            if spread > move or not (bid <= live_price <= ask):
+                logger.info("QHM extended dip-add: %s spread %.2f%% vs typical move %.2f%% (bid %.2f ask %.2f "
+                            "print %.2f) — no add", symbol, spread * 100, move * 100, bid, ask, live_price)
+                return False
+            return True
+        except Exception as e:  # RC-3
+            logger.warning("QHM extended dip-add: %s quote check failed (%s) — no add", symbol, e)
+            return False
+
     def maybe_enter_positions(self) -> list[str]:
         """Submit DAY limit tranche entries — called after 10:05 AM ET gate.
 
@@ -2478,7 +2548,7 @@ class QuarterlyHoldManager:
         _d = datetime.strptime(today_str, "%Y-%m-%d").date()
         return "%d-Q%d" % (_d.year, (_d.month - 1) // 3 + 1)
 
-    def _maybe_dip_add(self, pos: HoldPosition, today_str: str) -> None:
+    def _maybe_dip_add(self, pos: HoldPosition, today_str: str, extended: bool = False) -> None:
         """DIP-ADD: buy more of a conviction hold on weakness below cost average.
         Two rungs at each stock's own data-derived dip zones (execution/dip_zones.py: A small-to-target, B
         aggressive-to-ceiling), a HARD pre-fill
@@ -2486,6 +2556,9 @@ class QuarterlyHoldManager:
         floor, and anti-oscillation (max N/quarter, >= K days apart, none within ~7 days
         of the earnings exit). DORMANT unless _DIP_ADD_ENABLED. Never raises into the
         weekly-check caller. Spec: logs/qhm_v2_design_2026-07-11.md PART 1 FINALIZED.
+        extended=True (pre-market / after-hours pass, run_extended_hours_check): the price is a fresh real-time IEX
+        print (data.live_price), the add needs a liquid quote (_extended_quote_ok) and goes out as an extended-hours
+        limit. Every other rule and cap below is identical.
         """
         if not _DIP_ADD_ENABLED or self.dry_run:
             return
@@ -2493,7 +2566,13 @@ class QuarterlyHoldManager:
             if (pos.state != HoldState.ACTIVE or pos.qty_filled <= 0
                     or pos.avg_entry_price <= 0 or pos.tranche1_price <= 0):
                 return
-            live_price = self._get_live_price(pos.symbol)
+            if extended:
+                # The position's mark can be the prior close outside regular hours: use a fresh print or no add.
+                from data.live_price import live_price as _rt_price
+                _rt = _rt_price(pos.symbol)
+                live_price = _rt.price if _rt is not None else None
+            else:
+                live_price = self._get_live_price(pos.symbol)
             if not live_price or live_price <= 0:
                 return
 
@@ -2633,7 +2712,9 @@ class QuarterlyHoldManager:
                     pos.symbol, add_qty, _cap_room)
                 add_qty = _cap_room
 
-            _filled = self._stop_safe_add(pos, add_qty, live_price, "dip-add")
+            if extended and not self._extended_quote_ok(pos.symbol, live_price):
+                return
+            _filled = self._stop_safe_add(pos, add_qty, live_price, "dip-add", extended=extended)
             if _filled >= 1:
                 pos.dip_adds_quarter += 1
                 pos.last_dip_add_date = today_str
@@ -2647,8 +2728,12 @@ class QuarterlyHoldManager:
             logger.warning("QHM dip-add error for %s: %s", pos.symbol, e)
 
     def _stop_safe_add(self, pos: HoldPosition, add_qty: int, live_price: float,
-                       label: str = "dip-add", raise_stop_to: Optional[float] = None) -> int:
-        """Allocator-gated, idempotent stop-safe QHM add with exact recovery."""
+                       label: str = "dip-add", raise_stop_to: Optional[float] = None,
+                       extended: bool = False) -> int:
+        """Allocator-gated, idempotent stop-safe QHM add with exact recovery.
+        extended=True: runs only inside Alpaca's pre-market session (broker.extended_session_now) and
+        submits the add with extended_hours=True. A resting stop does not trigger outside regular hours, so
+        cancelling it around the add removes no live protection; it is re-placed for the actual held quantity."""
         # ── OPTION C: stop-safe add (board + Gro + GAI unanimous 2026-07-13) ──
         # A QHM position holds a resting GTC sell-stop; Alpaca blocks a same-symbol
         # BUY (wash-trade). So, RTH-only: cancel the stop -> marketable-limit add ->
@@ -2664,7 +2749,12 @@ class QuarterlyHoldManager:
         )
         import time as _time
         try:
-            if not _is_market_open():
+            if extended:
+                from execution.broker import extended_session_now as _ext_now
+                if _ext_now(premarket_only=True) is not True:
+                    logger.info("QHM %s: %s not inside the pre-market session — defer", label, pos.symbol)
+                    return 0
+            elif not _is_market_open():
                 logger.info("QHM dip-add: %s market closed — defer", pos.symbol)
                 return 0
         except Exception as _clk_e:
@@ -2835,7 +2925,7 @@ class QuarterlyHoldManager:
             _add = self._dispatcher.submit_limit(
                 self.broker, pos.symbol, add_qty,
                 "buy" if pos.direction == "long" else "sell_short", limit_price,
-                client_order_id=_add_coid)
+                extended_hours=extended, client_order_id=_add_coid)
             if _add is None:
                 _add = live_release(_capital.lease, "submit_none")
             else:

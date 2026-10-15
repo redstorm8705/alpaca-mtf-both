@@ -21,8 +21,9 @@ class FakeDispatcher:
         self.stops.append((sym, qty, side, price))
         return SimpleNamespace(id="stop-new") if self.stop_ok else None
 
-    def submit_limit(self, broker, sym, qty, side, price, client_order_id=None):
+    def submit_limit(self, broker, sym, qty, side, price, extended_hours=False, client_order_id=None):
         self.adds.append((sym, qty, side, price))
+        self.extended = getattr(self, "extended", []) + [extended_hours]
         return SimpleNamespace(id="add-1") if self.add_ok else None
 
 
@@ -73,7 +74,8 @@ def _pos(qty=2, stop_id="stop-old"):
                            qty_filled=qty, entry_day="2026-09-29", stop_price=200.0, stop_order_id=stop_id)
 
 
-def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label="tranche-2"):
+def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label="tranche-2",
+         extended=False, session=None):
     order = order or SimpleNamespace(status="filled", filled_qty=add_qty)
     cancels = []
 
@@ -88,6 +90,7 @@ def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label=
         return order
     fake_broker_mod = SimpleNamespace(
         is_market_open=lambda: market_open,
+        extended_session_now=lambda premarket_only=False: session if premarket_only else None,
         cancel_order=_cancel,
         get_order=_get_order,
         get_order_by_client_order_id=lambda _coid: None,
@@ -102,11 +105,33 @@ def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label=
     with mock.patch.dict(sys.modules, {"execution.broker": fake_broker_mod}), \
             mock.patch.dict(sys.modules, {"execution.tier_capital_allocator": fake_allocator_mod}), \
             mock.patch("time.sleep"), mock.patch("time.monotonic", side_effect=lambda: float(next(clock))):
-        got = m._stop_safe_add(pos, add_qty, 230.0, label)
+        got = m._stop_safe_add(pos, add_qty, 230.0, label, extended=extended)
     return got, cancels
 
 
 class StopSafeAdd(unittest.TestCase):
+    def test_extended_inside_session_submits_extended_hours_limit_and_restops(self):
+        pos, d = _pos(qty=2), FakeDispatcher()
+        got, cancels = _run(_mgr(pos, FakeBroker(2), d, resync_qty=3), pos, add_qty=1, market_open=False,
+                            extended=True, session=True, label="dip-add")
+        self.assertEqual((got, cancels), (1, ["stop-old"]))
+        self.assertEqual(d.extended, [True])
+        self.assertEqual(d.stops, [("NVDA", 3, "sell", 200.0)])
+        self.assertEqual(pos.state, qm.HoldState.ACTIVE)
+
+    def test_extended_outside_session_defers_untouched_even_if_market_open(self):
+        for session in (False, None):
+            pos, d = _pos(), FakeDispatcher()
+            got, cancels = _run(_mgr(pos, FakeBroker(2), d), pos, market_open=True, extended=True,
+                                session=session, label="dip-add")
+            self.assertEqual((got, cancels, d.adds), (0, [], []))
+            self.assertEqual(pos.stop_order_id, "stop-old")
+
+    def test_regular_hours_add_is_not_extended(self):
+        pos, d = _pos(qty=2), FakeDispatcher()
+        got, _ = _run(_mgr(pos, FakeBroker(2), d, resync_qty=3), pos, add_qty=1)
+        self.assertEqual((got, d.extended), (1, [False]))
+
     def test_market_closed_defers_untouched(self):
         pos, d = _pos(), FakeDispatcher()
         got, cancels = _run(_mgr(pos, FakeBroker(2), d), pos, market_open=False)

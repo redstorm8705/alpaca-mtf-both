@@ -506,6 +506,13 @@ def run_cycle(
                     logger.info("Market closed: rearmed %d QHM GTC stop(s) in PENDING_STOP_REPLACE.", _n_rearm)
         except Exception as _e_rearm:
             logger.warning("Closed-market QHM stop rearm failed: %s", _e_rearm)
+        # QHM pre-market dip-adds (owner 2026-10-15; after-hours off per replay). A buy: the kill switch / control
+        # fault blocks it. The manager itself does nothing outside Alpaca's pre-market session.
+        if _main.qhm is not None and not _kill_block_entries:
+            try:
+                _main.qhm.run_extended_hours_check()  # type: ignore[attr-defined]
+            except Exception as _e_qxh:
+                logger.warning("QHM extended-hours pass failed: %s", _e_qxh)
         try:
             from scan_to_html import write_scan_html
             write_scan_html(

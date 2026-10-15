@@ -2794,6 +2794,38 @@ def get_clock() -> dict:
     }
 
 
+def extended_session_now(now=None, premarket_only: bool = False) -> "bool | None":
+    """True inside TODAY's Alpaca pre-market or after-hours session (premarket_only=True: pre-market only), False outside
+    them (regular hours, the overnight
+    session, a non-trading day), None when the clock or calendar is unreadable (callers treat None as "not now").
+    The edges come from the Alpaca calendar row for today (session_open .. open, close .. session_close, ET), so an
+    early-close day's after-hours starts at its real close. The SDK's Calendar model drops the session fields, so the
+    raw /calendar response is read through the same TradingClient. Never raises. (Claude 2026-10-15)"""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        client = _get_trading_client()
+        if client.get_clock().is_open:  # type: ignore[union-attr]
+            return False
+        # `now` (tests): an ET-aware datetime; production reads the wall clock.
+        now = now if now is not None else datetime.now(ZoneInfo("America/New_York"))
+        day = now.strftime("%Y-%m-%d")
+        rows = client.get("/calendar", {"start": day, "end": day})
+        row = next((r for r in (rows or []) if isinstance(r, dict) and r.get("date") == day), None)
+        if row is None:
+            return False                                    # not a trading day
+        # "0400" / "09:30" -> "0400" / "0930": zero-padded HHMM strings order the same way the times do.
+        edges = [str(row.get(k) or "").replace(":", "") for k in ("session_open", "open", "close", "session_close")]
+        if not all(e.isdigit() and len(e) == len(now.strftime("%H%M")) for e in edges):
+            logger.warning("extended_session_now: calendar row unreadable %s", row)
+            return None
+        hm = now.strftime("%H%M")
+        return (edges[0] <= hm < edges[1]) or (not premarket_only and edges[2] <= hm < edges[3])
+    except Exception as e:  # RC-3
+        logger.warning("extended_session_now: clock/calendar read failed: %s", e)
+        return None
+
+
 def get_asset_tradable(symbol: str) -> "bool | None":
     """
     Return the Alpaca-reported tradable status for a symbol, or None if the
