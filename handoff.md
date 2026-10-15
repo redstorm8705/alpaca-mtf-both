@@ -8,6 +8,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-15, Claude signed) — QHM dip-add zones are data-derived (#658)
+
+PR #658 (`gh pr view 658` -> merged `127b2f1`) replaced the fixed -2% / -5% QHM dip-add rungs with per-stock zones
+from `execution/dip_zones.py`. OCI printed `DEPLOY_OK` at `127b2f1`, the cron line `20 12,21 * * 1-5 ... run_dip_zones.py`
+is installed, and the first run logged `dip zones refreshed for 36 names` into `data/state/dip_zones.json`.
+Status: **deployed, unexercised** (no dip-add has fired under the new zones yet). Design record:
+`logs/design_records/qhm_dynamic_dip_zones_2026-10-15.md`.
+
+**Pick up here:** (1) the extended-hours buy/sell build for QHM/Swing (owner confirmed 2026-10-15 that extended-hours
+limit orders work on the account, so no paper test is needed; BGGN-aligned scope: limit orders only, data-derived
+spread check, bot-watched stop, overnight session off); (2) a freshness monitor for `dip_zones.json` and
+`overnight_k.json`; (3) manual-sell auto-accept package.
+
 ## ⏩ LATEST (2026-10-15, OpenAI Codex signed) — F6 protected-buy ownership prerequisite deployed (#650/#651/#652)
 
 The F6 pending-buy reservation architecture is merged and deployed on OCI as three dependency-ordered PRs: #650
