@@ -11379,6 +11379,12 @@ OCI deployment at `137.131.51.250`: v1 source SHA `78aaef8e19765d432aa74570e5cf2
 - Cold second-agent: 20 rounds; rounds 1-19 FAIL each found a realistic laundering path (now a test case in `test_no_static_scan.py`); round 20 PASS. Final Gro+GAI preship APPROVE on all 5 files (GAI quota-limited, NVIDIA substitute on 3).
 - Design record for the dynamic replacements: `logs/design_records/dynamic_capacity_2026-10-14.md` (dynamic overnight cap K next).
 - Queued: UBER ownership-ledger tier mis-split (day +54 / swing -72 vs real Day short -18).
+- 2026-10-14 PR #654 CI preship: sample rejects on false premises (unguarded import in day_promotion; `_update` race in overnight_capacity; float() outside try; overnight_k() returning None). Each counter-prompted to GAI with verbatim source + verified probe output -> APPROVE both times; CI re-run.
+
+## 2026-10-14 — QHM owner trim (Claude)
+- New operator-armed partial sale of a quarterly hold (`scripts/qhm_owner_trim.py` -> `quarterly_hold_manager._maybe_owner_trim/_execute_owner_trim`), reusing the earnings-trim tier-1 sequence. Purpose: trim LLY 2 -> 1 (board Thorp + Shaw, Gro, GAI 4/4), impossible by hand because the stray-sell guard cancels manual sells and a stop "replace" stalls stop repair.
+- Cold-2nd: R1 FAIL (co-held symbol: the trim would cancel another tier's stop), R2/R3 PASS. Adversarial: R1 FAIL (stale lastday_price trigger, request outliving its hold, no lock, error after stop cancel), R2/R3 PASS (probes P1-P8). Gro+GAI preship APPROVE.
+- Known: stop-repair does not treat a "replaced" stop as terminal (manual Alpaca replace leaves a hold with no stop) — queued separately.
 
 ## 2026-10-14 — Dynamic overnight cap K (Claude)
 - Invariant #11 total limb: fixed K 1.9 -> `execution/overnight_capacity.overnight_k()` = min(1.9 ceiling, K_dyn), tighten-only; refreshed by `run_overnight_k.py` (cron 12:15/21:15 UTC weekdays, `scripts/install_overnight_k_cron.sh`).
