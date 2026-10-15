@@ -174,14 +174,50 @@ class SessionFrame(unittest.TestCase):
         self._orig = sys.modules.get("data.fetcher")
         self._fake = types.ModuleType("data.fetcher")
         self._ret = pd.DataFrame()
-        self._fake.fetch_bars_window = lambda *a, **k: self._ret  # noqa: E731
+        # the market reference (SPY) traded every slot unless a test says otherwise -> a name's gap stays a HALT
+        self._ref = self._utc(40)
+        self._fake.fetch_bars_window = lambda sym, *a, **k: (  # noqa: E731
+            self._ref if sym == B._MARKET_REF else self._ret)
         sys.modules["data.fetcher"] = self._fake
+        B._ref_cache.clear()
 
     def tearDown(self):
+        B._ref_cache.clear()
         if self._orig is not None:
             sys.modules["data.fetcher"] = self._orig
         else:
             sys.modules.pop("data.fetcher", None)
+
+    # MARKET-WIDE FEED GAP (2026-10-15: no IEX/SIP bars for ANY name 12:57-14:10 ET; every name read as a HALT all day)
+    def test_market_wide_old_gap_is_kept(self):
+        self._ret = self._utc_holes(20, [8, 9, 10])
+        self._ref = self._utc_holes(20, [8, 9, 10])
+        df = B.build_session_frame("NVDA", now_et=self._LATE_NOW)
+        self.assertIsNotNone(df)
+        self.assertEqual(len(df), 17)
+
+    def test_market_wide_gap_among_newest_bars_waits(self):
+        self._ret = self._utc_holes(20, [14, 15])
+        self._ref = self._utc_holes(20, [14, 15])
+        self.assertIsNone(B.build_session_frame("NVDA", now_et=self._LATE_NOW))
+
+    def test_market_wide_gap_inside_opening_range_skips(self):
+        self._ret = self._utc_holes(20, [1, 2])
+        self._ref = self._utc_holes(20, [1, 2])
+        self.assertIsNone(B.build_session_frame("NVDA", now_et=self._LATE_NOW))
+
+    def test_name_only_gap_while_reference_traded_is_a_halt(self):
+        self._ret = self._utc_holes(20, [8, 9, 10])
+        self._ref = self._utc_holes(20, [8, 9])          # SPY printed slot 10, NVDA did not
+        self.assertIsNone(B.build_session_frame("NVDA", now_et=self._LATE_NOW))
+
+    def test_reference_itself_or_unavailable_reference_skips(self):
+        self._ret = self._utc_holes(20, [8, 9, 10])
+        self._ref = self._utc_holes(20, [8, 9, 10])
+        self.assertIsNone(B.build_session_frame(B._MARKET_REF, now_et=self._LATE_NOW))
+        B._ref_cache.clear()
+        self._ref = pd.DataFrame()
+        self.assertIsNone(B.build_session_frame("NVDA", now_et=self._LATE_NOW))
 
     def _utc(self, n_bars, start="2026-09-21 13:30", drop=None):
         idx = pd.date_range(start, periods=n_bars, freq="5min", tz="UTC")
