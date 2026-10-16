@@ -11,9 +11,9 @@
       "pattern": "change=state-freshness-alarm checked 2 file\\(s\\): \\d+ stale or missing"
     }
   ],
-  "expected_rate": "once per weekday at 12:50 UTC after the cron is installed",
+  "expected_rate": "three times per weekday (12:50, 17:50, 21:50 UTC) after the cron is installed",
   "window_sessions": 2,
-  "window_reason": "One scheduled run per weekday; two sessions cover the first run and one retry.",
+  "window_reason": "Three scheduled runs per weekday; two sessions cover the first runs and one retry.",
   "reversal": "a page while both files carry today's or the previous session's date, or no page while a file is two or more completed sessions old",
   "verification": "tests/test_state_freshness_check.py"
 }
