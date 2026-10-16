@@ -360,7 +360,7 @@ def _gai(prompt, key, paid_key=""):
     # fails does the caller escalate (free retry -> paid-if-allowed -> NVIDIA substitute).
     # thinkingBudget:0 keeps a thinking model from spending the whole maxOutputTokens on hidden
     # reasoning (INDETERMINATE otherwise). maxOutputTokens 2048 stays under the free per-minute cap.
-    _GAI_LADDER = ("gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest")  # 3.1-flash-lite FIRST: proven clean-VERDICT for the gate. Canonical: gai_client.GAI_MODEL_LADDER
+    _GAI_LADDER = ("gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest")  # 3.1-flash-lite FIRST: proven clean-VERDICT for the gate. Canonical: gai_client.GAI_MODEL_LADDER
 
     def _one(k):
         _last_err = None

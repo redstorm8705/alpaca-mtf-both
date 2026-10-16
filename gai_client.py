@@ -26,11 +26,19 @@ import urllib.request
 # Verified live 2026-08-31 (same free key): 3.7-flash, 3.1-flash-lite, 3-flash-preview,
 # flash-latest all returned 200; the previously-pinned gemini-3.5-flash returned 404 (retired).
 # UPDATE THIS TUPLE (only) when the roster churns — every caller inherits the change.
+# 2026-10-16 (same free key, every listed model probed): 3.1-flash-lite + 3.1-flash-lite-preview -> 503 overload;
+# 3.7-flash, 3-flash-preview, flash-latest -> 429 quota; 2.5-* -> 404 retired; 200 from 3.6-flash, 3.5-flash,
+# 3.5-flash-lite, flash-lite-latest. The whole old ladder was dead at once, so every GAI caller (preship, CI, the
+# meta-audit) failed while those four answered. They are added after the proven-terse primary.
 GAI_MODEL_LADDER: tuple[str, ...] = (
     "gemini-3.1-flash-lite",   # FIRST: proven to emit a clean, terse, parseable VERDICT for the
                                # preship/CI gate (the canary self-healed to it 2026-08-31 when
-                               # 3.7-flash returned 200 but no single clean VERDICT line). Live 200.
-    "gemini-3.7-flash",        # stronger/newer fallback
+                               # 3.7-flash returned 200 but no single clean VERDICT line).
+    "gemini-3.6-flash",        # live 200 on 2026-10-16
+    "gemini-3.5-flash",        # live 200 on 2026-10-16
+    "gemini-3.5-flash-lite",   # live 200 on 2026-10-16
+    "gemini-flash-lite-latest",  # live 200 on 2026-10-16 (alias)
+    "gemini-3.7-flash",        # 429 quota on 2026-10-16; kept (separate per-model quota resets)
     "gemini-3-flash-preview",
     "gemini-flash-latest",
 )

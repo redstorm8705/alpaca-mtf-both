@@ -33,7 +33,7 @@ import urllib.request
 # 404/429/503 to the next — different models carry SEPARATE free-tier quotas, so a 429 on one is
 # often 200 on the next. First model returning candidates wins; a whole-ladder failure is an
 # INDETERMINATE sample (fail-closed at the majority vote), which then engages the NVIDIA substitute.
-MODEL_LADDER = ("gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest")  # 3.1-flash-lite FIRST: proven clean-VERDICT for the gate. Canonical: gai_client.GAI_MODEL_LADDER
+MODEL_LADDER = ("gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-flash-lite-latest", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest")  # 3.1-flash-lite FIRST: proven clean-VERDICT for the gate. Canonical: gai_client.GAI_MODEL_LADDER
 MODEL = MODEL_LADDER[0]  # display/back-compat only; the ladder is authoritative in _one_audit
 
 # OPTION-C SUBSTITUTE (2026-08-24) — a free NVIDIA-hosted reviewer (NVIDIA_MODEL below). It uses the
