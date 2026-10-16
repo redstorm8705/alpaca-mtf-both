@@ -11415,3 +11415,5 @@ OCI deployment at `137.131.51.250`: v1 source SHA `78aaef8e19765d432aa74570e5cf2
   Status is **deployed, unexercised** until a separately gated F6 enablement.
 
 - 2026-10-15 Claude: #658 QHM data-derived dip zones (execution/dip_zones.py, run_dip_zones.py cron, QHM _maybe_dip_add trigger). Board 3-1 (Thorp A; Taleb/Gro/GAI pooled floor C) + cold-2nd PASS + adversarial PASS + preship Gro/GAI APPROVE + CI pass. Deployed 127b2f1, first refresh 36 names. Follow-ups: freshness monitor; min-pool-size guard on partial outage (adversarial nit 2).
+
+- 2026-10-16 Claude: #660 Day-tier Track B market-wide feed-gap tolerance (cold-2nd FAIL->PASS on an opening-range gap, adversarial FAIL->PASS same, preship APPROVE). #662 QHM add ledger credit (cold-2nd PASS, adversarial PASS, CI preship 2/3 REJECT on two false premises -> GAI counter-prompt APPROVE -> rerun PASS). NVDA one-time heal (owner-approved): QHM qty 1->2, ledger qhm 2, stop resized to 2 @ $192.41. Issue #661 root-caused: LLY lines = the 10/15 manual-sale aftermath (healed), NVDA unmanaged = the #662 bug.
