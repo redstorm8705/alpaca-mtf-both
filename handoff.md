@@ -20,12 +20,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   until the open). Backups: `data/state/*.bak_nvda_heal_20261016`.
 - Naming (owner 2026-10-16): never "intraday tier" — the ledger's `intraday` tier is the Swing tier.
 
-**Pick up here:** (1) after-hours + pre-market stop-watch for QHM/Swing (owner-approved; sell in extended hours when
-a held name trades below its stop; overnight session off) + earnings-pop add at the open; the WIP commit `4f0deb2`
-(pre-market dip-add, board 3-1 against) is to be reworked, not merged; (2) replay SPY/QQQ/IWM + other liquid names
-for the Day tier; (3) replay the Day tier "no clear daily trend" filter across all signals since launch;
-(4) freshness monitor for `dip_zones.json` / `overnight_k.json`; (5) Tranche-1 QHM entries also lack the ledger credit
-(adversarial review of #662).
+**Pick up here (wrap-up 2026-10-16):** (1) PR #665 (`gh pr view 665`, audit reports: Day stops shown, absence
+claims need a record, page_token, plain-English Slack, post-live evening/weekend proof) has every gate but the CI GAI
+vote — Gemini 503/429 at wrap-up; re-run `gh run rerun 38858989572 --failed`, merge, OCI `git pull --ff-only` (cron
+scripts, no restart), then close #653/#635 citing the PR. (2) Build the extended-hours stop-watch per
+`logs/design_records/extended_hours_stop_watch_2026-10-16.md`; foundations on branch `claude/qhm-ext-stop-watch`
+(WIP, not for merge); the pre-market dip-add WIP `4f0deb2` is shelved (board 3-1 against). (3) Replays: SPY/QQQ/IWM
+for the Day tier; the Day-tier "no clear daily trend" filter. (4) Tranche-1 QHM entries lack the immediate ledger
+credit. (5) Freshness monitor for `dip_zones.json` / `overnight_k.json`. Session summary:
+`logs/session_summary_2026-10-15_2321.md`.
 
 ## ⏩ LATEST (2026-10-15, Claude signed) — QHM dip-add zones are data-derived (#658)
 
