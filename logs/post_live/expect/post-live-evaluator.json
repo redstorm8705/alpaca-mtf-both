@@ -7,7 +7,7 @@
   "proof": [
     {
       "log": "logs/post_live_eval_cron.log",
-      "pattern": "post-live eval \\[post-live-evaluator\\]: Post-live check"
+      "pattern": "post-live eval \\[post-live-evaluator\\]: New-code check"
     }
   ],
   "expected_rate": "once per trading-day close (OCI cron, weekdays 22:15 UTC)",

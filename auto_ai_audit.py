@@ -382,8 +382,9 @@ def _load_day_lifecycle_evidence() -> dict[str, dict]:
         if not isinstance(decision, dict):
             conflicted.add(trade_id)
             continue
+        _decision_as_of = decision.get("as_of")
         if (decision.get("symbol") != symbol
-                or decision.get("as_of") > fill_as_of):
+                or not isinstance(_decision_as_of, datetime) or _decision_as_of > fill_as_of):
             conflicted.add(trade_id)
             continue
         tags = row.get("mechanism_tags")
@@ -437,6 +438,37 @@ def _load_day_lifecycle_evidence() -> dict[str, dict]:
     for trade_id in conflicted:
         evidence.pop(trade_id, None)
     return evidence
+
+
+def _load_day_stop_evidence() -> dict[str, dict]:
+    """trade_id -> {"stop_price", "stop_order_id", "ts"} for every Day-tier protective stop the bot recorded
+    (day_tier_events.jsonl 'stop_placed' rows). The broker-side OCO legs carry no Day-tier tag, so without this the
+    auditors saw entries with no stop on the line and reported 'no protective stops' (2026-10-15 Groq FAIL — every
+    Day entry that week had a stop at Alpaca). Unreadable rows are skipped; never raises."""
+    path = _LOGS_DIR / "day_tier_events.jsonl"
+    out: dict[str, dict] = {}
+    if not path.exists():
+        return out
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                try:
+                    row = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if not isinstance(row, dict) or row.get("event") != "stop_placed":
+                    continue
+                tid = row.get("trade_id")
+                try:
+                    price = float(row.get("stop_price") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(tid, str) and tid and price > 0:
+                    out[tid] = {"stop_price": price, "stop_order_id": str(row.get("stop_order_id") or ""),
+                                "ts": str(row.get("ts") or "")}
+    except OSError:
+        return out
+    return out
 
 
 def _event_tier(event: dict) -> str | None:
@@ -564,7 +596,7 @@ def _fetch_week_fills(days_back: int = _FILLS_DAYS_BACK) -> list[dict]:
             "page_size": 100,
         }
         if after_id:
-            params["after_id"] = after_id
+            params["page_token"] = after_id   # Alpaca activities paginate by page_token; after_id is ignored
         try:
             resp = requests.get(
                 "https://paper-api.alpaca.markets/v2/account/activities/FILL",
@@ -1045,6 +1077,8 @@ def _build_meta_audit_data_context() -> tuple[dict, dict]:
     sources["bot_log"] = "✅ loaded" if bot_tail else "⚠️  NOT FOUND"
     stats = _compute_trade_stats(events, fills)
     day_lifecycle_evidence = _load_day_lifecycle_evidence()
+    day_stops = _load_day_stop_evidence()
+    sources["day_stops"] = f"{len(day_stops)} Day-tier protective stops recorded"
     rejected_path = _LOGS_DIR / "rejected_signals.jsonl"
     if rejected_path.exists():
         rejected = _load_week_rejected_signals()
@@ -1066,6 +1100,7 @@ def _build_meta_audit_data_context() -> tuple[dict, dict]:
         "bot_log_tail": bot_tail,
         "stats": stats,
         "day_lifecycle_evidence": day_lifecycle_evidence,
+        "day_stops": day_stops,
         "rejected_signals": rejected,
     }, sources
 
@@ -1192,6 +1227,7 @@ def _format_meta_audit_body(
     # ── Trade events with inline chart proxies ────────────────────────────
     events = ctx["events"]
     day_evidence = ctx.get("day_lifecycle_evidence") or {}
+    day_stops = ctx.get("day_stops") or {}
     chart_proxies = ctx["chart_proxies"]
     # Filter high-volume telemetry (delta_shadow/mri_refresh/halt_eval/breadth_refresh)
     # so the body stays inside Groq's 131k-token window; keep trade-lifecycle events.
@@ -1235,6 +1271,16 @@ def _format_meta_audit_body(
                 conviction = proof.get("conviction")
                 line += (f" | conviction={conviction:.2f}"
                          if isinstance(conviction, (int, float)) else " | conviction=UNKNOWN")
+                if evt == "entry":
+                    _st = day_stops.get(str(ev.get("trade_id") or ""))
+                    line += (f" | protective_stop=${_st['stop_price']:.2f} (broker stop order "
+                             f"{_st['stop_order_id'][:8]} placed {_st['ts'][:19]})" if _st
+                             else " | protective_stop=NOT_RECORDED_IN_DAY_LOG")
+            elif resolved_tier == "swing" and ev.get("setup"):
+                # Swing breakout entries are not 12-point scored (score=0 is a placeholder, not a failed gate).
+                line += f" | setup={ev['setup']} (not 12-point scored)"
+                if ev.get("stop") is not None:
+                    line += f" | protective_stop=${float(ev['stop']):.2f}"
             elif resolved_tier == "swing" and ev.get("score") is not None:
                 line += f" | score={ev['score']}"
             if ev.get("mri_level"):
@@ -1471,6 +1517,13 @@ _EVIDENCE_SECTION_PREFIXES = ("=== TRADE EVENTS", "=== ALPACA FILLS", "=== FILLS
                               "=== US MACRO", "=== MACRO CALENDAR", "=== BOT LOG TAIL")
 
 
+_ABSENCE_CLAIM_RE = re.compile(
+    r"\b(never|missing|without|absent|lacks?|lacking|not (?:placed|recorded|set|submitted|present|demonstrably)|"
+    r"no (?:protective|stop|stops|order|orders|record))\b", re.IGNORECASE)
+_NEGATIVE_RECORD_RE = re.compile(
+    r"\b(no|not|never|missing|without|unprotected|naked|failed|NOT_RECORDED\w*)\b", re.IGNORECASE)
+
+
 def _norm_ws(t: str) -> str:
     return " ".join(str(t or "").split())
 
@@ -1597,6 +1650,13 @@ def _check_claims(claims: list, data: str) -> dict:
         proven = (str(r.get("status", "")).upper() == "SUPPORTED" and len(quote) >= _FACTCHECK_MIN_QUOTE
                   and ((src == "DATA" and quote in data_n)
                        or (src == own and own in files_n and quote in files_n[own])))
+        # A claim that something is ABSENT (never placed / missing / without a stop) cannot be proven by quoting a
+        # line that merely omits it (2026-10-15: "no protective stops" was "proven" by an entry line with no stop
+        # field). It needs a line from the trading records that itself records the absence; a code quote (where
+        # `if not x:` or `None` appear in ordinary code) never proves one.
+        if (proven and _ABSENCE_CLAIM_RE.search(c["text"])
+                and not (src == "DATA" and _NEGATIVE_RECORD_RE.search(quote))):
+            proven = False
         if not proven:
             out["withheld"].append(c["text"][:160])
             continue
@@ -1699,29 +1759,39 @@ def _meta_report_blocks(result: dict, label: str, report_url: str | None = None)
         directives = _extract_directives(text)
         findings = _parse_json_findings(text)
 
-    lines: list[str] = [f"*{label}* — {verdict or 'verdict not parsed (see full report)'}"]
+    # PLAIN ENGLISH (owner 2026-10-16): say what the reviewer concluded and how much of it the data backs up.
+    _grade = re.match(r"(PASS|WARN|FAIL)\b\W*(.*)", verdict or "", re.DOTALL)
+    _word = {"PASS": "things look right", "WARN": "some concerns", "FAIL": "something is wrong"}
+    if _grade:
+        head = f"*{label} says {_word[_grade.group(1)]} ({_grade.group(1)}).* {_grade.group(2).strip()}"
+    elif verdict.startswith("verdict withheld"):
+        head = (f"*{label}:* its overall grade is hidden because today's trading records don't back it up.")
+    else:
+        head = f"*{label}:* no overall grade came back (see the raw report)."
+    lines: list[str] = [head]
     if isinstance(fc, dict) and not directives and re.search(r"DIRECTIVES BLOCKED", text, re.IGNORECASE):
-        directives = ["Directives blocked — insufficient trade sample this window."]
+        directives = ["No rule changes suggested — too few trades this week to judge."]
     if isinstance(fc, dict):
-        lines.append(f"_Fact-check: {fc.get('kept', 0)} of {fc.get('checked', 0)} claims proven; "
-                     f"{len(fc.get('withheld') or [])} withheld as unproven._"
+        _kept, _checked = fc.get("kept", 0), fc.get("checked", 0)
+        _held = len(fc.get("withheld") or [])
+        lines.append(f"_Checked against today's trading records and the code: {_kept} of {_checked} points hold up"
+                     + (f"; {_held} could not be confirmed and are left out." if _held else ".") + "_"
                      + (f" {fc.get('note')}" if fc.get("note") else ""))
     if directives:
-        lines.append("*Directives:*")
+        lines.append("*Suggested changes (backed by the evidence):*")
         lines.extend(f"  • {d}" for d in directives)
     if findings:
-        lines.append(f"*Code findings ({len(findings)}):*")
+        lines.append(f"*Possible code problems (backed by the code or today's records) — {len(findings)}:*")
         for f in findings[:2]:
             fp = str(f.get("file", "?"))
             fd = " ".join(str(f.get("finding", "")).split())[:140]
-            lines.append(f"  • `{fp}` — {fd}")
+            lines.append(f"  • {fd} (file `{fp}`)")
         if len(findings) > 2:
-            lines.append(f"  • …and {len(findings) - 2} more (see full report)")
+            lines.append(f"  • …and {len(findings) - 2} more (see the raw report)")
     if not directives and not findings:
-        lines.append("_No directives or code findings this run._")
+        lines.append("_Nothing confirmed that needs action._")
     if report_url:
-        lines.append(f"Full report ({'raw model output — NOT fact-checked' if isinstance(fc, dict) else 'raw'}): "
-                     f"{report_url}")
+        lines.append(f"Raw AI report ({'unchecked' if isinstance(fc, dict) else 'raw'}): {report_url}")
 
     text_block = "\n".join(lines)
     # Slack's section hard limit is 3000 chars. The digest is far smaller, but
@@ -1755,18 +1825,19 @@ def _post_slack_summary(
 
     blocks: list = [
         {"type": "header", "text": {"type": "plain_text",
-            "text": f"Auto AI {mode_label.title()} · {now_pt.strftime('%b %d')}", "emoji": True}},
+            "text": f"AI trade review (last 7 days) · {now_pt.strftime('%b %d')}", "emoji": True}},
         {"type": "section", "text": {"type": "mrkdwn",
-            "text": f"*Providers*  Groq {'✅' if gro_ok else '❌'}\n"
-                    f"Google AI Studio {'✅' if gai_ok else '❌'}\n"
-                    f"Run {now_pt.strftime('%I:%M %p PT')}"}},
+            "text": "Two AI reviewers (Groq and Google AI Studio) read the last 7 days of trades. A point is shown "
+                    "only if today's trading records, or the code itself, back it up.\n"
+                    f"Groq {'answered' if gro_ok else 'did not answer'} · Google AI Studio "
+                    f"{'answered' if gai_ok else 'did not answer'} · {now_pt.strftime('%I:%M %p PT')}"}},
         {"type": "divider"},
     ]
     blocks += _meta_report_blocks(gro_result, "Groq", report_url=report_url)
     blocks.append({"type": "divider"})
     blocks += _meta_report_blocks(gai_result, "Google AI Studio", report_url=report_url)
-    fallback = (f"Auto AI {mode_label.title()} — {ts} — "
-                f"Gro {'ok' if gro_ok else 'err'} / GAI {'ok' if gai_ok else 'err'}")
+    fallback = (f"AI trade review — {ts} — Groq {'answered' if gro_ok else 'did not answer'}, "
+                f"Google AI Studio {'answered' if gai_ok else 'did not answer'}")
 
     try:
         from alerts import send_slack_blocks

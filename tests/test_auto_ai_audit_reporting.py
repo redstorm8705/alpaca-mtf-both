@@ -339,12 +339,12 @@ class MetaAuditSlackRendering(unittest.TestCase):
             audit._post_slack_summary(result, result, Path("unused.json"))
         blocks, fallback = sender.call_args.args
         self.assertLess(len(blocks), 10)
-        self.assertIn("Auto AI Meta-Audit", fallback)
+        self.assertIn("AI trade review", fallback)
         text = "\n".join(
             block.get("text", {}).get("text", "") for block in blocks
             if block.get("type") == "section"
         )
-        self.assertNotIn("Full report:", text)
+        self.assertNotIn("Raw AI report", text)
 
     def test_fresh_report_link_is_used_when_provided(self):
         result = {"text": "### 5. FINAL VERDICT\nPASS — clean", "error": None}
@@ -360,7 +360,7 @@ class MetaAuditSlackRendering(unittest.TestCase):
             block.get("text", {}).get("text", "") for block in blocks
             if block.get("type") == "section"
         )
-        self.assertIn(f"Full report (raw): {fresh}", rendered)
+        self.assertIn(f"Raw AI report (raw): {fresh}", rendered)
 
 
 class GistFreshness(unittest.TestCase):
