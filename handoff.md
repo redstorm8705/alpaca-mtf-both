@@ -8,6 +8,25 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-16, Claude signed) — Day-tier feed-gap fix (#660), QHM add ledger credit (#662), NVDA heal
+
+- PR #660 (`gh pr view 660`): Track B no longer reads a market-wide data gap as a halt (2026-10-15: no IEX/SIP bars
+  for any name 12:55-14:10 ET; 252 "14 consecutive bars missing" skips). Live: runner log shows "feed gap, not a halt".
+- PR #662 (`gh pr view 662`): QHM add fills are credited to the ownership ledger at once
+  (`ownership_guard.apply_authorized_tier_fill_increase`). Root cause of the 2026-10-15 unprotected NVDA share: the
+  14:27 UTC dip-add was cut back by a stale ledger read at 14:35. Deployed, unexercised (no add since).
+- NVDA heal (owner-approved 2026-10-16): bot stopped, QHM NVDA set to 2 shares (avg $221.075), ledger_sync logged
+  `[NVDA] net=2.0 intraday=0.0 qhm=2.0`, stop resized `788c4696` SELL 2 @ $192.41 (old `d99fd0fd` pending_replace
+  until the open). Backups: `data/state/*.bak_nvda_heal_20261016`.
+- Naming (owner 2026-10-16): never "intraday tier" — the ledger's `intraday` tier is the Swing tier.
+
+**Pick up here:** (1) after-hours + pre-market stop-watch for QHM/Swing (owner-approved; sell in extended hours when
+a held name trades below its stop; overnight session off) + earnings-pop add at the open; the WIP commit `4f0deb2`
+(pre-market dip-add, board 3-1 against) is to be reworked, not merged; (2) replay SPY/QQQ/IWM + other liquid names
+for the Day tier; (3) replay the Day tier "no clear daily trend" filter across all signals since launch;
+(4) freshness monitor for `dip_zones.json` / `overnight_k.json`; (5) Tranche-1 QHM entries also lack the ledger credit
+(adversarial review of #662).
+
 ## ⏩ LATEST (2026-10-15, Claude signed) — QHM dip-add zones are data-derived (#658)
 
 PR #658 (`gh pr view 658` -> merged `127b2f1`) replaced the fixed -2% / -5% QHM dip-add rungs with per-stock zones
