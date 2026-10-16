@@ -165,7 +165,7 @@ class StaleReminderCadence(unittest.TestCase):
         m = rls._confirmation_message({"LLY/qhm": {"was": 3.0, "would_be": 0.0, "net": 0.0,
                                                    "confirm_cmd": "confirm_ledger_heal.py LLY qhm 0"}})
         self.assertIn("LLY", m)
-        self.assertIn("long-term hold (QHM)", m)
+        self.assertIn("QHM (long-term hold)", m)
         self.assertIn("python3 confirm_ledger_heal.py LLY qhm 0`", m)
         self.assertIn("If you did NOT sell these shares", m)
         self.assertNotIn("frozen", m.lower())      # sells are not frozen: OWNERSHIP_GUARD_ENFORCE is False
