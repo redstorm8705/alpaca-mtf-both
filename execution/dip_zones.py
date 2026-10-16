@@ -62,10 +62,26 @@ def zones_for(symbol: str) -> "tuple[float, float] | None":
         return None
 
 
+def typical_move_for(symbol: str) -> "float | None":
+    """The stock's median absolute 1-session return over the past year (e.g. 0.0154 for NVDA), or None when no
+    positive finite value is available. The extended-hours dip-add uses it as its liquidity yardstick (fail closed)."""
+    try:
+        if _test_guard() or not _STATE.exists():
+            return None
+        d = json.loads(_STATE.read_text())
+        z = (d.get("zones") or {}).get(str(symbol).upper()) if isinstance(d, dict) else None
+        m = float(z["median_move"]) if isinstance(z, dict) and "median_move" in z else None
+        return m if m is not None and m > 0 and m != float("inf") else None   # NaN fails `> 0`
+    except Exception as e:  # noqa: BLE001
+        logger.warning("dip zones: typical move unreadable for %s (%s)", symbol, e)
+        return None
+
+
 def compute_zones(closes, horizon: int) -> dict:
     """Pure: closes = DataFrame of split-adjusted daily closes (DatetimeIndex, one column per symbol, completed
     sessions only); horizon = the return horizon in sessions (QHM's minimum days between dip-adds).
-    Returns {symbol: {"rung_a", "rung_b", "short_history", "own_n"}} as of the last row."""
+    Returns {symbol: {"rung_a", "rung_b", "median_move", "short_history", "own_n"}} as of the last row
+    (median_move = the stock's median absolute 1-session return over the window; the pooled value with no own data)."""
     import pandas as pd
     px = closes.astype(float).sort_index()
     if px.empty or horizon < 1:
@@ -90,16 +106,18 @@ def compute_zones(closes, horizon: int) -> dict:
         own = two_w[s].dropna()
         first = px[s].first_valid_index()
         short = first is None or first > window_start
+        own_move = one_w[s].dropna()
+        move = float(own_move.median()) if not own_move.empty else pool_move
         if own.empty:
             a = pool_floor
             b = min(pool_b, a - pool_move)
         else:
             a = min(float(own.quantile(0.10)), pool_a)
-            b = min(float(own.quantile(0.025)), pool_b, a - float(one_w[s].dropna().median()))
+            b = min(float(own.quantile(0.025)), pool_b, a - move)
             if short:
                 a = min(a, pool_floor)
                 b = min(b, pool_floor)
-        out[s] = {"rung_a": a, "rung_b": b, "short_history": bool(short), "own_n": int(len(own))}
+        out[s] = {"rung_a": a, "rung_b": b, "median_move": move, "short_history": bool(short), "own_n": int(len(own))}
     return out
 
 
