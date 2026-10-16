@@ -52,3 +52,19 @@ Gro/GAI: no design fork to vote on; the exact diff gets the server-side Gro+GAI 
 
 ## Review round 2 (2026-10-16): cold-2nd PASS; adversarial FAIL on this record only (the "never late" sentence above
 was unqualified) — corrected. Code unchanged in round 2.
+
+## Schedule change (owner 2026-10-16, after merge of #668): three runs per weekday
+Owner: "This probably needs to run more often ... 3x minimum." Cron is now `50 12,17,21 * * 1-5` UTC:
+- 12:50 UTC — before the open, after the morning refreshes (unchanged).
+- 17:50 UTC — mid-session.
+- 21:50 UTC — after the close (EDT 20:00 / EST 21:00 UTC) and after the evening refreshes (21:15 / 21:20). Today's
+  session is then completed, so if both of today's refreshes failed the page goes out the same afternoon instead of
+  the next morning. A false page here needs the morning refresh to have failed AND the evening refresh to still be
+  running 30 minutes later; a failed morning refresh is itself worth a look.
+- The installer now replaces any earlier freshness-check line (the once-a-day line was never installed, but a re-run
+  must never leave two lines). Script logic unchanged; a stale file pages on each run until fixed (by design: it is
+  a live condition).
+- Review (cold-2nd PASS, adversarial PASS) notes: on an early-close day in EDT (13:00 ET = 17:00 UTC) the 17:50 run is
+  already after the close, so a failed morning refresh pages before the evening retry (correct by the stale rule);
+  when the trading calendar is unreadable the weekday fallback never counts today, so the same-afternoon page
+  becomes the next 12:50 page.
