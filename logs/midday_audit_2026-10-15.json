@@ -1,0 +1,237 @@
+{
+  "audit_date": "2026-10-15",
+  "run_ts": "2026-10-15T10:30:02.102618-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "TSLA",
+      "AAPL"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "HIGH": 8,
+      "STRESSED": 10,
+      "ELEVATED": 10
+    },
+    "last_score": 54,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 62,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-15 16:19:23,825 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-15 16:19:23,832 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-15 16:20:10,837 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-15 16:20:10,840 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-15 16:20:16,671 WARNING ledger_sync ledger_sync wall-time 15.4s (fills=778 orders=3121)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -9.300000000000182,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -9.300000000000182,
+    "best": {
+      "symbol": "TSLA",
+      "pnl": -9.300000000000182,
+      "entry_price": 355.465,
+      "exit_price": 357.79,
+      "size": 4.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 357.79,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "TSLA",
+      "pnl": -9.300000000000182,
+      "entry_price": 355.465,
+      "exit_price": 357.79,
+      "size": 4.0,
+      "exit_event": "exit",
+      "score": 0,
+      "mri_level": "NORMAL",
+      "stop": 357.79,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "TSLA",
+        "pnl": -9.300000000000182,
+        "entry_price": 355.465,
+        "exit_price": 357.79,
+        "size": 4.0,
+        "exit_event": "exit",
+        "score": 0,
+        "mri_level": "NORMAL",
+        "stop": 357.79,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 198,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:12-10:12"
+        ],
+        "uncovered_windows_pt": [
+          "07:12-07:12"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "LLY": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 175,
+        "lapsed_min": 0,
+        "uncovered_at_close": true,
+        "uncovered_windows_et": [
+          "10:27-10:27",
+          "10:35-13:30"
+        ],
+        "uncovered_windows_pt": [
+          "07:27-07:27",
+          "07:35-10:30"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "TSLA": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 10,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:00-10:00"
+        ],
+        "uncovered_windows_pt": [
+          "07:00-07:00"
+        ],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-15",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "NVDA NAKED (broker ground truth) \u2014 STILL UNCOVERED at the window end",
+        "detail": "NVDA: no broker stop for 175m of 240m held (07:27-07:27, 07:35-10:30 PT); owners qhm"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 6,
+    "symbols": [
+      "AAPL",
+      "NVDA",
+      "TSLA"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 1,
+        "sell": 0
+      },
+      "AAPL": {
+        "buy": 1,
+        "sell": 0
+      },
+      "TSLA": {
+        "buy": 2,
+        "sell": 0
+      }
+    }
+  }
+}

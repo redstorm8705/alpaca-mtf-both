@@ -1,0 +1,55 @@
+Nightly Gemini Audit — 2026-10-15
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['run_dip_zones.py', 'run_ledger_sync.py', 'run_overnight_k.py', 'scripts/qhm_owner_trim.py', 'strategy/day_tier_track_b.py', 'execution/tier_capital_allocator.py', 'execution/broker.py', 'execution/pending_protected_buys.py', 'execution/forever_hold_manager.py', 'execution/ownership_guard.py', 'execution/day_promotion.py', 'execution/dip_zones.py', 'execution/swing_breakout_manager.py', 'execution/exit_logic.py', 'execution/overnight_capacity.py', 'execution/quarterly_hold_manager.py', 'execution/order_admission.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution/broker.py | NVDA position is NAKED (broker ground truth: no-broker-stop=325m) | NVDA
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **[CRITICAL]** `execution.entry_logic`: "RULE 1 — PREMARKET RED LOCKOUT" triggered repeatedly (18/20 movers red). This is a persistent state, not an anomaly, but it confirms the bot is correctly blocking longs.
+* **[WARNING]** `execution.portfolio_tracker`: "EOD P&L DRIFT: Alpaca=$36.24 tracker=$0.00". This is expected pre-heal telemetry, but the drift is persistent across multiple log entries.
+* **[WARNING]** `execution.unmanaged_positions`: "[NVDA] still unmanaged: residual 1 (paged)". This is the root cause of the naked position alert. The bot is aware of the residual, but it remains unmanaged.
+
+### PERFORMANCE AUDIT
+* **Trade Integrity:** The trade events show a `stop_hit` for `NFLX` on 2026-10-08 with `pnl: 2.27`. The entry was a short at `71.7`. A short profit requires `entry > exit`. If the stop hit at `71.7` (the entry price), the P&L should be near 0. The positive P&L suggests either the exit price was lower than the entry (which would be a profit for a short) or the `pnl` field is mislabeled/miscalculated.
+* **Stop Rate:** The bot is currently in a "PREMARKET RED LOCKOUT" state, preventing new long entries. The performance of the last 10 trades is dominated by protective stop hits (AMZN, SNXX, TSLA), indicating a high stop-hit rate (>50%), which suggests the current regime is hostile to the bot's strategy.
+
+### MODIFIED FILE FINDINGS
+* **run_ledger_sync.py:** The logic in `_owner_exit_explained` relies on `since_utc`. If `since_utc` is `None` (first pass), it defaults to `False` (page). This is correct for safety, but the log shows repeated warnings about "owner-exit check failed," which may lead to alert fatigue.
+* **execution/dip_zones.py:** The `refresh()` function uses `pd.Timestamp(today)` to filter bars. If the cron runs exactly at midnight or during a system clock skew, this could exclude the most recent completed daily bar.
+* **execution/forever_hold_manager.py:** The `reconcile_on_startup` method uses `_write_sync_degraded(True, ...)` on failure. This is a robust fail-closed mechanism.
+* **execution/swing_breakout_manager.py:** The `_protected_notional` function uses `load_ledger()`. If the ledger is unreadable, it returns `0.0`. This is a fail-safe (over-protective), which is correct.
+
+### P5 STATUS
+* P5-C1: UNTOUCHED
+* P5-C2: UNTOUCHED
+* P5-H1: UNTOUCHED
+* P5-H2: UNTOUCHED
+* P5-H3: UNTOUCHED
+* P5-H4: UNTOUCHED
+* P5-H5: FIXED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution/broker.py | NVDA residual position unmanaged | The bot logs `[unmanaged-position] [NVDA] still unmanaged: residual 1 (paged)` but fails to reconcile or place a stop on this residual, leaving it naked.**
+* **EXECUTION BUG | MEDIUM | execution/exit_logic.py | P&L calculation for short trades | The `pnl` field in `stop_hit` events for short trades (e.g., NFLX) does not clearly indicate if it accounts for the short-side P&L logic (entry - exit).**
+
+### FIX VALIDATION
+* No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **Immediate Manual Intervention:** Manually place a protective stop on the NVDA residual position (1 share) via the Alpaca dashboard to mitigate the naked position risk.
+2. **Investigate NVDA Residual:** Analyze why the `unmanaged_positions` tracker is unable to reconcile the NVDA residual (likely a partial fill or rounding error in the ledger).
+3. **Audit Short P&L:** Verify the `pnl` calculation logic in `trade_logger` and `exit_logic.py` to ensure short-side P&L is correctly signed.
+4. **Monitor Lockout:** The "PREMARKET RED LOCKOUT" is functioning as intended; continue to monitor if the bot resumes normal entry logic once the market movers recover.
+================================================================================
+BROKER GROUND TRUTH (2026-10-15, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=348m no-broker-stop=0m [07:12-07:12] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   NAKED                    owners=qhm exposed=390m no-broker-stop=325m [07:27-07:27, 07:35-13:00] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=10m no-broker-stop=0m [07:00-07:00] rejected_stop_orders=0
