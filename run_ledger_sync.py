@@ -161,9 +161,16 @@ def _owner_exit_explained(pending: dict, fills: list, coid_map: dict, tier_of_co
     return out
 
 
+def _qty(v) -> str:
+    """'1 share' / '3 shares' for a number, the raw value otherwise (plain-English share counts)."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return f"{v:g} share" + ("" if v == 1 else "s")
+    return str(v)
+
+
 def _pending_lines(pending: dict) -> "list[str]":
     """One plain-English line per pending protected reduction: symbol, tier, shares before -> after, confirm command."""
-    tier_names = {"qhm": "long-term hold (QHM)", "forever6": "Forever-6 (F6)"}
+    from tier_names import tier_label
     out = []
     for key, v in (pending or {}).items():
         sym, _, tier = str(key).partition("/")
@@ -171,8 +178,8 @@ def _pending_lines(pending: dict) -> "list[str]":
         _net = v.get("net")
         cmd = v.get("confirm_cmd") or (f"confirm_ledger_heal.py {sym} {tier} {_net:g}"
                                        if isinstance(_net, (int, float)) else "confirm_ledger_heal.py (see logs/mtf_bot.log)")
-        out.append(f"• {sym}: the bot's {tier_names.get(tier, tier)} record says {v.get('was')} shares, "
-                   f"the broker now shows {v.get('net')}. If you sold them yourself, confirm with: "
+        out.append(f"• {sym}: the bot's {tier_label(tier)}{' (long-term hold)' if tier == 'qhm' else ''} record says {_qty(v.get('was'))}, "
+                   f"the broker now shows {_qty(v.get('net'))}. If you sold them yourself, confirm with: "
                    f"`python3 {cmd}`")
     return out
 
