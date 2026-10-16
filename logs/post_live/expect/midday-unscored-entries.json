@@ -1,0 +1,18 @@
+{
+  "change": "midday-unscored-entries",
+  "tier": 1,
+  "paths": [
+    "midday_audit.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/midday_audit_*.json",
+      "pattern": "\"unscored_source\": \"(Day tier|Day-to-Swing promotion|Swing 55-day breakout)\""
+    }
+  ],
+  "expected_rate": "every weekday midday report that contains a closed Day-tier, promotion or Swing-breakout trade",
+  "window_sessions": 3,
+  "window_reason": "One midday report per weekday; Day-tier round trips happen most sessions, three sessions cover a quiet day.",
+  "reversal": "a Day-tier, promotion or 55-day-breakout trade shown as 'score 0/12' in midday_gemini_*.txt, or a 12-pt-scored Swing entry shown as 'no 12-pt score'",
+  "verification": "tests/test_midday_audit_ground_truth.py::TestUnscoredEntries"
+}
