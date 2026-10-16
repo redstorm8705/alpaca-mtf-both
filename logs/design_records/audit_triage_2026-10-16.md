@@ -69,7 +69,7 @@ claims (the underlying report/log defects are tracked separately).
   logged score, including a real 0.
 - Review round 1 (cold-2nd + adversarial) FAILED the first draft. It keyed on a missing `score` field, which never
   happens in production. Tests now build records with the real `trade_logger.log_event`
-  (`tests/test_midday_audit_ground_truth.py::TestUnscoredEntries`).
+  (`tests/test_midday_audit_unscored.py`).
 
 **#3 FIFO orphan warning.**
 - `execution/portfolio_tracker.py:715-724`: the warning `FIFO orphan: closing fill for {sym} has no prior lot and no tracker record` fires when the symbol has no Swing tracker record.
