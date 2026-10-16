@@ -45,6 +45,7 @@ The order came in with #596 (2026-10-11, "reconcile protective stops to tier own
    - A broker read error must stay fail-closed (page as today). Only a confirmed flat position takes the new branch.
 2. **Leftover stop.** When `_detect_external_close` closes a hold whose broker position is flat, cancel QHM's own stop by exact order id (`pos.stop_order_id`, `QH-` coid, still open).
    - Otherwise a resting sell-stop on a flat symbol could open a short when it triggers. [hypothesis — unverified: depends on account shorting settings and whether Alpaca kept the stop after the app sale]
+   - Owner fact (2026-10-16): on a manual sale the owner always picks "cancel all open orders", so after his own sales no stop is left. This step still covers sales by anything else (e.g. a mystery seller).
 3. **Dedupe** `_stop_coverage_pending` pages: once per (symbol, reason) per ET day, persisted in hold state. The state change and the log line stay every cycle.
 4. **Plain English** for the QHM pages, e.g.:
    - "LLY (long-term hold): the bot can't confirm how many shares it owns, so it is not touching the protective stop. If you sold LLY yourself, nothing to do here — a separate message has the one confirm command."
