@@ -2649,6 +2649,16 @@ class QuarterlyHoldManager:
     def _stop_safe_add(self, pos: HoldPosition, add_qty: int, live_price: float,
                        label: str = "dip-add", raise_stop_to: Optional[float] = None) -> int:
         """Allocator-gated, idempotent stop-safe QHM add with exact recovery."""
+        # The protected-ownership ledger represents QHM as nonnegative long
+        # shares. A short add would require a signed-credit protocol and cannot
+        # reuse the long BUY proof below. Refuse before touching its buy-stop.
+        if pos.direction != "long":
+            logger.warning(
+                "QHM %s: %s stop-safe add blocked for non-long position",
+                label,
+                pos.symbol,
+            )
+            return 0
         # ── OPTION C: stop-safe add (board + Gro + GAI unanimous 2026-07-13) ──
         # A QHM position holds a resting GTC sell-stop; Alpaca blocks a same-symbol
         # BUY (wash-trade). So, RTH-only: cancel the stop -> marketable-limit add ->
@@ -2675,6 +2685,23 @@ class QuarterlyHoldManager:
         _stop_side = "sell" if pos.direction == "long" else "buy"
         _orig_qty = pos.qty_filled
         _stop_id = pos.stop_order_id
+        # Durable direction alone cannot authorize canceling a protective stop.
+        # Prove a positive live long and its exact QHM owner claim first; a stale
+        # local "long" over a broker short must leave the buy-stop untouched.
+        _live_owner_qty = self._strict_resync_qty(pos, _orig_qty, _orig_qty)
+        if _live_owner_qty != _orig_qty:
+            logger.critical(
+                "QHM %s: %s stop-safe add blocked — live long ownership "
+                "could not be proved before stop cancellation",
+                label,
+                pos.symbol,
+            )
+            self._alert(
+                ":rotating_light: QHM %s %s add blocked — live long ownership "
+                "unresolved; existing protective stop was not touched."
+                % (pos.symbol, label)
+            )
+            return 0
         limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
         # Capital admission precedes stop cancellation.  A denied add leaves the
         # existing protective stop untouched and cannot create a naked window.
@@ -2690,6 +2717,97 @@ class QuarterlyHoldManager:
             logger.warning("QHM dip-add: %s allocator blocked: %s", pos.symbol, _capital.reason)
             return 0
         _add_coid = live_order_id(_capital.lease)
+
+        def _validated_add_order(
+            order: object,
+            expected_order_id: "str | None" = None,
+        ) -> "tuple[str, str, int] | None":
+            """Return exact ``(id, status, filled)`` proof for this QHM add."""
+            try:
+                raw_order_id = getattr(order, "id", None)
+                if isinstance(raw_order_id, uuid.UUID):
+                    order_id = str(raw_order_id)
+                elif (
+                    isinstance(raw_order_id, str)
+                    and raw_order_id
+                    and raw_order_id == raw_order_id.strip()
+                ):
+                    order_id = raw_order_id
+                else:
+                    return None
+                coid = getattr(order, "client_order_id", None)
+                symbol = str(getattr(order, "symbol", "") or "").strip().upper()
+                raw_side = getattr(order, "side", None)
+                side = str(getattr(raw_side, "value", raw_side) or "").lower()
+                raw_status = getattr(order, "status", None)
+                status = str(
+                    getattr(raw_status, "value", raw_status) or ""
+                ).lower()
+                raw_qty = getattr(order, "qty", None)
+                raw_filled = getattr(order, "filled_qty", None)
+                if (
+                    raw_qty is None
+                    or raw_filled is None
+                    or isinstance(raw_qty, bool)
+                    or isinstance(raw_filled, bool)
+                ):
+                    return None
+                order_qty = float(raw_qty)
+                filled_qty = float(raw_filled)
+                from execution.ownership_guard import tier_of_coid
+
+                if (
+                    not order_id
+                    or (expected_order_id is not None and order_id != expected_order_id)
+                    or not isinstance(coid, str)
+                    or coid != _add_coid
+                    or tier_of_coid(coid) != "qhm"
+                    or not coid.startswith(f"QH-{pos.symbol.upper()}-")
+                    or symbol != pos.symbol.upper()
+                    or side != "buy"
+                    or not math.isfinite(order_qty)
+                    or not order_qty.is_integer()
+                    or int(order_qty) != add_qty
+                    or not math.isfinite(filled_qty)
+                    or not filled_qty.is_integer()
+                    or filled_qty < 0.0
+                    or filled_qty > order_qty
+                ):
+                    return None
+                zero_fill_statuses = {
+                    "accepted",
+                    "accepted_for_bidding",
+                    "new",
+                    "pending_new",
+                    "rejected",
+                }
+                partial_terminal_statuses = {
+                    "canceled",
+                    "cancelled",
+                    "expired",
+                    "pending_cancel",
+                }
+                if (
+                    status not in (
+                        zero_fill_statuses
+                        | partial_terminal_statuses
+                        | {"filled", "partially_filled"}
+                    )
+                    or (status in zero_fill_statuses and filled_qty != 0.0)
+                    or (status == "filled" and filled_qty != order_qty)
+                    or (
+                        status == "partially_filled"
+                        and not 0.0 < filled_qty < order_qty
+                    )
+                    or (
+                        status in partial_terminal_statuses
+                        and filled_qty >= order_qty
+                    )
+                ):
+                    return None
+                return order_id, status, int(filled_qty)
+            except (AttributeError, TypeError, ValueError):
+                return None
         # Persist exact recovery identity BEFORE cancelling the protective stop.
         # A failed write leaves the old stop intact and aborts submission.
         _pre_add_state = pos.state
@@ -2745,6 +2863,21 @@ class QuarterlyHoldManager:
                             "resubmit" % (pos.symbol, _reason))
             except Exception:
                 pass
+
+        def _hold_ambiguous_add(_reason: str) -> None:
+            """Keep recovery armed; never turn malformed order evidence into ownership."""
+            _protect_qty = self._strict_resync_qty(pos, _orig_qty, _orig_qty)
+            if _protect_qty is None:
+                _protect_qty = _orig_qty
+            _restore_or_pending(_protect_qty, _reason)
+            pos.state = HoldState.PENDING_STOP_REPLACE
+            pos.updated_at = self._now_et().isoformat()
+            self._save_state()
+            self._alert(
+                ":rotating_light: QHM %s dip-add outcome AMBIGUOUS — current "
+                "position protected where verifiable; exact order recovery pending."
+                % pos.symbol
+            )
 
         # Branch 0 — cancel the resting stop. Cancel failure => abort, stop intact.
         if _stop_id:
@@ -2839,7 +2972,16 @@ class QuarterlyHoldManager:
             if _add is None:
                 _add = live_release(_capital.lease, "submit_none")
             else:
-                live_bind(_capital.lease, _add)
+                _submit_proof = _validated_add_order(_add)
+                if _submit_proof is None:
+                    logger.critical(
+                        "QHM %s: %s add submit returned contradictory order "
+                        "evidence — recovering by exact client ID",
+                        label, pos.symbol,
+                    )
+                    _add = None
+                else:
+                    live_bind(_capital.lease, _add)
         except Exception as _ae:
             # The dispatcher may have reached Alpaca before raising. Keep the
             # deterministic pre-submit lease so reconciliation can prove the
@@ -2853,50 +2995,54 @@ class QuarterlyHoldManager:
         # deciding how many shares the replacement stop must protect.
         if _add is None and _add_coid:
             for _recover_attempt in range(3):
-                _add = _get_order_by_client_id(_add_coid)
-                if _add is not None:
-                    live_bind(_capital.lease, _add)
+                _candidate = _get_order_by_client_id(_add_coid)
+                if _candidate is not None and _validated_add_order(_candidate):
+                    _add = _candidate
+                    live_bind(_capital.lease, _candidate)
                     break
+                _add = None
                 if _recover_attempt < 2:
                     _time.sleep(1)
         if not (_add is not None and hasattr(_add, "id")):
             # Broker outcome remains unknown. Protect the currently verified
             # holding, but keep an explicit pending state so later cycles recover
             # the exact client ID, cancel any remainder, resync, and resize again.
-            _protect_qty = self._strict_resync_qty(pos, _orig_qty, _orig_qty)
-            if _protect_qty is None:
-                _protect_qty = _orig_qty
-            _restore_or_pending(_protect_qty, "ambiguous-add-current-qty")
-            pos.state = HoldState.PENDING_STOP_REPLACE
-            pos.updated_at = self._now_et().isoformat()
-            self._save_state()
-            self._alert(
-                ":rotating_light: QHM %s dip-add outcome AMBIGUOUS — current "
-                "position protected where verifiable; exact order recovery pending."
-                % pos.symbol
-            )
+            _hold_ambiguous_add("ambiguous-add-current-qty")
             return 0
+
+        _initial_proof = _validated_add_order(_add)
+        if _initial_proof is None:
+            _hold_ambiguous_add("add-order-proof-invalid")
+            return 0
+        _add_id = _initial_proof[0]
 
         # Poll for fill: 2s initial + 1s polls to a 15s monotonic deadline.
         _deadline = _time.monotonic() + 15.0
         _time.sleep(2)
         _filled = 0
+        _poll_invalid = False
         while _time.monotonic() < _deadline:
             try:
-                _o = _get_order(str(_add.id))
-                _st = str(getattr(_o, "status", "")).lower()
-                _filled = int(float(getattr(_o, "filled_qty", 0) or 0))
+                _o = _get_order(_add_id)
+                _proof = _validated_add_order(_o, _add_id)
+                if _proof is None:
+                    _poll_invalid = True
+                    break
+                _, _st, _filled = _proof
                 if _st in ("filled", "canceled", "cancelled", "rejected",
                            "expired"):
                     break
             except Exception:
                 pass
             _time.sleep(1)
+        if _poll_invalid:
+            _hold_ambiguous_add("add-order-poll-invalid")
+            return 0
 
         # Branch 2 — not fully filled: cancel the add (partials keep filled shares).
         if _filled < add_qty:
             try:
-                _cancelled = _cancel_order(str(_add.id))
+                _cancelled = _cancel_order(_add_id)
             except Exception:
                 _cancelled = False
             if not _cancelled:
@@ -2916,13 +3062,13 @@ class QuarterlyHoldManager:
             _terminal_confirmed = False
             while _time.monotonic() < _cancel_deadline:
                 try:
-                    _terminal_order = _get_order(str(_add.id))
-                    _terminal_status = str(
-                        getattr(_terminal_order, "status", "") or ""
-                    ).lower()
-                    _filled = int(float(
-                        getattr(_terminal_order, "filled_qty", _filled) or 0
-                    ))
+                    _terminal_order = _get_order(_add_id)
+                    _terminal_proof = _validated_add_order(
+                        _terminal_order, _add_id
+                    )
+                    if _terminal_proof is None:
+                        break
+                    _, _terminal_status, _filled = _terminal_proof
                     if _terminal_status in (
                         "filled", "canceled", "cancelled", "rejected", "expired"
                     ):
@@ -2952,12 +3098,22 @@ class QuarterlyHoldManager:
                 from execution.ownership_guard import apply_authorized_tier_fill_increase
                 _pn_after = self.broker.get_position(pos.symbol)
                 _net_after = self._whole_share_qty(getattr(_pn_after, "qty", None)) if _pn_after else None
-                if _net_after is None or not apply_authorized_tier_fill_increase(
-                        pos.symbol, "qhm", _filled, _net_after, str(_add.id)):
+                _credit_ok = _net_after is not None and apply_authorized_tier_fill_increase(
+                    pos.symbol, "qhm", _filled, _net_after, _add_id
+                )
+                if not _credit_ok:
                     logger.critical("QHM %s: %s ledger credit for +%d not applied (net %s) — "
                                     "the next cycle may under-count QHM", label, pos.symbol, _filled, _net_after)
                     self._alert(":rotating_light: QHM %s %s filled +%d but the ownership ledger was not "
                                 "credited — check the stop covers every QHM share" % (pos.symbol, label, _filled))
+                else:
+                    logger.warning(
+                        "[change_id=qhm-add-credit-order-proof-2026-10-16] "
+                        "QHM %s exact add order %s validated and credited +%d",
+                        pos.symbol,
+                        _add_id,
+                        _filled,
+                    )
             except Exception as _lc_e:  # RC-3
                 logger.critical("QHM %s: %s ledger credit error: %s", label, pos.symbol, _lc_e)
         # Resync to Alpaca truth (full/partial/no fill), resubmit the stop for the

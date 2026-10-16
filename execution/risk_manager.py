@@ -7,6 +7,7 @@ The most important file in the bot — protects capital above everything else.
 
 import json
 import logging
+import math
 import os
 import requests  # type: ignore[import-untyped]
 from collections import defaultdict, deque
@@ -151,14 +152,187 @@ def _in_rth_now() -> bool:
 # (FIFO since-entry realized; min(unrealized_pl, unrealized_intraday_pl) on the blended Alpaca position)
 # both MASKED a real intraday loss on a symbol held over AND traded again today, because Alpaca's net
 # position blends the cheap overnight lot with the pricey today lot in one avg_entry_price. Measuring
-# from the fills never blends. Each cached tuple: (symbol, side, qty, price). ALL symbols (the caller
-# applies the QHM/F6 exclusion), qty is the absolute fill size.
+# from the fills never blends. Each cached tuple is (symbol, side, qty, price, tier). ALL symbols
+# remain represented; tier is exact or broker-confirmed untagged and qty is absolute.
 _INTRADAY_PNL_TTL_S = 120
 _intraday_cache: dict = {"ts": 0.0, "pt_date": "", "fills": (), "ok": False}
+_intraday_order_tier_cache: dict = {"pt_date": "", "tiers": {}}
+_UNRESOLVED_FILL_TIER = "__unresolved_fill_tier__"
+
+
+def _tier_for_fill_order(
+    order_id: object,
+    pt_date: str,
+    fill_symbol: Any,
+    fill_side: Any,
+    fill_qty: Any,
+) -> "str | None":
+    """Resolve one fill's immutable order owner, cached for the session.
+
+    Alpaca fill activities carry ``order_id`` but no client-order tag. Exact
+    protected-fill exclusion therefore requires the order lookup. ``None`` means
+    a broker-confirmed order has no tier tag.  A missing/unreadable order returns
+    the unresolved sentinel, which makes the whole measure degrade rather than
+    allowing an unknown protected fill to offset an active-tier loss.
+    """
+    oid = str(order_id or "").strip()
+    if not oid:
+        return _UNRESOLVED_FILL_TIER
+    cache = _intraday_order_tier_cache
+    if cache.get("pt_date") != pt_date:
+        cache.clear()
+        cache.update(pt_date=pt_date, tiers={})
+    tiers = cache["tiers"]
+
+    def _validated_tier(order_facts: dict) -> "str | None":
+        """Bind an activity to the exact immutable order before trusting its tier."""
+        symbol = str(fill_symbol or "").strip().upper()
+        side = str(fill_side or "").strip().lower()
+        try:
+            if isinstance(fill_qty, bool):
+                raise ValueError("Boolean fill quantity")
+            activity_qty = float(fill_qty)
+        except (TypeError, ValueError):
+            return _UNRESOLVED_FILL_TIER
+        expected_order_side = {
+            "buy": "buy",
+            "buy_to_cover": "buy",
+            "sell": "sell",
+            "sell_short": "sell",
+        }.get(side)
+        if (
+            not symbol
+            or expected_order_side is None
+            or not math.isfinite(activity_qty)
+            or activity_qty <= 0.0
+            or not activity_qty.is_integer()
+            or order_facts["symbol"] != symbol
+            or order_facts["side"] != expected_order_side
+            or activity_qty > order_facts["qty"]
+            or activity_qty > order_facts["filled_qty"]
+        ):
+            logger.warning(
+                "kill-switch fill/order facts mismatch for %s — degrading the "
+                "intraday measure",
+                oid,
+            )
+            return _UNRESOLVED_FILL_TIER
+        return order_facts["tier"]
+
+    if oid in tiers:
+        return _validated_tier(tiers[oid])
+    try:
+        from execution.broker import get_order
+        from execution.ownership_guard import tier_of_coid
+
+        order = get_order(oid, nested=True)
+        if order is None:
+            logger.warning(
+                "kill-switch fill owner lookup returned no order for %s — "
+                "degrading the intraday measure",
+                oid,
+            )
+            return _UNRESOLVED_FILL_TIER
+        returned_id = (
+            order.get("id")
+            if isinstance(order, dict)
+            else getattr(order, "id", None)
+        )
+        if str(returned_id or "").strip() != oid:
+            logger.warning(
+                "kill-switch fill owner lookup identity mismatch for %s — "
+                "degrading the intraday measure",
+                oid,
+            )
+            return _UNRESOLVED_FILL_TIER
+
+        def _order_field(name: str) -> Any:
+            return (
+                order.get(name)
+                if isinstance(order, dict)
+                else getattr(order, name, None)
+            )
+
+        coid = _order_field("client_order_id")
+        if coid is not None and not isinstance(coid, str):
+            return _UNRESOLVED_FILL_TIER
+        raw_order_qty = _order_field("qty")
+        raw_filled_qty = _order_field("filled_qty")
+        if isinstance(raw_order_qty, bool) or isinstance(raw_filled_qty, bool):
+            return _UNRESOLVED_FILL_TIER
+        order_qty = float(raw_order_qty)
+        filled_qty = float(raw_filled_qty)
+        order_symbol = str(_order_field("symbol") or "").strip().upper()
+        raw_order_side = _order_field("side")
+        order_side = str(getattr(raw_order_side, "value", raw_order_side) or "").strip().lower()
+        if (
+            not order_symbol
+            or order_side not in {"buy", "sell"}
+            or not math.isfinite(order_qty)
+            or not math.isfinite(filled_qty)
+            or order_qty <= 0.0
+            or filled_qty <= 0.0
+            or not order_qty.is_integer()
+            or not filled_qty.is_integer()
+            or filled_qty > order_qty
+        ):
+            logger.warning(
+                "kill-switch fill owner order facts invalid for %s — degrading "
+                "the intraday measure",
+                oid,
+            )
+            return _UNRESOLVED_FILL_TIER
+        tier = tier_of_coid(coid)
+        if tier in {"qhm", "forever6"}:
+            # Prefix-only attribution is insufficient on the kill path: a stale
+            # F6-MSFT tag on an NVDA order would otherwise erase an active NVDA
+            # fill. Bind the complete generated COID envelope to broker facts.
+            parts = coid.split("-", 4) if isinstance(coid, str) else []
+            expected_code = "QH" if tier == "qhm" else "F6"
+            expected_action = "b" if order_side == "buy" else "s"
+            if (
+                len(parts) != 5
+                or parts[0] != expected_code
+                or parts[1].upper() != order_symbol
+                or parts[1] != parts[1].upper()
+                or not parts[1].replace(".", "").isalnum()
+                or parts[2] != expected_action
+                or not parts[3].isdigit()
+                or int(parts[3]) <= 0
+                or not parts[4].isalnum()
+            ):
+                logger.warning(
+                    "kill-switch protected order tag mismatch for %s — "
+                    "degrading the intraday measure",
+                    oid,
+                )
+                return _UNRESOLVED_FILL_TIER
+        order_facts = {
+            "tier": tier,
+            "symbol": order_symbol,
+            "side": order_side,
+            "qty": order_qty,
+            "filled_qty": filled_qty,
+        }
+    except Exception as exc:
+        logger.warning(
+            "kill-switch fill owner lookup failed for order %s (%s) — "
+            "degrading the intraday measure",
+            oid,
+            exc,
+        )
+        return _UNRESOLVED_FILL_TIER
+    # A successful exact-order read is immutable for the session.  Transient
+    # unresolved results returned above are deliberately never cached.
+    tiers[oid] = order_facts
+    return _validated_tier(order_facts)
 
 
 def _today_fills() -> "tuple[tuple, bool]":
-    """(today's FILLS [PT transaction date] as (symbol, side, qty, price), ok) from the fills API
+    """Today's fills as ``(symbol, side, qty, price, tier)`` plus an ok flag.
+
+    The tier comes from an exact fill-order lookup and is necessary to remove
+    same-day QHM/F6 fill corrections from the active-book kill numerator. From the fills API
     (reporting.pnl_ledger.fetch_all_fills — the audited FIFO source). Cached (TTL) so the per-cycle
     kill check never re-pages the full fills history inline. ok=False on ANY failure → caller degrades
     to the equity-based measure. Never raises."""
@@ -181,14 +355,42 @@ def _today_fills() -> "tuple[tuple, bool]":
             # the positions loop already follows. ok=False → caller uses the more-sensitive equity fallback.
             sym = f.get("symbol")
             side = str(f.get("side", "")).lower()
+            order_id = f.get("order_id")
             try:
-                q = abs(int(float(f.get("qty", 0))))
+                raw_qty = f.get("qty", 0)
+                if isinstance(raw_qty, bool):
+                    return (), False
+                qty_value = float(raw_qty)
                 px = float(f.get("price", 0.0))
             except (TypeError, ValueError):
                 return (), False
-            if not sym or q <= 0 or px <= 0 or side not in ("buy", "sell", "sell_short", "buy_to_cover"):
+            if (
+                not sym
+                or not math.isfinite(qty_value)
+                or qty_value <= 0
+                or not qty_value.is_integer()
+                or not math.isfinite(px)
+                or px <= 0
+                or side not in ("buy", "sell", "sell_short", "buy_to_cover")
+            ):
                 return (), False
-            out.append((sym, side, q, px))
+            q = int(qty_value)
+            fill_tier = _tier_for_fill_order(
+                order_id,
+                pt_today,
+                sym,
+                side,
+                q,
+            )
+            if fill_tier == _UNRESOLVED_FILL_TIER:
+                return (), False
+            out.append((
+                str(sym).upper(),
+                side,
+                q,
+                px,
+                fill_tier,
+            ))
         fills = tuple(out)
         _intraday_cache.update(ts=now, pt_date=pt_today, fills=fills, ok=True)
         return fills, True
@@ -263,34 +465,87 @@ class RiskManager:
         """Unrealized equity delta: current equity minus SOD baseline."""
         return self.portfolio_value - self.daily_start_value
 
-    def _forever6_held_symbols(self) -> set:
-        """Forever-6-tier HELD symbols from the ownership ledger (forever6 qty > 0).
-        FAIL-SAFE to EMPTY on ANY error/absence → the intraday kill then excludes NO F6
-        symbol, staying MORE sensitive (never masks a real loss). Today F6 is dark
-        (FOREVER6_ENABLED=False → all forever6 qty = 0) → empty set → ZERO behavior change;
-        the exclusion auto-activates only once OWNERSHIP_GUARD_ENFORCE is True AND F6 holds shares
-        (the ledger must be ENFORCED before it can drive this safety control). FOREVER6_UNIVERSE
-        is deliberately NOT used (it is the candidate list and includes names held in OTHER
-        tiers, e.g. GOOGL/NVDA as QHM); only ledger-recorded F6 qty counts as an F6 hold."""
+    def _protected_held_qty(self) -> "dict[str, tuple[float, float]] | None":
+        """Protected and broker-net ledger quantities, or ``None`` when unsafe.
+
+        Quantity, rather than symbol membership, is mandatory for a co-held name:
+        excluding an entire NVDA position because F6 owns one share would also
+        erase the Day/Swing P&L on the remaining shares.  Only the enforced ledger
+        may drive this subtraction.  Any unreadable, drifted, negative, or
+        non-finite claim degrades the caller to the conservative equity fallback.
+        """
+        if not getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
+            return None
         try:
-            # DOCUMENTATION-IS-NOT-ENFORCEMENT (GAI 2026-08-06): the ownership ledger is
-            # drift-prone TELEMETRY while OWNERSHIP_GUARD_ENFORCE is False, so it must NOT
-            # drive a safety control. Refuse to derive F6 exclusions from an UNENFORCED
-            # ledger — return empty so the kill excludes no F6 and stays maximally sensitive
-            # (a drifted ledger tagging an actively-traded symbol forever6>0 would otherwise
-            # mask that symbol's intraday loss). The F6 exclusion AUTO-ACTIVATES only once the
-            # ledger is enforced/reconciled — the gate is built, not merely documented.
-            if not getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
-                return set()
-            from execution.ownership_guard import load_ledger, tier_qty
+            from execution.ownership_guard import _QTY_EPS, load_ledger
+            from tier_names import canonical_tier
+
+            def _whole_qty(value: Any, field: str) -> float:
+                if isinstance(value, bool):
+                    raise ValueError(f"{field} is Boolean")
+                parsed = float(value)
+                if not math.isfinite(parsed) or not parsed.is_integer():
+                    raise ValueError(f"{field} is not a finite whole-share quantity")
+                return parsed
+
             ledger = load_ledger()
-            return {
-                s for s in ledger.get("positions", {})
-                if tier_qty(ledger, s, "forever6") > 0.0
-            }
-        except Exception as e:  # RC-3
-            logger.warning("kill-switch F6 held-symbols read failed (%s) — excluding no F6", e)
-            return set()
+            out: dict[str, tuple[float, float]] = {}
+            for symbol, row in (ledger.get("positions") or {}).items():
+                if not isinstance(row, dict) or not isinstance(row.get("tiers"), dict):
+                    raise ValueError(f"{symbol}: malformed ownership row")
+                drift = _whole_qty(row.get("drift"), f"{symbol}.drift")
+                ledger_net = _whole_qty(
+                    row.get("alpaca_net_qty"), f"{symbol}.alpaca_net_qty"
+                )
+                canonical_claims: dict[str, float] = {}
+                for raw_tier, claim in row["tiers"].items():
+                    if not isinstance(claim, dict):
+                        raise ValueError(f"{symbol}.{raw_tier}: malformed claim")
+                    canonical = canonical_tier(raw_tier)
+                    if canonical in canonical_claims:
+                        raise ValueError(
+                            f"{symbol}: duplicate canonical tier {canonical}"
+                        )
+                    canonical_claims[canonical] = _whole_qty(
+                        claim.get("qty"), f"{symbol}.{raw_tier}.qty"
+                    )
+                if set(canonical_claims) != {"day", "swing", "qhm", "forever_6"}:
+                    raise ValueError(f"{symbol}: incomplete ownership claims")
+                claim_sum = sum(canonical_claims.values())
+                qhm = canonical_claims["qhm"]
+                f6 = canonical_claims["forever_6"]
+                qty = qhm + f6
+                if (
+                    not all(
+                        math.isfinite(v)
+                        for v in (drift, ledger_net, qhm, f6, qty)
+                    )
+                    or abs(drift) > _QTY_EPS
+                    or abs(claim_sum - ledger_net) > _QTY_EPS
+                    or abs(drift - (ledger_net - claim_sum)) > _QTY_EPS
+                    or qhm < 0.0
+                    or f6 < 0.0
+                    or (qty > 0.0 and ledger_net < qty - _QTY_EPS)
+                ):
+                    logger.warning(
+                        "kill-switch protected ownership unresolved for %s — "
+                        "degrading to equity measure",
+                        symbol,
+                    )
+                    return None
+                # Keep every non-flat ledger row, including a co-held symbol
+                # whose protected tier just sold to zero.  Broker-net agreement
+                # is still required before any exact subtraction/fill exclusion.
+                if qty > 0.0 or abs(ledger_net) > _QTY_EPS:
+                    out[str(symbol).upper()] = (qty, ledger_net)
+            return out
+        except Exception as e:
+            logger.warning(
+                "kill-switch protected quantities unreadable (%s) — degrading "
+                "to equity measure",
+                e,
+            )
+            return None
 
     def _buy_and_hold_intraday_pl(self) -> float:
         """QHM UNION Forever-6 buy-and-hold positions' TODAY-ONLY unrealized P&L (Alpaca
@@ -305,9 +560,21 @@ class RiskManager:
         ownership ledger — each fail-safe. Fail-safe: returns 0.0 on ANY error/absence → kill
         degrades to account-level equity_pnl (the conservative direction — never masks a loss)."""
         try:
-            from execution.quarterly_hold_manager import get_quarterly_hold_symbols
-            excluded = set(get_quarterly_hold_symbols() or [])
-            excluded |= self._forever6_held_symbols()   # F6 held (fail-safe empty; dark today → no-op)
+            protected_qty = self._protected_held_qty()
+            if getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
+                if protected_qty is None:
+                    return 0.0
+                excluded = {
+                    symbol
+                    for symbol, (protected, _net) in protected_qty.items()
+                    if protected > 0.0
+                }
+            else:
+                # Legacy QHM behavior while the ownership guard remains advisory.
+                # F6 cannot be enabled in this state (validate_config enforces it).
+                from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+                excluded = set(get_quarterly_hold_symbols() or [])
+                protected_qty = None
             if not excluded:
                 return 0.0
             api_key = os.getenv("ALPACA_API_KEY", "")
@@ -336,12 +603,19 @@ class RiskManager:
             total = 0.0
             n_excl = 0
             for p in positions:
-                if p.get("symbol") in excluded:
+                symbol = str(p.get("symbol") or "").upper()
+                if symbol in excluded:
                     n_excl += 1
                     try:
-                        total += float(p.get("unrealized_intraday_pl", 0.0) or 0.0)
+                        if protected_qty is None:
+                            total += float(p.get("unrealized_intraday_pl", 0.0) or 0.0)
+                        else:
+                            total += (
+                                float(p.get("current_price"))
+                                - float(p.get("lastday_price"))
+                            ) * protected_qty[symbol][0]
                     except (TypeError, ValueError):
-                        pass
+                        return 0.0
             if n_excl:
                 # Success-path observability (reliability board seat 2026-08-06): when the
                 # exclusion actually removes held buy-and-hold symbols, record how many and
@@ -357,8 +631,8 @@ class RiskManager:
 
     def _intraday_trading_pnl(self) -> "tuple[float, bool]":
         """PHANTOM-PROOF intraday TRADING P&L (excl QHM/F6 buy-and-hold), independent of Alpaca's
-        `last_equity` (whose staleness caused the 2026-09-16 false trip). Computed per NON-EXCLUDED
-        symbol DIRECTLY from that symbol's TODAY FILLS + its prior close — never from a blended net
+        `last_equity` (whose staleness caused the 2026-09-16 false trip). Computed from each symbol's
+        ACTIVE quantity and TODAY FILLS + its prior close — never from a blended net
         position or a since-entry FIFO figure (both masked a real loss on a symbol held over AND traded
         again today; masked-loss board 2026-09-16, cuts 1–3). Per symbol:
 
@@ -384,8 +658,9 @@ class RiskManager:
         move (buy/sell repriced from prior close), matching the OLD equity measure (an equity delta
         books a trim at exit − prior_close); excluding it would DROP a day-tier round-trip in a
         QHM-listed name (GOOGL ∈ config.DAYTRADE_UNIVERSE ∩ QHM, day tier has no QHM entry block). The
-        QHM/F6 buy-and-hold is excluded on the OPEN (unrealized_intraday_pl) leg only — matching the old
-        measure's unrealized-only exclusion.
+        QHM/F6 buy-and-hold is removed from the OPEN leg by exact protected quantity only. A co-held
+        Day/Swing quantity remains in the numerator. Fill terms remain complete, matching the old
+        measure's unrealized-only protected-tier exclusion.
 
         Returns (pnl, ok); ok=False on ANY fetch failure or missing prior close → caller falls back to
         the equity measure (more sensitive; never masks). Never raises."""
@@ -394,8 +669,15 @@ class RiskManager:
         if not ok:
             return 0.0, False
         try:
-            from execution.quarterly_hold_manager import get_quarterly_hold_symbols
-            excluded = set(get_quarterly_hold_symbols() or []) | self._forever6_held_symbols()
+            protected_qty = self._protected_held_qty()
+            exact_protected = getattr(config, "OWNERSHIP_GUARD_ENFORCE", False)
+            if exact_protected:
+                if protected_qty is None:
+                    return 0.0, False
+                excluded = set(protected_qty)
+            else:
+                from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+                excluded = set(get_quarterly_hold_symbols() or [])
             api_key = os.getenv("ALPACA_API_KEY", "")
             secret = os.getenv("ALPACA_SECRET_KEY", "")
             if not api_key or not secret:
@@ -413,20 +695,52 @@ class RiskManager:
             positions = resp.json()
             if not isinstance(positions, list):
                 return 0.0, False
-            # OPEN leg: today's move on current holdings (Alpaca prior-close-relative field, signed for
-            # shorts) for NON-EXCLUDED symbols; and capture prior close per still-open symbol for the
-            # fill terms. One pass over positions.
+            # OPEN leg: today's move on current ACTIVE holdings (Alpaca prior-close-relative field,
+            # signed for shorts), after subtracting exact protected quantity; also capture prior close
+            # per still-open symbol for the fill terms. One pass over positions.
             prior_close: dict = {}
             open_pnl = 0.0
+            seen_ledger: set[str] = set()
             for p in positions:
-                sym = p.get("symbol")
+                sym = str(p.get("symbol") or "").upper()
                 if not sym:
                     continue
                 try:
+                    raw_broker_qty = p.get("qty")
+                    if isinstance(raw_broker_qty, bool):
+                        return 0.0, False
+                    broker_qty = float(raw_broker_qty)
+                    if (
+                        not math.isfinite(broker_qty)
+                        or broker_qty == 0.0
+                        or not broker_qty.is_integer()
+                    ):
+                        return 0.0, False
                     ld = p.get("lastday_price")
                     if ld is not None:
-                        prior_close[sym] = float(ld)
-                    if sym not in excluded:
+                        parsed_prior = float(ld)
+                        if not math.isfinite(parsed_prior):
+                            return 0.0, False
+                        prior_close[sym] = parsed_prior
+                    if exact_protected:
+                        if sym in (protected_qty or {}):
+                            seen_ledger.add(sym)
+                            protected, ledger_net = (protected_qty or {})[sym]
+                            broker_net = broker_qty
+                            from execution.ownership_guard import _QTY_EPS
+                            if abs(broker_net - ledger_net) > _QTY_EPS:
+                                return 0.0, False
+                        else:
+                            protected = 0.0
+                        # Remove only the exact protected shares.  The remaining
+                        # signed quantity belongs to active tiers and must count.
+                        active_qty = broker_qty - protected
+                    else:
+                        active_qty = 0.0 if sym in excluded else broker_qty
+                    current_price = float(p.get("current_price"))
+                    if not math.isfinite(active_qty) or not math.isfinite(current_price):
+                        return 0.0, False
+                    if active_qty:
                         # Open leg = today's move on CURRENT holdings, computed DIRECTLY from raw fields
                         # (current_price − prior_close) × signed_qty — NOT Alpaca's derived
                         # `unrealized_intraday_pl` (masked-loss seat NIT#1, 2026-09-16). This makes the
@@ -436,11 +750,13 @@ class RiskManager:
                         # close (None) cannot be priced → degrade (never mask).
                         if ld is None:
                             return 0.0, False
-                        open_pnl += (float(p.get("current_price")) - float(ld)) * float(p.get("qty"))
+                        open_pnl += (current_price - float(ld)) * active_qty
                 except (TypeError, ValueError):
                     # one unparseable position must not silently drop a leg → degrade (more sensitive)
                     return 0.0, False
-            # FILL terms: per NON-EXCLUDED symbol, reprice each today-transacted share from its fill
+            if exact_protected and set(protected_qty or {}) != seen_ledger:
+                return 0.0, False
+            # FILL terms: per traded symbol, reprice each today-transacted share from its fill
             # price back to prior close. Aggregate cash and qty by side first.
             # ALL symbols (no exclusion) — a fill in a QHM/F6 name is a TRIM or a day-tier trade whose
             # TODAY move must count (matching the old equity measure, and catching a day-tier round-trip
@@ -451,7 +767,13 @@ class RiskManager:
             buy_qty: dict = defaultdict(float)
             sell_qty: dict = defaultdict(float)
             traded: set = set()
-            for sym, side, q, px in fills:
+            for sym, side, q, px, fill_tier in fills:
+                # Exact protected-tier fills belong to the long-horizon book.
+                # Unknown/unreadable ownership is included, never excluded.
+                if exact_protected and fill_tier in {"qhm", "forever6"}:
+                    if sym not in (protected_qty or {}):
+                        return 0.0, False
+                    continue
                 traded.add(sym)
                 if side in ("buy", "buy_to_cover"):
                     buy_cash[sym] += q * px
@@ -475,7 +797,10 @@ class RiskManager:
                     # flat now with non-zero net today qty ⇒ a held-over lot was fully closed today;
                     # its prior close is unavailable (no position to read lastday_price from) → degrade.
                     return 0.0, False
-            return round(open_pnl + fill_pnl, 2), True
+            result = open_pnl + fill_pnl
+            if not math.isfinite(result):
+                return 0.0, False
+            return round(result, 2), True
         except Exception as e:  # RC-3
             logger.warning("kill-switch intraday P&L fetch failed (%s) — degrading to equity measure "
                            "(more sensitive).", e)
@@ -525,6 +850,15 @@ class RiskManager:
         if _pos_ok:
             intraday_equity_pnl = _pos_pnl
         else:
+            # Once exact tier ownership is enforced, a failed fill/position join
+            # is a CONTROL FAULT, not permission to substitute the old blended-
+            # basis estimate.  That estimate can let a cheap protected buy offset
+            # an active-tier loss.  Raising is intentional: run_cycle converts it
+            # to its fail-closed entry block while all exit paths continue.
+            if getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
+                raise RuntimeError(
+                    "kill-switch exact tier attribution is unresolved"
+                )
             # EQUITY FALLBACK — used only when the position/FIFO fetch fails. It is `equity − last_equity`
             # minus QHM/F6 unrealized, so it is PHANTOM-PRONE off-hours (a stale SOD last_equity — the
             # 2026-09-16 00:47 PT overnight false trip). It is MORE sensitive (never masks) but can

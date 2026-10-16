@@ -1,0 +1,27 @@
+{
+  "change": "qhm-add-credit-order-proof-2026-10-16",
+  "tier": 2,
+  "paths": [
+    "execution/quarterly_hold_manager.py",
+    "execution/ownership_guard.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change_id=qhm-add-credit-order-proof-2026-10-16.*exact add order.*validated and credited"
+    }
+  ],
+  "expected_rate": "On the next fully filled or terminal-partial QHM add",
+  "window_sessions": 10,
+  "window_reason": "QHM adds are intentionally infrequent and require a qualifying data-derived dip",
+  "reversal": "A QHM ledger credit occurs for a broker order whose ID, client ID, symbol, side, requested quantity, or filled quantity does not exactly match the authorized add",
+  "metrics": [
+    {
+      "name": "unverified QHM ownership credits",
+      "source": "QHM order responses, ownership ledger, and logs/mtf_bot.log",
+      "direction": "none",
+      "bound": "exactly zero"
+    }
+  ],
+  "verification": "tests/test_qhm_stop_safe_add.py"
+}

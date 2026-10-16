@@ -227,6 +227,9 @@ class GuardBoundaryTests(unittest.TestCase):
         self.assertFalse(inc("NVDA", "qhm", 0, 10, "order-add-1"))
         self.assertFalse(inc("NVDA", "qhm", 1.5, 11.5, "order-add-1"))
         self.assertFalse(inc("NVDA", "qhm", 1, float("nan"), "add-1"))
+        self.assertFalse(inc("NVDA", "qhm", 1, 11, ""))
+        self.assertFalse(inc("NVDA", "qhm", 1, 11, " order-add-1"))
+        self.assertFalse(inc("NVDA", "qhm", 1, 11, True))
         self.assertEqual(qhm_qty(), 3)
 
     def test_exact_qhm_fill_increase_creates_an_absent_symbol(self):

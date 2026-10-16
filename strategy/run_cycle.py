@@ -919,6 +919,14 @@ def run_cycle(
             try:
                 from execution.forever_hold_manager import ForeverHoldManager
                 import execution.broker as _f6_bk
+                _f6_mgr = ForeverHoldManager(_f6_bk)
+                # F6 trims are risk-reducing exits. They do not depend on SPY
+                # starter data and must remain reachable during a market-data
+                # outage or after a kill switch trip.
+                try:
+                    _f6_mgr.evaluate_and_execute_trims()
+                except Exception as _f6_trim_e:
+                    logger.warning("F6 trim evaluation failed (non-fatal): %s", _f6_trim_e)
                 _f6_prior = _spy_prior_session_close()
                 _f6_df    = fetch_bars("SPY", config.TF_DAILY, num_bars=2)
                 _f6_close = (float(_f6_df["close"].iloc[-1])
@@ -926,8 +934,7 @@ def run_cycle(
                 if _f6_prior and _f6_close and _f6_prior > 0:
                     _f6_spy_pct = (_f6_close - _f6_prior) / _f6_prior * 100.0
                     _f6_vix     = float(getattr(_main, "_last_vix", 0.0) or 0.0)
-                    _f6_mgr     = ForeverHoldManager(_f6_bk)
-                    # Kill switch blocks the starter (a new buy); the trims below are exits and still run.
+                    # Kill switch blocks the starter (a new buy); trims already ran above.
                     _f6_plan    = ({} if _kill_block_entries
                                    else _f6_mgr.maybe_start_accumulation(_f6_spy_pct, _f6_vix))
                     if _f6_plan.get("plan"):
@@ -937,11 +944,6 @@ def run_cycle(
                             [p.get("symbol") for p in _f6_res.get("placed", [])],
                             _f6_res.get("spent", 0.0),
                         )
-                    # F6 EXIT — trims only (10x/20x). Independent of the starter trigger
-                    # above (runs every after-close cycle regardless of whether a starter
-                    # fired today), since a held name's gain multiple is unrelated to
-                    # today's SPY move.
-                    _f6_mgr.evaluate_and_execute_trims()
             except Exception as _f6e:
                 logger.warning(f"F6 starter after-close eval failed (non-fatal): {_f6e}")
         _touch_cycle_ts()
@@ -2268,4 +2270,3 @@ def run_cycle(
 
     # Stamp cycle completion time — watchdog thread reads this to detect hangs
     _touch_cycle_ts()
-

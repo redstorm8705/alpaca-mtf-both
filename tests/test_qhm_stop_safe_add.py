@@ -4,6 +4,7 @@ verbatim from _maybe_dip_add 2026-09-28 so tranches 2-3 can reuse it). INVARIANT
 position ends with a resting stop OR PENDING_STOP_REPLACE + an alert — never naked."""
 import sys
 import unittest
+import uuid
 from types import SimpleNamespace
 from unittest import mock
 
@@ -23,7 +24,19 @@ class FakeDispatcher:
 
     def submit_limit(self, broker, sym, qty, side, price, client_order_id=None):
         self.adds.append((sym, qty, side, price))
-        return SimpleNamespace(id="add-1") if self.add_ok else None
+        return (
+            SimpleNamespace(
+                id="add-1",
+                client_order_id=client_order_id,
+                symbol=sym,
+                side=side,
+                qty=qty,
+                filled_qty=0,
+                status="new",
+            )
+            if self.add_ok
+            else None
+        )
 
 
 class FakeBroker:
@@ -61,20 +74,48 @@ def _mgr(pos, broker, disp, resync_qty=None):
         if resync_qty is not None:
             p.qty_filled = resync_qty
     m._resync_from_alpaca = _resync  # type: ignore[method-assign]
+    strict_calls = 0
+
     def _strict(p, *_args):
-        _resync(p)
+        nonlocal strict_calls
+        strict_calls += 1
+        if strict_calls > 1:
+            _resync(p)
         return p.qty_filled
     m._strict_resync_qty = _strict  # type: ignore[method-assign]
     return m
 
 
-def _pos(qty=2, stop_id="stop-old"):
-    return qm.HoldPosition(symbol="NVDA", direction="long", target_equity_pct=0.2, state=qm.HoldState.ACTIVE,
+def _pos(qty=2, stop_id="stop-old", direction="long"):
+    return qm.HoldPosition(symbol="NVDA", direction=direction, target_equity_pct=0.2, state=qm.HoldState.ACTIVE,
                            qty_filled=qty, entry_day="2026-09-29", stop_price=200.0, stop_order_id=stop_id)
 
 
-def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label="tranche-2"):
-    order = order or SimpleNamespace(status="filled", filled_qty=add_qty)
+def _add_order(**changes):
+    fields = {
+        "id": "add-1",
+        "client_order_id": "QH-NVDA-test",
+        "symbol": "NVDA",
+        "side": "buy",
+        "qty": 1,
+        "filled_qty": 1,
+        "status": "filled",
+    }
+    fields.update(changes)
+    return SimpleNamespace(**fields)
+
+
+def _run(
+    m,
+    pos,
+    add_qty=1,
+    market_open=True,
+    cancel_ok=True,
+    order=None,
+    terminal_order=None,
+    label="tranche-2",
+):
+    order = order or _add_order(qty=add_qty, filled_qty=add_qty)
     cancels = []
 
     def _cancel(oid):
@@ -84,7 +125,11 @@ def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label=
     # stand-in for execution.broker (the function imports these three names at call time)
     def _get_order(oid):
         if oid == "add-1" and "add-1" in cancels:
-            return SimpleNamespace(status="canceled", filled_qty=order.filled_qty)
+            if terminal_order is not None:
+                return terminal_order
+            terminal = vars(order).copy()
+            terminal["status"] = "canceled"
+            return SimpleNamespace(**terminal)
         return order
     fake_broker_mod = SimpleNamespace(
         is_market_open=lambda: market_open,
@@ -101,6 +146,7 @@ def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label=
     )
     credits = []
     fake_guard_mod = SimpleNamespace(
+        tier_of_coid=lambda coid: "qhm" if str(coid).startswith("QH-") else None,
         apply_authorized_tier_fill_increase=lambda *a: credits.append(a) or True)
     m._ledger_credits = credits
     with mock.patch.dict(sys.modules, {"execution.ownership_guard": fake_guard_mod}), \
@@ -112,6 +158,44 @@ def _run(m, pos, add_qty=1, market_open=True, cancel_ok=True, order=None, label=
 
 
 class StopSafeAdd(unittest.TestCase):
+    def test_non_long_add_is_blocked_before_touching_buy_stop(self):
+        pos, dispatcher = _pos(direction="short"), FakeDispatcher()
+        manager = _mgr(pos, FakeBroker(-2), dispatcher)
+        got, cancels = _run(manager, pos)
+        self.assertEqual((got, cancels), (0, []))
+        self.assertEqual(dispatcher.adds, [])
+        self.assertEqual(pos.stop_order_id, "stop-old")
+
+    def test_stored_long_with_unproved_live_long_keeps_existing_stop(self):
+        pos, dispatcher = _pos(direction="long"), FakeDispatcher()
+        manager = _mgr(pos, FakeBroker(-2), dispatcher)
+        manager._strict_resync_qty = lambda *_args: None
+        got, cancels = _run(manager, pos)
+        self.assertEqual((got, cancels), (0, []))
+        self.assertEqual(dispatcher.adds, [])
+        self.assertEqual(pos.stop_order_id, "stop-old")
+        self.assertTrue(any("live long ownership" in alert for alert in manager.alerts))
+
+    def test_alpaca_uuid_order_id_is_accepted(self):
+        pos, dispatcher = _pos(qty=2), FakeDispatcher()
+        manager = _mgr(pos, FakeBroker(3), dispatcher, resync_qty=3)
+        order_id = uuid.uuid4()
+        original_submit = dispatcher.submit_limit
+
+        def submit(*args, **kwargs):
+            order = original_submit(*args, **kwargs)
+            order.id = order_id
+            return order
+
+        dispatcher.submit_limit = submit
+        got, _ = _run(
+            manager,
+            pos,
+            order=_add_order(id=order_id),
+        )
+        self.assertEqual(got, 1)
+        self.assertEqual(manager._ledger_credits[-1][-1], str(order_id))
+
     def test_filled_add_credits_the_ledger_with_the_exact_fill_and_broker_net(self):
         pos, d = _pos(qty=2), FakeDispatcher()
         m = _mgr(pos, FakeBroker(3), d, resync_qty=3)
@@ -122,7 +206,7 @@ class StopSafeAdd(unittest.TestCase):
     def test_unfilled_add_credits_nothing(self):
         pos, d = _pos(qty=2), FakeDispatcher()
         m = _mgr(pos, FakeBroker(2), d)
-        _run(m, pos, add_qty=1, order=SimpleNamespace(status="canceled", filled_qty=0))
+        _run(m, pos, add_qty=1, order=_add_order(status="canceled", filled_qty=0))
         self.assertEqual(m._ledger_credits, [])
 
     def test_market_closed_defers_untouched(self):
@@ -237,10 +321,78 @@ class StopSafeAdd(unittest.TestCase):
     def test_partial_fill_cancels_remainder_and_stops_held(self):
         pos, d = _pos(qty=2), FakeDispatcher()
         got, cancels = _run(_mgr(pos, FakeBroker(2), d, resync_qty=3), pos, add_qty=2,
-                            order=SimpleNamespace(status="partially_filled", filled_qty=1))
+                            order=_add_order(qty=2, status="partially_filled", filled_qty=1))
         self.assertEqual(got, 1)
         self.assertEqual(cancels, ["stop-old", "add-1"])
         self.assertEqual(d.stops, [("NVDA", 3, "sell", 200.0)])
+
+    def test_contradictory_polled_order_never_credits_qhm(self):
+        mutations = (
+            {"id": "other"},
+            {"id": True},
+            {"id": 1},
+            {"symbol": "MSFT"},
+            {"side": "sell"},
+            {"client_order_id": "QH-MSFT-test"},
+            {"client_order_id": "DT-NVDA-test"},
+            {"qty": 2},
+            {"qty": True},
+            {"filled_qty": 1.5},
+            {"filled_qty": 2},
+            {"status": "rejected", "filled_qty": 1},
+            {"status": "filled", "filled_qty": 0},
+            {"status": "new", "filled_qty": 1},
+            {"status": "partially_filled", "filled_qty": 0},
+            {"status": "partially_filled", "filled_qty": 1},
+            {"status": "unknown", "filled_qty": 0},
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                pos, dispatcher = _pos(qty=2), FakeDispatcher()
+                manager = _mgr(pos, FakeBroker(3), dispatcher, resync_qty=3)
+                got, _ = _run(
+                    manager,
+                    pos,
+                    add_qty=1,
+                    order=_add_order(**mutation),
+                )
+                self.assertEqual(got, 0)
+                self.assertEqual(manager._ledger_credits, [])
+                self.assertEqual(pos.state, qm.HoldState.PENDING_STOP_REPLACE)
+
+    def test_contradictory_terminal_order_never_credits_qhm(self):
+        pos, dispatcher = _pos(qty=2), FakeDispatcher()
+        manager = _mgr(pos, FakeBroker(3), dispatcher, resync_qty=3)
+        got, _ = _run(
+            manager,
+            pos,
+            add_qty=2,
+            order=_add_order(qty=2, status="partially_filled", filled_qty=1),
+            terminal_order=_add_order(
+                qty=2,
+                status="canceled",
+                filled_qty=1,
+                symbol="MSFT",
+            ),
+        )
+        self.assertEqual(got, 0)
+        self.assertEqual(manager._ledger_credits, [])
+        self.assertEqual(pos.state, qm.HoldState.PENDING_STOP_REPLACE)
+
+    def test_contradictory_submit_response_is_not_bound_or_credited(self):
+        class WrongSubmitDispatcher(FakeDispatcher):
+            def submit_limit(
+                self, broker, sym, qty, side, price, client_order_id=None
+            ):
+                self.adds.append((sym, qty, side, price))
+                return _add_order(symbol="MSFT", filled_qty=0, status="new")
+
+        pos, dispatcher = _pos(qty=2), WrongSubmitDispatcher()
+        manager = _mgr(pos, FakeBroker(2), dispatcher, resync_qty=2)
+        got, _ = _run(manager, pos)
+        self.assertEqual(got, 0)
+        self.assertEqual(manager._ledger_credits, [])
+        self.assertEqual(pos.state, qm.HoldState.PENDING_STOP_REPLACE)
 
     def test_stop_resubmit_failure_goes_pending_with_alert(self):
         pos, d = _pos(qty=2), FakeDispatcher(stop_ok=False)
