@@ -287,19 +287,28 @@ def _tier_for_fill_order(
             # Prefix-only attribution is insufficient on the kill path: a stale
             # F6-MSFT tag on an NVDA order would otherwise erase an active NVDA
             # fill. Bind the complete generated COID envelope to broker facts.
-            parts = coid.split("-", 4) if isinstance(coid, str) else []
+            parts = coid.split("-") if isinstance(coid, str) else []
+            try:
+                (
+                    tag_tier,
+                    tag_symbol,
+                    tag_action,
+                    tag_timestamp,
+                    tag_nonce,
+                ) = parts
+            except ValueError:
+                tag_tier = tag_symbol = tag_action = tag_timestamp = tag_nonce = ""
             expected_code = "QH" if tier == "qhm" else "F6"
             expected_action = "b" if order_side == "buy" else "s"
             if (
-                len(parts) != 5
-                or parts[0] != expected_code
-                or parts[1].upper() != order_symbol
-                or parts[1] != parts[1].upper()
-                or not parts[1].replace(".", "").isalnum()
-                or parts[2] != expected_action
-                or not parts[3].isdigit()
-                or int(parts[3]) <= 0
-                or not parts[4].isalnum()
+                tag_tier != expected_code
+                or tag_symbol.upper() != order_symbol
+                or tag_symbol != tag_symbol.upper()
+                or not tag_symbol.replace(".", "").isalnum()
+                or tag_action != expected_action
+                or not tag_timestamp.isdigit()
+                or int(tag_timestamp) <= 0
+                or not tag_nonce.isalnum()
             ):
                 logger.warning(
                     "kill-switch protected order tag mismatch for %s — "
