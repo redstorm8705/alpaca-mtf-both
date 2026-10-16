@@ -12,7 +12,8 @@
   ],
   "expected_rate": "once on the first successful Saturday or Sunday weekly post-mortem run",
   "window_sessions": 2,
-  "window_reason": "The report has one scheduled run per weekend; two sessions cover the Saturday run and Sunday retry without waiting five trading days for a weekly job.",
+  "window_reason": "The report runs only on Saturday and Sunday mornings; nine calendar days from the ship date always include one full weekend (window_days, post_live_eval 2026-10-16).",
   "reversal": "the weekly tier sum differs from realized cash, a co-held lifecycle is attributed to the wrong tier, or an open partial is counted in W/L",
-  "verification": "tests/test_weekly_postmortem_truth.py"
+  "verification": "tests/test_weekly_postmortem_truth.py",
+  "window_days": 9
 }

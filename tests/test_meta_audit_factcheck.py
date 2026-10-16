@@ -40,6 +40,23 @@ class FactCheck(unittest.TestCase):
         self.assertEqual(len(fc["withheld"]), 3)
 
     def test_a_mechanically_present_quote_passes(self):
+        report = REPORT.replace("entered NVDA without any stop", "lost $4.20 on NVDA at its stop").replace(
+            "day-tier entries have no stop", "the fact-check helper parses quotes loosely")
+        rows = [{"id": "verdict", "status": "SUPPORTED", "source": "DATA",
+                 "quote": "EXIT NVDA | pnl=$-4.20 | reason=protective_stop"},
+                {"id": "directive0", "status": "UNSUPPORTED", "source": "DATA", "quote": ""},
+                {"id": "finding0", "status": "SUPPORTED", "source": "auto_ai_audit.py",
+                 "quote": "def _fact_check(text: str | None, data: str) -> dict:"}]
+        with _checker(rows):
+            fc = aa._fact_check(report, DATA)
+        self.assertEqual(fc["kept"], 2)
+        self.assertTrue(fc["verdict"].startswith("FAIL"))
+        self.assertEqual(fc["directives"], [])
+        self.assertEqual(fc["findings"][0]["file"], "auto_ai_audit.py")
+
+    def test_absence_claim_needs_a_record_of_the_absence(self):
+        # 2026-10-15: "no protective stops" was "proven" by quoting a line that simply had no stop field, and a code
+        # quote containing `None`. An absence claim needs a trading-record line that itself states the absence.
         rows = [{"id": "verdict", "status": "SUPPORTED", "source": "DATA",
                  "quote": "EXIT NVDA | pnl=$-4.20 | reason=protective_stop"},
                 {"id": "directive0", "status": "UNSUPPORTED", "source": "DATA", "quote": ""},
@@ -47,10 +64,13 @@ class FactCheck(unittest.TestCase):
                  "quote": "def _fact_check(text: str | None, data: str) -> dict:"}]
         with _checker(rows):
             fc = aa._fact_check(REPORT, DATA)
-        self.assertEqual(fc["kept"], 2)
+        self.assertEqual(fc["kept"], 0)
+        data = DATA + f"\n[{TODAY}T07:11] ENTRY AMD | tier=day | protective_stop=NOT_RECORDED_IN_DAY_LOG"
+        rows[0]["quote"] = "ENTRY AMD | tier=day | protective_stop=NOT_RECORDED_IN_DAY_LOG"
+        with _checker(rows):
+            fc = aa._fact_check(REPORT, data)
+        self.assertEqual(fc["kept"], 1)
         self.assertTrue(fc["verdict"].startswith("FAIL"))
-        self.assertEqual(fc["directives"], [])
-        self.assertEqual(fc["findings"][0]["file"], "auto_ai_audit.py")
 
     def test_checker_failure_withholds_everything(self):
         with mock.patch.object(aa, "call_gai", side_effect=RuntimeError("down")):
@@ -64,8 +84,8 @@ class FactCheck(unittest.TestCase):
                "fact_check": {"checked": 3, "kept": 0, "verdict": "", "directives": [], "findings": [],
                               "withheld": ["a", "b", "c"], "note": ""}}
         txt = aa._meta_report_blocks(res, "Groq")[0]["text"]["text"]
-        self.assertIn("verdict withheld", txt)
-        self.assertIn("0 of 3 claims proven", txt)
+        self.assertIn("overall grade is hidden", txt)
+        self.assertIn("0 of 3 points hold up", txt)
         self.assertNotIn("without any stop", txt)
         self.assertNotIn("Raise MIN_SCORE", txt)
 

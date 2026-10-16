@@ -215,6 +215,31 @@ class Evaluator(unittest.TestCase):
         self.assertEqual(r["changes"][0]["verdict"], "RAN")
         self.assertEqual(r["findings"], [])
 
+    def test_proof_written_between_sessions_counts(self):
+        # 2026-10-13: the fill-timestamp canonicalisation ran once at 17:46 ET (after the close, before the next
+        # session) and was reported UNEXERCISED_EXPIRED. Any calendar day since the ship counts.
+        log = "2026-10-12 17:46:00 | INFO | x | [cohold-lift] CO-HOLD BRACKET ENTRY placed\n"
+        shipped = datetime(2026, 10, 12, 17, 40, tzinfo=ET)
+        r = self._with_logs({"logs/day_tier_runner_cron.log": log},
+                            {"cohold-lift": _rec(window_sessions=1, window_reason="x")}, shipped, date(2026, 10, 13))
+        self.assertEqual(r["changes"][0]["verdict"], "RAN")
+        self.assertEqual(r["findings"], [])
+
+    def test_window_days_waits_for_a_weekend_job(self):
+        # A Saturday-only report shipped Sunday 10/11: two weekday sessions must not expire it.
+        shipped = datetime(2026, 10, 11, 15, 0, tzinfo=ET)
+        rec = _rec(window_sessions=2, window_reason="x", window_days=9)
+        r = self._with_logs({"logs/day_tier_runner_cron.log": ""}, {"cohold-lift": rec}, shipped, date(2026, 10, 13))
+        self.assertEqual(r["changes"][0]["verdict"], "NOT_EXERCISED")
+        self.assertEqual(r["findings"], [])
+        cal = self.CAL + [date(2026, 10, d) for d in (14, 15, 16, 19, 20)]
+        with mock.patch.object(self, "CAL", cal):
+            sat = "2026-10-17 09:00:00 | INFO | x | [cohold-lift] CO-HOLD BRACKET ENTRY placed\n"
+            r = self._with_logs({"logs/day_tier_runner_cron.log": sat}, {"cohold-lift": rec}, shipped, date(2026, 10, 20))
+            self.assertEqual(r["changes"][0]["verdict"], "RAN")
+            r = self._with_logs({"logs/day_tier_runner_cron.log": ""}, {"cohold-lift": rec}, shipped, date(2026, 10, 20))
+            self.assertEqual([f["finding"] for f in r["findings"]], ["UNEXERCISED_EXPIRED"])
+
     def test_undated_traceback_inherits_the_session_date(self):
         logs = {"logs/day_tier_runner_cron.log": "2026-10-09 14:00:00 | INFO | x | fine\n"
                                                  "2026-10-12 14:00:00 | INFO | x | start\n"

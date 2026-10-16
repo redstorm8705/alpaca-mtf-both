@@ -155,18 +155,33 @@ def evaluate(session: date, cal: list) -> dict:
         if shipped is None:
             continue
         pos = window_position(shipped, session, cal)
+        live = [d for d in cal if datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET) >= shipped and d <= session]
         try:
             window = int(rec.get("window_sessions") or 5)
+            # window_days (calendar days after the ship): for a job that runs outside trading sessions, e.g. a
+            # weekend report. The window then ends at the first session on/after ship date + window_days; until
+            # that session exists it has not ended (2026-10-13: a Saturday-only job expired after two weekdays).
+            window_days = int(rec["window_days"]) if rec.get("window_days") is not None else None
         except (TypeError, ValueError):
             findings.append({"change": rec.get("change", path.stem), "finding": "BAD_WINDOW",
-                             "detail": f"window_sessions unreadable: {rec.get('window_sessions')!r}"})
+                             "detail": f"window unreadable: sessions={rec.get('window_sessions')!r} "
+                                       f"days={rec.get('window_days')!r}"})
             continue
-        if pos is None or pos > window + _EXPIRY_GRACE:
+        if pos is None:
             continue
-        # Cumulative over the window so far (cold-2nd F1): a change that ran on any earlier window session has RUN.
-        live = [d for d in cal if datetime(d.year, d.month, d.day, 9, 30, tzinfo=ET) >= shipped and d <= session]
+        if window_days is not None:
+            deadline = shipped.date() + timedelta(days=window_days)
+            ends = [i + 1 for i, d in enumerate(live) if d >= deadline]
+            window = ends[0] if ends else pos + 1
+        if pos > window + _EXPIRY_GRACE:
+            continue
+        # Cumulative over the window so far (cold-2nd F1), counted on EVERY calendar day from the ship date — a proof
+        # line written in the evening or on a weekend is dated between sessions (2026-10-13: the fill-timestamp
+        # canonicalisation ran once at 17:46 ET and was never counted).
+        last_day = session if pos <= window else live[window - 1]
+        days = [shipped.date() + timedelta(days=i) for i in range((last_day - shipped.date()).days + 1)]
         n_today = proof_count(rec, session) if pos <= window else 0
-        n_total = n_today + sum(proof_count(rec, d) for d in live[:min(pos, window)] if d != session)
+        n_total = sum(proof_count(rec, d) for d in days)
         if pos > window and n_total > 0:
             continue                         # ran within its window; nothing more to report
         verdict = "RAN" if n_total > 0 else "NOT_EXERCISED"
@@ -175,7 +190,7 @@ def evaluate(session: date, cal: list) -> dict:
                         "verdict": verdict})
         if n_total == 0 and pos >= window:   # the window's last session, or a missed run inside the grace
             findings.append({"change": rec.get("change", path.stem), "finding": "UNEXERCISED_EXPIRED",
-                             "detail": f"no proof match in any of {window} session(s); expected rate: "
+                             "detail": f"no proof match since it shipped ({window} session(s) checked); expected rate: "
                                        f"{rec.get('expected_rate')}. Needs a historical replay proving the code fires, "
                                        f"or a remove / kill-flag decision."})
     if new_sigs:
@@ -234,11 +249,20 @@ def main(argv: "list | None" = None) -> int:
         RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         (RESULTS_DIR / f"{session.isoformat()}.json").write_text(json.dumps(res, indent=1), encoding="utf-8")
     ran = [c["change"] for c in res["changes"] if c["verdict"] == "RAN"]
-    idle = [c["change"] for c in res["changes"] if c["verdict"] != "RAN"]
-    msg = (f"Post-live check {session:%a %b %d}: {len(ran)} change(s) ran"
-           + (f" ({', '.join(ran)})" if ran else "")
-           + (f"; {len(idle)} not exercised yet ({', '.join(idle)})" if idle else "")
-           + (f"; {len(res['findings'])} finding(s): " + "; ".join(res["issues"]) if res["findings"] else "; no findings"))
+    expired = {f["change"] for f in res["findings"] if f["finding"] == "UNEXERCISED_EXPIRED"}
+    idle = [c["change"] for c in res["changes"] if c["verdict"] != "RAN" and c["change"] not in expired]
+    # PLAIN ENGLISH (owner 2026-10-16): what worked, what is still waiting, what needs a look — names in the results file.
+    def _plain(f: dict, link: str) -> str:
+        url = next((w for w in str(link).split() if w.startswith("http")), "issue not filed")
+        if f["finding"] == "UNEXERCISED_EXPIRED":
+            return f"'{f['change']}' never ran in its check window — needs a replay or a decision ({url})"
+        if str(f["finding"]).startswith("NEW_ERRORS"):
+            return f"new kinds of errors showed up in today's logs ({url})"
+        return f"{f['change']}: {f['finding']} ({url})"
+    msg = (f"New-code check for {session:%a %b %d}: {len(ran)} recent change(s) have run since they shipped"
+           + (f"; {len(idle)} are still waiting for the situation they handle (normal)" if idle else "")
+           + (". Needs a look: " + "; ".join(_plain(f, i) for f, i in zip(res["findings"], res["issues"], strict=True))
+              if res["findings"] else ". Nothing needs attention."))
     # Dated + tagged with this change's slug: the evaluator's own unique proof line (cold-2nd F2; board change_id tag).
     print(f"{session.isoformat()} post-live eval [post-live-evaluator]: {msg}")
     if not dry:
