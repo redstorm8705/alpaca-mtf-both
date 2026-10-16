@@ -40,6 +40,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 _ROOT = Path(__file__).resolve().parent
 _LOGS = _ROOT / "logs"
@@ -50,6 +51,7 @@ logger = logging.getLogger("ledger_sync")
 _WALLTIME_WARN_S = 10.0
 _WALLTIME_CRIT_S = 30.0
 _HEALED_FALSE_STREAK_ALERT = 3
+_ET = ZoneInfo("America/New_York")
 _NET_STABILITY_SAMPLE_GAP_S = 3.0   # gap between the two /v2/positions samples (a settling leg moves)
 _UNSETTLED_ORDER_STATUSES = frozenset({
     "partially_filled", "pending_new", "pending_cancel", "pending_replace",
@@ -159,6 +161,51 @@ def _owner_exit_explained(pending: dict, fills: list, coid_map: dict, tier_of_co
     return out
 
 
+def _qty(v) -> str:
+    """'1 share' / '3 shares' for a number, the raw value otherwise (plain-English share counts)."""
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return f"{v:g} share" + ("" if v == 1 else "s")
+    return str(v)
+
+
+def _pending_lines(pending: dict) -> "list[str]":
+    """One plain-English line per pending protected reduction: symbol, tier, shares before -> after, confirm command."""
+    from tier_names import tier_label
+    out = []
+    for key, v in (pending or {}).items():
+        sym, _, tier = str(key).partition("/")
+        # the guard's own command (ownership_guard: target = the broker net); fallback only if it is missing
+        _net = v.get("net")
+        cmd = v.get("confirm_cmd") or (f"confirm_ledger_heal.py {sym} {tier} {_net:g}"
+                                       if isinstance(_net, (int, float)) else "confirm_ledger_heal.py (see logs/mtf_bot.log)")
+        out.append(f"• {sym}: the bot's {tier_label(tier)}{' (long-term hold)' if tier == 'qhm' else ''} record says {_qty(v.get('was'))}, "
+                   f"the broker now shows {_qty(v.get('net'))}. If you sold them yourself, confirm with: "
+                   f"`python3 {cmd}`")
+    return out
+
+
+def _confirmation_message(pending: dict) -> str:
+    """First-pass page: protected shares left the account by a sale the owning tier did not make."""
+    return ("Shares in a protected tier were sold, and the bot could not confirm the sale was that tier's own order "
+            "(for example, a manual sale in the Alpaca app). The bot has paused updating its share-ownership record "
+            "until you confirm:\n" + "\n".join(_pending_lines(pending)) + _CONFIRM_FOOTER)
+
+
+_CONFIRM_FOOTER = ("\nRun the command on the server (in /home/ubuntu/mtf-bot). If you did NOT sell these shares, do not "
+                   "confirm: tell the engineering session, because another part of the bot may have sold them.")
+
+
+def _stale_message(streak: dict, pending: dict) -> str:
+    """Escalation: the record has not updated for several passes. Sent once at the threshold, then once a day."""
+    since = _parse_utc(streak.get("last_healed_utc"))
+    since_txt = (f"since {since.astimezone(ZoneInfo('America/Los_Angeles')):%a %b %d %I:%M %p} PT"
+                 if since else "for several runs")
+    body = ("\n".join(_pending_lines(pending)) + _CONFIRM_FOOTER if pending
+            else f"Reason: {', '.join(sorted({str(r) for r in (streak.get('reasons') or [])})) or 'unknown'}.")
+    return (f"The bot's share-ownership record has not updated {since_txt} ({streak.get('count')} runs in a row). "
+            "Anything that reads which tier owns which shares sees the old record until this clears:\n" + body)
+
+
 def sync_once() -> dict:
     """Run one full-replay maintenance pass. Returns a result dict for logging/tests.
     NEVER raises into a cron caller — the ENTIRE body (imports, fetch, attribute, sync,
@@ -257,7 +304,8 @@ def sync_once() -> dict:
         if elapsed > _WALLTIME_CRIT_S:
             logger.critical("ledger_sync wall-time %.1fs > %ss — Alpaca slow / "
                             "pagination hang?", elapsed, _WALLTIME_CRIT_S)
-            _slack(f":warning: ledger_sync slow: {elapsed}s (fills={len(fills)})")
+            _slack(f"The share-ownership record update took {elapsed}s (normal is a few seconds) — Alpaca may be slow. "
+                   "No action needed unless this repeats.")
         elif elapsed > _WALLTIME_WARN_S:
             logger.warning("ledger_sync wall-time %.1fs (fills=%d orders=%d)",
                            elapsed, len(fills), len(orders))
@@ -289,17 +337,19 @@ def sync_once() -> dict:
                                    "— no operator page; awaiting the owner's auto-heal.", _k)
                 _pending = {k: v for k, v in _pending.items() if not _explained.get(k)}
             if _pending and streak["count"] == 1:
-                _cmds = " ; ".join(v.get("confirm_cmd", "") for v in _pending.values())
-                _detail = {k: {"was": v.get("was"), "now": v.get("would_be"), "net": v.get("net")}
-                           for k, v in _pending.items()}
-                _slack(":warning: ledger_sync: protected-floor reduction needs OPERATOR CONFIRMATION "
-                       f"{_detail} — if YOU manually closed it, run (in /home/ubuntu/mtf-bot): "
-                       f"{_cmds} . Otherwise INVESTIGATE A BREACH (a non-owner tier may have sold "
-                       "protected shares). Sells stay frozen until resolved.")
-            if streak["count"] >= _HEALED_FALSE_STREAK_ALERT:
-                _rs = set(streak["reasons"])
-                _slack(f":rotating_light: ledger_sync FAILING: {streak['count']} "
-                       f"consecutive non-heals (reasons={_rs}) — ledger STALE")
+                _slack(_confirmation_message(_pending))
+            # Stale-record reminder (CEO 2026-10-16: a manual LLY sale paged on every 20-min pass): page once when the
+            # streak reaches the threshold, then at most once per ET day while it stays unresolved — never every pass.
+            _today_et = f"{datetime.now(_ET):%Y-%m-%d}"
+            if (streak["count"] >= _HEALED_FALSE_STREAK_ALERT
+                    and (streak["count"] == _HEALED_FALSE_STREAK_ALERT
+                         or streak.get("stale_paged_et_date") != _today_et)):
+                streak["stale_paged_et_date"] = _today_et
+                try:
+                    _msg = _stale_message(streak, led.get("pending_heal") or {})
+                except Exception as _me:  # noqa: BLE001 — a formatting error must not skip _write_streak (re-page flood)
+                    _msg = f"The bot's share-ownership record has not updated ({streak.get('count')} runs in a row): {_me}"
+                _slack(_msg)
             _write_streak(streak)   # keeps last_healed_utc (unchanged by a non-heal)
             return {"ok": False, "healed": False, "reason": reason,
                     "elapsed_s": elapsed, "fills": len(fills), "orders": len(orders)}
@@ -345,7 +395,8 @@ def sync_once() -> dict:
         # ledger is never partially written).
         logger.critical("ledger_sync: unhandled error at stage=%s — ledger left "
                         "stale: %s", stage, e)
-        _slack(f":rotating_light: ledger_sync failed at stage={stage}: {e}")
+        _slack(f"The share-ownership record update failed ({stage} step: {e}). The last good record stays in use; "
+               "it retries on its next run. If this repeats, check logs/mtf_bot.log on the server.")
         return {"ok": False, "stage": stage, "error": str(e)}
 
 

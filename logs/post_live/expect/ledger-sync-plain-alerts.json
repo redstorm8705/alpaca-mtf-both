@@ -1,0 +1,18 @@
+{
+  "change": "ledger-sync-plain-alerts",
+  "tier": 1,
+  "paths": [
+    "run_ledger_sync.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "ledger_sync (OK: \\d+ fills|NOT healed \\(reason=)"
+    }
+  ],
+  "expected_rate": "every ledger-sync cron pass (about every 20 minutes during market hours)",
+  "window_sessions": 1,
+  "window_reason": "The cron runs many times per session; one session shows the pass still completes.",
+  "reversal": "a ledger-sync pass that raises or stops logging, or a STALE reminder sent more than once on the same ET day for one unresolved streak",
+  "verification": "tests/test_ledger_sync_owner_exit.py"
+}

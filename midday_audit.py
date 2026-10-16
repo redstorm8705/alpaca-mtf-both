@@ -42,7 +42,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("midday_audit")
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────────────
 SLACK_WEBHOOK  = os.getenv("SLACK_WEBHOOK_URL", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL   = GAI_MODEL_LADDER[0]   # primary + display; the full ladder drives the fallback loop
@@ -59,6 +59,44 @@ GEMINI_REPORT  = LOGS_DIR / f"midday_gemini_{AUDIT_DATE}.txt"
 ATH_WARN_PCT    = 2.0   # flag entries taken within 2% of ATH
 MRI_WARN_LEVELS = {"STRESSED", "CRISIS"}
 STOP_HIT_WARN   = 0.5   # flag if >50% of today's entries hit their stop
+
+
+def _unscored_source(e: dict) -> "str | None":
+    """Which non-12-point entry path wrote this event, or None for a 12-point-scored entry.
+
+    trade_logger.log_event() defaults `score` to 0 and always writes it (trade_logger.py:93,116), so a missing score
+    is never visible as a missing key: the source must be read from the record's own markers. Paths that do not use
+    the 12-point system, with the markers they write:
+      Day tier         — tier="daytrade", data_source="daytrade"           (execution/day_trade_manager.py:2736)
+      Day->Swing promo — data_source="promotion", promoted_from_day_tier    (execution/day_promotion.py:598)
+      Swing breakout   — setup="c2_breakout_55d"                            (execution/swing_breakout_manager.py:332)
+    Their logged 0 printed as "score 0/12", which the Gemini audits read as a MIN_SCORE gate bypass (2026-10-09 and
+    2026-10-13 midday reports). Any other entry keeps its logged score, including a real 0."""
+    if e.get("tier") == "daytrade" or e.get("data_source") == "daytrade":
+        return "Day tier"
+    if e.get("promoted_from_day_tier") or e.get("data_source") == "promotion":
+        return "Day-to-Swing promotion"
+    if e.get("setup") == "c2_breakout_55d":
+        return "Swing 55-day breakout"
+    return None
+
+
+def _entry_score(e: dict) -> "int | None":
+    """The entry's 12-point score; None for an entry path that is not 12-point scored (see _unscored_source) or an
+    unparseable value."""
+    if _unscored_source(e) is not None:
+        return None
+    try:
+        return int(e.get("score") or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _score_label(score: "int | None", source: "str | None" = None) -> str:
+    if score is not None:
+        return f"score {score}/12"
+    return f"no 12-pt score ({source})" if source else "no 12-pt score"
+
 
 # ── SSL context ───────────────────────────────────────────────────────────────
 try:
@@ -163,7 +201,7 @@ def analyse_entries(events: list[dict]) -> dict:
 
     for e in entries:
         sym      = e.get("symbol", "?")
-        score    = e.get("score", 0)
+        score    = _entry_score(e)
         mri_lvl  = e.get("mri_level", "NORMAL")
         price    = e.get("price", 0)
         ts       = e.get("ts", "")[:19].replace("T", " ")
@@ -177,7 +215,7 @@ def analyse_entries(events: list[dict]) -> dict:
             entry_flags.append(f"MRI={mri_lvl} at entry")
 
         # Low-conviction entry
-        if 0 < score < 10:
+        if score is not None and 0 < score < 10:
             entry_flags.append(f"low score ({score}/12)")
 
         if entry_flags:
@@ -185,6 +223,7 @@ def analyse_entries(events: list[dict]) -> dict:
                 "symbol": sym,
                 "ts":     ts,
                 "score":  score,
+                "unscored_source": _unscored_source(e),
                 "mri":    mri_lvl,
                 "price":  price,
                 "source": data_src,
@@ -247,7 +286,8 @@ def analyse_pnl(events: list[dict]) -> dict:
             "exit_price":  xp,
             "size":        qty,
             "exit_event":  ex.get("event", "exit"),
-            "score":       int(en.get("score") or 0),
+            "score":       _entry_score(en),
+            "unscored_source": _unscored_source(en),
             "mri_level":   en.get("mri_level", "NORMAL"),
             "stop":        float(en.get("stop")   or 0),
             "target":      float(en.get("target") or 0),
@@ -458,19 +498,19 @@ def build_slack_body(entry_analysis: dict, mri_analysis: dict, log_analysis: dic
         if best and worst:
             lines.append(
                 f"  Best: {best['symbol']} +${best['pnl']:.2f} "
-                f"(score {best['score']}/12, MRI={best['mri_level']}) | "
+                f"({_score_label(best['score'], best.get('unscored_source'))}, MRI={best['mri_level']}) | "
                 f"Worst: {worst['symbol']} ${worst['pnl']:.2f} "
-                f"(score {worst['score']}/12, {worst['exit_event']})"
+                f"({_score_label(worst['score'], worst.get('unscored_source'))}, {worst['exit_event']})"
             )
         # Score vs outcome: group closed trades by score bracket
-        by_score: dict[int, list] = {}
+        by_score: "dict[int | None, list]" = {}
         for t in pnl.get("trades", []):
             by_score.setdefault(t["score"], []).append(t["pnl"])
         if len(by_score) > 1:
             score_summary = " | ".join(
-                f"{s}/12: {sum(1 for p in ps if p>0)}/{len(ps)}W "
+                f"{f'{s}/12' if s is not None else 'no 12-pt score'}: {sum(1 for p in ps if p>0)}/{len(ps)}W "
                 f"(${sum(ps):+.2f})"
-                for s, ps in sorted(by_score.items(), reverse=True)
+                for s, ps in sorted(by_score.items(), key=lambda kv: -1 if kv[0] is None else kv[0], reverse=True)
             )
             lines.append(f"  Score→Outcome: {score_summary}")
     else:
@@ -509,7 +549,7 @@ def build_slack_body(entry_analysis: dict, mri_analysis: dict, log_analysis: dic
             flag_str = ", ".join(fe["flags"])
             lines.append(
                 f"  • {fe['symbol']} @ {fe['ts']} PT — "
-                f"score {fe['score']}/12 | "
+                f"{_score_label(fe['score'], fe.get('unscored_source'))} | "
                 f"MRI={fe['mri']} | {flag_str}"
             )
     else:
@@ -606,7 +646,7 @@ def _build_gemini_prompt(entry_anal: dict, mri_anal: dict, log_anal: dict,
     flagged_str = ""
     for fe in entry_anal.get("flagged_entries", []):
         flagged_str += (
-            f"  - {fe['symbol']} @ {fe['ts']} PT | score {fe['score']}/12 | "
+            f"  - {fe['symbol']} @ {fe['ts']} PT | {_score_label(fe['score'], fe.get('unscored_source'))} | "
             f"MRI={fe['mri']} | flags: {', '.join(fe['flags'])}\n"
         )
     if not flagged_str:
@@ -624,7 +664,7 @@ def _build_gemini_prompt(entry_anal: dict, mri_anal: dict, log_anal: dict,
                    if _stop and _tgt else "levels=unknown")
         trades_str += (
             f"  {t['symbol']}: entry ${_ep:.2f} → exit ${t['exit_price']:.2f} "
-            f"({pnl_sign}${t['pnl']:.2f}) | score {t['score']}/12 | MRI={t['mri_level']} | "
+            f"({pnl_sign}${t['pnl']:.2f}) | {_score_label(t['score'], t.get('unscored_source'))} | MRI={t['mri_level']} | "
             f"{t['exit_event']} | {_lvls}\n"
         )
     if not trades_str:
@@ -743,6 +783,7 @@ Level distribution: {mri_anal.get('levels', {})}
 - 5 simultaneous open positions during 9:35–10:00 AM ET: BUCKET_B_MAX_POSITIONS_POWER=5 — intentional power-hour expansion. NOT a max-positions violation.
 - Error 42210000 from GTC stop submission in extended hours (pre-RTH / AH): known open bug OM-BUG-1, tracked. Do NOT flag pre-RTH/AH occurrences. DO flag if 42210000 occurs during RTH (9:30–16:00 ET).
 - Exit P&L = $0.00 on overnight_breakeven exit reason: valid if stop_price was pushed to entry_price. NOT a recording bug.
+- "no 12-pt score (Day tier | Day-to-Swing promotion | Swing 55-day breakout)" on a trade: those entry paths are not scored on the 12-point system (the label is set by code from the event's own tier/source/setup fields), so MIN_LONG_SCORE / MIN_SHORT_SCORE do not apply to them. NOT a score-gate bypass. A zero score on any OTHER entry is a real logged score and may be flagged.
 
 ---
 
