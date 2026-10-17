@@ -75,6 +75,48 @@ def _covers_list(argv):
     return out
 
 
+_PRIOR_TOP = 5          # how many top-ranked existing records a design must cite (owner_approval_gates_2026-10-17.md)
+_STOP = {"design", "record", "claude", "build", "tier", "owner", "change", "changes", "with", "from", "that", "this"}
+
+
+def prior_work_hits(doc_rel: str, covers: list) -> list:
+    """Existing records most related to this design: logs/design_records/*.md, strategy/*admissions*.json, handoff.md,
+    ranked by how many of the design's title words and covered module names each contains. Ties at the cut are kept."""
+    import glob
+    import re
+    text = open(os.path.join(REPO, doc_rel), encoding="utf-8").read()
+    title = next((ln for ln in text.splitlines() if ln.startswith("# ")), "")
+    terms = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9_]{3,}", title)} - _STOP
+    terms |= {os.path.splitext(os.path.basename(c))[0].lower() for c in covers}
+    terms = {t for t in terms if t}
+    cands = glob.glob(os.path.join(REPO, "logs", "design_records", "*.md"))
+    cands += glob.glob(os.path.join(REPO, "strategy", "*admissions*.json")) + [os.path.join(REPO, "handoff.md")]
+    scored = []
+    for c in cands:
+        if os.path.realpath(c) == os.path.realpath(os.path.join(REPO, doc_rel)) or not os.path.exists(c):
+            continue
+        try:
+            body = open(c, encoding="utf-8", errors="ignore").read().lower()
+        except OSError:
+            continue
+        score = sum(1 for t in terms if t in body)
+        if score:
+            scored.append((score, os.path.relpath(c, REPO)))
+    scored.sort(reverse=True)
+    if len(scored) > _PRIOR_TOP:
+        cut = scored[_PRIOR_TOP - 1][0]
+        scored = [x for x in scored if x[0] >= cut]
+    return [p for _, p in scored]
+
+
+def prior_work_missing(doc_rel: str, covers: list) -> "tuple[list, list]":
+    text = open(os.path.join(REPO, doc_rel), encoding="utf-8").read()
+    hits = prior_work_hits(doc_rel, covers)
+    sec = text.split("## Prior work", 1)[1] if "## Prior work" in text else ""
+    missing = [h for h in hits if os.path.basename(h) not in sec]
+    return hits, (missing if sec else hits)
+
+
 def main(argv):
     if not argv or argv[0].startswith("-"):
         sys.stderr.write(__doc__)
@@ -111,6 +153,24 @@ def main(argv):
     for c in covers:
         c = c[2:] if c.startswith("./") else c
         norm_covers.append(c)
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import required_questions as rq
+        unanswered = rq.unanswered(open(os.path.join(REPO, doc), encoding="utf-8").read())
+    except Exception as exc:
+        unanswered = [f"(required_questions unavailable: {exc})"]
+    if unanswered:
+        sys.stderr.write("record_design: REFUSED — the design record's '## Required questions' section must answer "
+                         f"every owner question (required_questions.py --block); unanswered: {unanswered}\n")
+        return 2
+    hits, missing = prior_work_missing(doc, norm_covers)
+    print("existing work most related to this design (cite each under '## Prior work'):")
+    for h in hits:
+        print(f"  - {h}{'   <-- NOT CITED' if h in missing else ''}")
+    if missing:
+        sys.stderr.write("record_design: REFUSED — the design record must have a '## Prior work' section citing each "
+                         f"related existing record by file name: {missing}\n")
+        return 2
     os.makedirs(MARKER_DIR, exist_ok=True)
     marker_path = os.path.join(MARKER_DIR, f"design__{slug}.json")
     # Peterffy board-seat review, 2026-08-12: atomic write (temp file + os.replace) — plain

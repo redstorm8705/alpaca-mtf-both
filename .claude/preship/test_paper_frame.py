@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import unittest
+
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -95,7 +96,12 @@ class HookFrameCheck(unittest.TestCase):
 
     def test_hook_allows_framed_board_prompt(self):
         self.assertEqual(self._run_hook(
-            "Board seat: execution. Paper account, $2.5K to $25K goal. Vote A or B on the fork."), 0)
+            "Board seat: execution. Paper account, $2.5K to $25K goal. Vote A or B on the fork.\n" + _rq_block()), 0)
+
+
+def _rq_block():
+    import required_questions
+    return required_questions.block()
 
 
 if __name__ == "__main__":

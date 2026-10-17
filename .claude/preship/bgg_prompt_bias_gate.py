@@ -164,6 +164,28 @@ def main() -> None:
                 "evaluation first, 7% daily kill switch the only daily brake) and retry.\n"
             )
             sys.exit(2)
+        # REQUIRED QUESTIONS (owner 2026-10-17, required_questions.json): a board/design prompt must carry the owner's
+        # full question block. Cold code reviews of a diff are not design prompts and are not required to.
+        try:
+            import required_questions as rq
+            # board/design-fork prompts always; other design wording only when the prompt asks for a review/verdict,
+            # so an ordinary read or how-to prompt that merely says "proposal" is never blocked
+            _needs_rq = (any(re.search(p, low) for p in _DESIGN_CONTEXT)
+                         or (is_review and rq.is_design_prompt(prompt)))
+        except Exception:
+            _needs_rq = True                         # fail closed: cannot tell, require the block
+        if _needs_rq:
+            try:
+                import required_questions as rq
+                miss = rq.missing_in_prompt(prompt)
+            except Exception as exc:   # fail closed: the list could not be loaded
+                miss = [f"(required_questions unavailable: {exc})"]
+            if miss:
+                sys.stderr.write(
+                    "BGG REQUIRED-QUESTIONS GATE (blocking, board/design prompt): the owner's required questions are "
+                    f"missing {miss}. Paste the block from `python3 .claude/preship/required_questions.py --block` "
+                    "into the prompt and retry.\n")
+                sys.exit(2)
     sys.exit(0)
 
 
