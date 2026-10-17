@@ -1,0 +1,23 @@
+{
+  "change": "qhm-owner-sale-autoheal",
+  "tier": 2,
+  "paths": [
+    "execution/quarterly_hold_manager.py",
+    "execution/manual_sale_proof.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "(owner-sale check \\((flat|partial)\\): proven=|broker position is flat . handing to the external-close check|stop coverage unresolved \\(.*\\); state=PENDING_STOP_REPLACE saved=\\w+ paged=)"
+    }
+  ],
+  "expected_rate": "event-driven: any long-term-hold sale outside the bot, or any stop-coverage problem on a long-term hold (several per week recently)",
+  "window_sessions": 10,
+  "window_reason": "Owner sales and stop-coverage problems are not daily; ten sessions covers the recent rate.",
+  "reversal": "an auto-heal whose triggering sale was not the owner's; any API order seen with a null source; a long-term hold left holding shares with no protective stop after an owner sale; the same stop-coverage page sent twice in one ET day for one reason",
+  "metrics": [
+    {"name": "repeated QHM stop-coverage pages per symbol per day", "source": "logs/mtf_bot.log paged=True lines", "direction": "down", "bound": "at most one per (symbol, reason) per ET day"},
+    {"name": "owner sales healed without a confirm command", "source": "trade_events.jsonl event=owner_sale_autoheal", "direction": "up", "bound": "every proven app sale of a pure long-term hold"}
+  ],
+  "verification": "tests/test_qhm_owner_sale_autoheal.py"
+}
