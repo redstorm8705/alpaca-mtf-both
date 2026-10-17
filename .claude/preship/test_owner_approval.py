@@ -29,7 +29,7 @@ Covers: execution/thing.py, server-ops
 
 
 def run(script, payload, root, *args):
-    env = dict(os.environ, CLAUDE_PROJECT_DIR=root)
+    env = dict(os.environ, CLAUDE_PROJECT_DIR=root, MTF_TEST_MODE="1")   # no Slack from tests
     r = subprocess.run([sys.executable, script, *args], input=json.dumps(payload).encode(), env=env, capture_output=True)
     return r.returncode, r.stderr.decode() + r.stdout.decode()
 
@@ -71,7 +71,7 @@ class CaptureTests(Base):
         self.assertFalse(os.listdir(os.path.join(self.root, ".claude/approvals")))
 
     def _natural_design(self):
-        """A design dated today whose ID number is today's MMDD (the only kind natural wording can name)."""
+        """A design whose ID ends in a number (here today's MMDD), so natural wording can name it."""
         from datetime import datetime, timezone
         day = datetime.now(timezone.utc).date()      # the capture hook dates designs in UTC
         self.n = day.strftime("%m%d")
@@ -100,43 +100,58 @@ class CaptureTests(Base):
             self.owner_says(text)
             self.assertFalse(os.path.exists(os.path.join(self.root, f".claude/approvals/TEST-{self.n}.json")), text)
 
-    def test_bare_number_only_for_the_designs_own_recent_date(self):
-        from datetime import datetime, timedelta, timezone
-        today = datetime.now(timezone.utc).date()
-        mmdd = today.strftime("%m%d")
+    def test_pr_number_and_bare_number_approve_when_unique(self):
         os.remove(os.path.join(self.root, "logs/design_records/test.md"))
-        with open(os.path.join(self.root, f"logs/design_records/gates_{today.isoformat()}.md"), "w") as f:
-            f.write(DESIGN.replace("Approval-ID: TEST-42", f"Approval-ID: GATES-{mmdd}"))
-        with open(os.path.join(self.root, f"logs/design_records/pr_{today.isoformat()}.md"), "w") as f:
+        with open(os.path.join(self.root, "logs/design_records/pr.md"), "w") as f:
             f.write(DESIGN.replace("Approval-ID: TEST-42", "Approval-ID: PR-689"))
-        old = (today - timedelta(days=40)).isoformat()
-        with open(os.path.join(self.root, f"logs/design_records/old_{old}.md"), "w") as f:
-            f.write(DESIGN.replace("Approval-ID: TEST-42", f"Approval-ID: OLD-{(today - timedelta(days=40)).strftime('%m%d')}"))
-        for text in ("approve 689", "approve PR 689", "Approve pr 689."):   # a PR number never names a design
+        for text in ("approve 689", "Approve PR 689.", "approved pr 689"):    # owner 2026-10-17: a PR number works
             self.owner_says(text)
+            self.assertTrue(os.path.exists(os.path.join(self.root, ".claude/approvals/PR-689.json")), text)
+            self.owner_says("reject 689")
             self.assertFalse(os.path.exists(os.path.join(self.root, ".claude/approvals/PR-689.json")), text)
-        self.owner_says(f"approve {(today - timedelta(days=40)).strftime('%m%d')}")   # too old for a bare number
-        self.assertFalse([n for n in os.listdir(os.path.join(self.root, ".claude/approvals")) if n.startswith("OLD")])
-        old_id = f"OLD-{(today - timedelta(days=40)).strftime('%m%d')}"
-        self.owner_says(f"APPROVE {old_id}")                  # strict form approves any age...
-        self.assertTrue(os.path.exists(os.path.join(self.root, f".claude/approvals/{old_id}.json")))
-        self.owner_says(f"reject old {(today - timedelta(days=40)).strftime('%m%d')}")   # ...and natural reject removes it
-        self.assertFalse(os.path.exists(os.path.join(self.root, f".claude/approvals/{old_id}.json")))
-        self.owner_says(f"approve {mmdd}")                    # the design's own recent date
-        self.assertTrue(os.path.exists(os.path.join(self.root, f".claude/approvals/GATES-{mmdd}.json")))
-        self.owner_says(f"reject gates {mmdd}")
-        with open(os.path.join(self.root, "logs/design_records/exit_undated.md"), "w") as f:
-            f.write(f"Approval-ID: EXIT-{mmdd}\nCovers: execution/thing.py\n")   # an ineligible rival still counts
-        self.owner_says(f"approve {mmdd}")
-        self.assertFalse(os.path.exists(os.path.join(self.root, f".claude/approvals/GATES-{mmdd}.json")))
-        self.assertFalse(os.path.exists(os.path.join(self.root, f".claude/approvals/EXIT-{mmdd}.json")))
+        with open(os.path.join(self.root, "logs/design_records/exit.md"), "w") as f:
+            f.write("Approval-ID: EXIT-689\nCovers: execution/thing.py\n")       # a rival with the same number
+        self.owner_says("approve 689")
+        self.assertFalse(os.path.exists(os.path.join(self.root, ".claude/approvals/PR-689.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, ".claude/approvals/EXIT-689.json")))
+        self.owner_says("approve pr 689")                     # naming the word resolves it
+        self.assertTrue(os.path.exists(os.path.join(self.root, ".claude/approvals/PR-689.json")))
+
+    def test_every_recorded_approval_pages_the_owner(self):
+        self._natural_design()
+        sys.path.insert(0, HERE)
+        import owner_approval_capture as cap
+        sent = []
+        orig = cap._page_owner
+        cap._page_owner = lambda text: sent.append(text) or True      # in-process stub; no env-var seam
+        try:
+            for text in (f"approve test {self.n}", f"reject test {self.n}", f"APPROVE TEST-{self.n}"):
+                with open(self.transcript, "a") as f:
+                    f.write(json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n")
+                cap.capture({"prompt": text, "session_id": "s", "transcript_path": self.transcript}, self.root)
+        finally:
+            cap._page_owner = orig
+        self.assertEqual(len(sent), 2)                                 # natural + strict approvals, not the reject
+        self.assertTrue(all(f"TEST-{self.n}" in p and "execution/thing.py" in p for p in sent))
+
+    def test_undelivered_notice_is_reported(self):
+        self._natural_design()
+        code, out = self.owner_says(f"approve test {self.n}")          # MTF_TEST_MODE=1: no Slack -> False
+        self.assertIn("NOT delivered", out)
+
+    def test_reported_or_example_lines_record_nothing(self):
+        self._natural_design()
+        for text in (f"Gro:\napproved {self.n}", f"e.g. approve {self.n}", f"i.e. approved {self.n}"):
+            self.owner_says(text)
+            self.assertFalse(os.path.exists(os.path.join(self.root, f".claude/approvals/TEST-{self.n}.json")), text)
 
     def test_ambiguous_or_short_ids_record_nothing(self):
         self._natural_design()
         with open(os.path.join(self.root, "logs/design_records/other.md"), "w") as f:
-            f.write("Approval-ID: OTHER-142\nCovers: docs/x.md\n\n## Required questions\n")
-        self.owner_says("approve 142")                        # a bare number that is not the record's recent date
-        self.assertFalse(os.path.exists(os.path.join(self.root, ".claude/approvals/TEST-142.json")))
+            f.write(f"Approval-ID: OTHER-{self.n}\nCovers: docs/x.md\n\n## Required questions\n")
+        self.owner_says(f"approve {self.n}")                  # two designs end in the same number
+        self.assertFalse(os.path.exists(os.path.join(self.root, f".claude/approvals/TEST-{self.n}.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.root, f".claude/approvals/OTHER-{self.n}.json")))
         with open(os.path.join(self.root, "logs/design_records/option.md"), "w") as f:
             f.write("Approval-ID: OPTION-2\nCovers: execution/thing.py\n\n## Required questions\n")
         self.owner_says("approve option 2")                   # IDs not ending in 3+ digits need the strict form
@@ -157,6 +172,46 @@ class WriteGateTests(Base):
     def test_forged_record_without_owner_message_is_refused(self):
         self.owner_says("APPROVE TEST-42", real=False)       # no user entry in the transcript
         self.assertEqual(self.gate("Edit", {"file_path": "execution/thing.py"}), 2)
+
+    def test_user_settings_never_writable_by_tools(self):
+        self.assertEqual(self.gate("Edit", {"file_path": "/Users/x/.claude/settings.json"}), 2)
+        self.assertEqual(self.gate("Write", {"file_path": "/Users/x/.claude/settings.local.json"}), 2)
+        self.assertEqual(self.gate("Bash", {"command": "echo '{}' > ~/.claude/settings.json"}), 2)
+        self.assertEqual(self.gate("Bash", {"command": "cat ~/.claude/settings.json"}), 0)
+        self.assertEqual(self.gate("Read", {"file_path": "/Users/x/.claude/settings.json"}), 0)
+        home = os.path.expanduser("~")
+        for spelled in (f"{home}/.claude//settings.json", f"{home}/.claude/./settings.json",
+                        f"{home}/.claude/../.claude/settings.local.json",
+                        os.path.relpath(f"{home}/.claude/settings.json", self.root)):
+            self.assertEqual(self.gate("Edit", {"file_path": spelled}), 2, spelled)
+
+    def test_settings_watch_reports_any_change(self):
+        sys.path.insert(0, HERE)
+        import behaviour_integrity as bi
+        import owner_approval_gate as oag
+        fake = os.path.join(self.root, "fake_settings.json")
+        with open(fake, "w") as f:
+            f.write("{}")
+        orig = oag.settings_files
+        oag.settings_files = lambda root=None: [fake]
+        snap = os.path.join(self.root, ".claude/quarantine/settings_watch.json")
+        try:
+            self.assertTrue(bi.watch_settings(self.root)[0].startswith("(settings watch baseline missing"))
+            bi.commit_settings(self.root)
+            self.assertEqual(bi.watch_settings(self.root), [])          # unchanged
+            with open(fake, "w") as f:                                  # changed by any route
+                f.write('{"env": {"MTF_TEST_MODE": "1"}}')
+            self.assertEqual(bi.watch_settings(self.root), [fake])
+            self.assertEqual(bi.watch_settings(self.root), [fake])      # not delivered yet: reported again
+            bi.commit_settings(self.root)                               # delivered: baseline advances
+            self.assertEqual(bi.watch_settings(self.root), [])
+            os.remove(snap)                                             # a deleted baseline is reported
+            self.assertTrue(bi.watch_settings(self.root)[0].startswith("(settings watch baseline missing"))
+            with open(snap, "w") as f:                                  # a corrupted one too
+                f.write("[]")
+            self.assertTrue(bi.watch_settings(self.root)[0].startswith("(settings watch baseline unreadable"))
+        finally:
+            oag.settings_files = orig
 
     def test_approvals_dir_never_writable_by_tools(self):
         self.assertEqual(self.gate("Write", {"file_path": ".claude/approvals/X-1.json"}), 2)
@@ -319,6 +374,9 @@ class IntegrityTests(Base):
         open(os.path.join(self.root, "docs/notes.md"), "w").write("n\n")
         g("add", "-A")
         g("commit", "-qm", "init")
+        sys.path.insert(0, HERE)
+        import behaviour_integrity as bi
+        bi.commit_settings(self.root)        # the settings-watch baseline exists, as after the first install page
 
     def hook(self):
         env = dict(os.environ, CLAUDE_PROJECT_DIR=self.root, MTF_TEST_MODE="1")

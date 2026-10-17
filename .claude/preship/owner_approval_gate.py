@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -56,7 +57,34 @@ def _rel(path: str, root: str) -> str:
     return os.path.relpath(p, root)
 
 
-_EXTRA_SCOPE = (".claude/approvals/", "scripts/managed_gates/")
+# the user-level Claude Code settings (outside the repo): they can disable hooks or set the hooks' environment
+_USER_SETTINGS = re.compile(r"(?:~|\$HOME|/Users/[^/\s]+|/home/[^/\s]+)/\.claude/settings(?:\.local)?\.json")
+
+
+def settings_files(root: "str | None" = None) -> list:
+    """The Claude Code settings outside this checkout that configure hooks or their environment: the user-level files
+    and the MAIN checkout's project files (found from git's common dir; a worktree session must not edit them)."""
+    home = os.path.expanduser("~")
+    out = [os.path.join(home, ".claude", "settings.json"), os.path.join(home, ".claude", "settings.local.json")]
+    try:
+        r = subprocess.run(["git", "-C", root or os.getcwd(), "rev-parse", "--path-format=absolute",
+                            "--git-common-dir"], capture_output=True, text=True, timeout=5)
+        common = r.stdout.strip()
+        if r.returncode == 0 and common:
+            main = os.path.join(os.path.dirname(common), ".claude")
+            out += [os.path.join(main, "settings.json"), os.path.join(main, "settings.local.json")]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return sorted({os.path.realpath(p) for p in out})
+
+
+def _is_user_settings(p: str, root: str) -> bool:
+    """Resolved-path comparison, so '//', '/./', '../' and relative spellings all count."""
+    q = os.path.realpath(os.path.expanduser(p if os.path.isabs(os.path.expanduser(p)) else os.path.join(root, p)))
+    return q in settings_files(root)
+
+
+_EXTRA_SCOPE = (".claude/approvals/", ".claude/quarantine/", "scripts/managed_gates/")
 _EXTRA_FILES = (".claude/settings.json", ".claude/settings.local.json", "scripts/install_managed_gates.sh",
                 "auto_deploy.sh", "CLAUDE.md")
 _SCOPE_DIRS = ("execution", "strategy", "indicators", "events", ".claude/preship", ".claude/approvals", ".github",
@@ -213,8 +241,11 @@ def check(payload: dict) -> None:
             return
         if ".claude/projects" in cmd and _WRITE_HINT.search(cmd):
             _block("the conversation transcripts under ~/.claude/projects/ are not writable by the agent.")
-        if ".claude/approvals" in cmd and _WRITE_HINT.search(cmd):
-            _block("only the owner-approval hook writes .claude/approvals/.")
+        if _USER_SETTINGS.search(cmd) and (_WRITE_HINT.search(cmd) or _REDIRECT.search(cmd)):
+            _block("Claude Code settings files (~/.claude/settings*.json) set hook behaviour and environment; only the "
+                   "owner edits them.")
+        if (".claude/approvals" in cmd or ".claude/quarantine" in cmd) and _WRITE_HINT.search(cmd):
+            _block("only the owner-approval and integrity hooks write .claude/approvals/ and .claude/quarantine/.")
         if _WRITE_HINT.search(cmd):
             no_redirects = _REDIRECT.sub(" ", cmd)
             if _WRITE_HINT.search(no_redirects):
@@ -232,8 +263,11 @@ def check(payload: dict) -> None:
     write_tool = tool in _WRITE_TOOLS or (tool.startswith("mcp__") and _MCP_WRITE.search(tool.split("__")[-1] + "_"))
     if not write_tool:
         return
+    if any(_USER_SETTINGS.search(str(p)) or _is_user_settings(str(p), root) for p in _paths_in(ti)):
+        _block("Claude Code settings files (~/.claude/settings*.json) set hook behaviour and environment; only the owner "
+               "edits them.")
     rels = [_rel(p, root) for p in _paths_in(ti)]
-    if any(r.startswith(".claude/approvals/") for r in rels):
+    if any(r.startswith((".claude/approvals/", ".claude/quarantine/")) for r in rels):
         _block("only the owner-approval hook writes .claude/approvals/.")
     hits = [r for r in rels if is_behaviour(r)]
     if not hits:

@@ -215,3 +215,32 @@ sentence — 'approve'/'approved'/'reject'/'rejected' first (any case), then onl
 3+ digits (e.g. GATES-1017) can be named this way. Nothing counts on a line with quotes, a quoted ('>') line, or
 when a '?' follows. Natural wording can name an ID only when the ID's number is the MMDD date in its own design record's file name and the record is at most 14 days old (e.g. GATES-1017 in owner_approval_gates_2026-10-17.md), whether the owner types 'approve 1017' or 'approve gates 1017'; any other ID (PR-689, CLEANUP-2026) needs the strict 'APPROVE <ID>' line, because the agent chooses ID numbers (round-2/3 reviews: 'approve 689' and 'approve PR 689' named an agent-declared PR-689). Ambiguity is decided over ALL declared IDs before the date check, so an ineligible rival ending in the same number makes the wording record nothing (round-3 review). CRLF line ends and non-breaking spaces are accepted. The gate re-parses the transcript entry with the same function, so the owner's typed message
 stays the only source of an approval. Every failing input from both review rounds is a test (44 tests).
+
+## Owner correction 4 (2026-10-17): a PR number must approve
+The owner: "Approve 689, approve pr 689 should absolutely be acceptable by me as CEO." The round-3/4 date rule (a
+natural ID had to carry its own recent MMDD date) is REMOVED. Natural wording now names any declared ID ending in 3+
+digits ('approve 689', 'Approve PR 689.', 'approve gates 1017') when exactly one declared ID matches; two designs
+ending in the same number record nothing until a word is added ('approve pr 689'). The risk the reviewers found (the
+agent declaring an ID whose number the owner might type for another reason) is answered with visibility rather than
+restriction: every recorded approval pages the owner on Slack with the design's ID, record and the exact paths it
+now allows, and one reply ('reject 689') removes it. All sentence rules (own sentence, no quotes, no '?', no
+negation, no reported past tense) are unchanged.
+Review (FAIL, fixed): the Slack notice could not be delivered from the Mac (hooks do not inherit .env, and
+alerts.send_slack is a silent no-op without a webhook). Now the hook loads SLACK_WEBHOOK_URL from the project .env,
+sends with send_slack_delivery (confirmed delivery), and if delivery fails tells the agent to tell the owner in chat.
+The notice says the undo is typed in Claude Code, not a Slack reply. A line after one ending in ':' ('Gro:\napproved
+689') and lines after 'e.g.'/'i.e.' do not count. A second review FAILED an env-var test seam that could silence a
+real notice; it was removed (tests stub _page_owner in-process). The gate now also refuses agent writes to the
+user-level ~/.claude/settings*.json (which can set a hook's environment or disable hooks). A third review FAILED the
+path check on odd spellings ('//', '/./', '../', relative) and shell routes. Final: the Edit/Write check compares
+RESOLVED paths against the user-level files and the main checkout's .claude/settings*.json (found from git's common
+dir); shell routes cannot all be caught from command text, so behaviour_integrity hashes those four files after
+every tool call and pages the owner on any change by any route (not undone — the owner edits them too). The hooks'
+Slack pages now load the webhook from .env (both hooks). .claude/quarantine/ (which holds the settings baseline) is
+write-protected like .claude/approvals/. A fourth review FAILED the watch: an undelivered page was lost (baseline
+advanced first; exit 0 hides stderr) and a deleted/corrupted baseline silently re-armed. Final: the baseline advances
+only after the Slack page is confirmed; otherwise the hook exits 2 telling the agent to tell the owner in chat, and
+repeats every tool call until delivered. A missing or unreadable baseline, or a watch error, is itself reported.
+Same-user limit (documented, not fixable here): a script that rewrites the baseline with the new hashes cannot be
+detected by a file the agent's user can write — the root-owned managed settings (install_managed_gates.sh) are the
+wall for hook removal. 49 tests.

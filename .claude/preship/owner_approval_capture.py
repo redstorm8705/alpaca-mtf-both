@@ -19,7 +19,7 @@ import json
 import os
 import re
 import sys
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 _ID = r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+"
 _APPROVE = re.compile(r"(?m)^\s*APPROVE\s+((?:" + _ID + r")(?:\s*[,&]\s*(?:and\s+)?" + _ID + r")*)")
@@ -59,28 +59,14 @@ _NATURAL_ID = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{3,}$")   # e.g. GAT
 
 def known_ids(root: str) -> list:
     """Approval-IDs declared under logs/design_records/ that natural wording may name (they end in 3+ digits)."""
-    return [i for i, _ in _known(root)]
-
-
-def _known(root: str) -> list:
-    """(ID, design-record date or None) for each natural-nameable Approval-ID; the date comes from the record's file
-    name (..._YYYY-MM-DD.md)."""
     out = []
     for path in sorted(glob.glob(os.path.join(root, "logs", "design_records", "*.md"))):
         try:
             text = open(path, encoding="utf-8").read()
         except OSError:
             continue
-        m = re.search(r"(\d{4})-(\d{2})-(\d{2})\.md$", os.path.basename(path))
-        try:
-            d = date(int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
-        except ValueError:
-            d = None
-        out += [(i, d) for i in re.findall(r"^Approval-ID:\s*(\S+)\s*$", text, re.M) if _NATURAL_ID.match(i)]
+        out += [i for i in re.findall(r"^Approval-ID:\s*(\S+)\s*$", text, re.M) if _NATURAL_ID.match(i)]
     return out
-
-
-_BARE_NUMBER_DAYS = 14   # a bare 'approve 1017' may name a design dated within this many days
 
 
 # A natural decision is its own sentence: 'approve(d)' or 'reject(ed)' (any case) FIRST, then only the ID's
@@ -93,27 +79,52 @@ def _segments(aid: str) -> list:
     return [s.lower() for s in re.split(r"-", aid) if s]
 
 
-def _match_ids(words: list, known: list, today: "date | None" = None, for_reject: bool = False) -> list:
+def _match_ids(words: list, known: list) -> list:
     """The one ID the words name, or [] when none or several do. Every typed word must be a segment of the ID and the
-    ID's number must be among them ('gates 1017', '1017'). Ambiguity is decided over ALL declared IDs first; only then
-    must the single candidate's number be the MMDD date in its own design record's file name, from the last
-    _BARE_NUMBER_DAYS days. The agent chooses ID numbers, so a PR number or a year ('approve PR 689') never approves
-    anything in natural wording — those IDs need the strict 'APPROVE <ID>' line."""
+    ID's number must be among them: 'gates 1017', '1017', 'PR 689', '689' (owner 2026-10-17: a PR number must work).
+    Ambiguity is decided over ALL declared IDs, so two designs ending in the same number record nothing. Because a
+    number the agent chose can now approve, every recorded approval pages the owner with what it covers (see
+    _page_owner), so an approval he did not mean is visible at once and 'reject <number>' undoes it."""
     words = [w.lower() for w in words]
-    today = today or datetime.now(timezone.utc).date()
     cands = []
-    for aid, d in known:
+    for aid in known:
         seg = _segments(aid)
         if words and seg[-1] in words and all(w in seg for w in words):
-            cands.append((aid, d, seg))
-    if len({c[0] for c in cands}) != 1 or len(cands) != 1:
+            cands.append(aid)
+    if len(cands) != 1:
         return []
-    aid, d, seg = cands[0]
-    if for_reject:          # a reject can only remove an approval, so any age may be named
-        return [aid]
-    if d is None or seg[-1] != d.strftime("%m%d") or not (0 <= (today - d).days <= _BARE_NUMBER_DAYS):
-        return []
-    return [aid]
+    return cands
+
+
+def _load_webhook(root: str) -> None:
+    """Hooks do not inherit the bot's .env; put SLACK_WEBHOOK_URL in the environment before alerts is imported."""
+    if os.environ.get("SLACK_WEBHOOK_URL"):
+        return
+    try:
+        with open(os.path.join(root, ".env"), encoding="utf-8") as fh:
+            for line in fh:
+                k, sep, v = line.strip().partition("=")
+                if sep and k.strip() == "SLACK_WEBHOOK_URL":
+                    os.environ["SLACK_WEBHOOK_URL"] = v.strip().strip('"').strip("'")
+                    return
+    except OSError:
+        return
+
+
+def _page_owner(text: str) -> bool:
+    """Slack the owner. Returns True only on confirmed delivery; never raises (never blocks his prompt).
+    MTF_TEST_MODE=1 sends nothing and returns False, so the agent is told to tell the owner in chat."""
+    if os.environ.get("MTF_TEST_MODE") == "1":
+        return False
+    try:
+        root = project_dir()
+        _load_webhook(root)
+        sys.path.insert(0, root)
+        from alerts import send_slack_delivery
+        return bool(send_slack_delivery(text))
+    except Exception as exc:
+        print(f"[owner approval] Slack notice failed: {exc}")
+        return False
 
 
 def ids_in(prompt: str, root: "str | None" = None) -> "tuple[list, list]":
@@ -126,19 +137,22 @@ def ids_in(prompt: str, root: "str | None" = None) -> "tuple[list, list]":
         approved += re.findall(_ID, m.group(1))
     rejected = [m.group(1) for m in _REJECT.finditer(text)]
     if root:
-        known = _known(root)
+        known = known_ids(root)
         for m in _SENTENCE.finditer(text):
             line_start = text.rfind("\n", 0, m.start()) + 1
             line_end = text.find("\n", m.end())
             line = text[line_start:line_end if line_end != -1 else len(text)]
             if line.lstrip().startswith(">") or re.search(r"[\"\u201c\u201d\u2018`]|(?<![A-Za-z])'|'(?![A-Za-z])", line):
                 continue
+            before = text[:m.start()].rstrip()
+            if before.endswith(":") or re.search(r"(?i)\b(e\.g|i\.e|etc|vs|cf)\.$", before):
+                continue                          # 'Gro:\napproved 689' or 'e.g. approve 689' reports, not decides
             nxt = text[m.end():m.end() + 1]
             if nxt == "?" or text[m.end():].lstrip(" \t")[:1] == "?":
                 continue
             words = re.split(r"[\s\u00a0\-\u2010-\u2015]+", m.group(2).strip())
             is_reject = m.group(1).lower().startswith("reject")
-            hits = _match_ids([w for w in words if w], known, for_reject=is_reject)
+            hits = _match_ids([w for w in words if w], known)
             if len(hits) == 1:
                 (rejected if is_reject else approved).append(hits[0])
     approved = [a for a in dict.fromkeys(approved) if a not in rejected]
@@ -182,6 +196,11 @@ def capture(payload: dict, root: str) -> list:
         with open(tmp, "w") as f:
             json.dump(rec, f, indent=2)
         os.replace(tmp, os.path.join(adir, f"{aid}.json"))
+        delivered = _page_owner(f":white_check_mark: Approval recorded: *{aid}* ({found[0]}) now allows changes to: "
+                                f"{', '.join(found[1]) or '(nothing listed)'}. Not what you meant? In Claude Code, "
+                                f"type 'reject {aid}' (a Slack reply does not undo it).")
+        if not delivered:
+            notes.append(f"Slack notice for {aid} was NOT delivered — tell the owner in chat what this approval covers.")
         notes.append(f"Owner approval recorded: {aid} covers {len(found[1])} path(s); covers fingerprint "
                      f"{covers_sha(found[1])[:16]}.")
     for aid in rejected:
