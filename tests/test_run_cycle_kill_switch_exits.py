@@ -211,6 +211,10 @@ class KillSwitchKeepsExits(unittest.TestCase):
             self.assertNotIn(
                 FLAG, _names(n.test), "F6 trims (exits) must not be kill-gated"
             )
+            self.assertFalse(
+                {"_f6_prior", "_f6_close"} & _names(n.test),
+                "F6 trims must not depend on starter SPY data",
+            )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,36 @@
+{
+  "change": "f6-instrument-policy-2026-10-15",
+  "tier": 2,
+  "paths": [
+    "config.py",
+    "execution/instrument_policy.py",
+    "execution/forever_hold_manager.py",
+    "execution/risk_manager.py",
+    "strategy/run_cycle.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change_id=f6-instrument-policy-2026-10-15.*validated"
+    }
+  ],
+  "expected_rate": "On each bot process startup when config validation runs",
+  "window_sessions": 1,
+  "window_reason": "Deployment restarts the bot, so startup validation must appear immediately",
+  "reversal": "A leveraged, inverse, or unclassified F6 symbol passes validation or reaches capital reservation",
+  "metrics": [
+    {
+      "name": "ineligible F6 broker submissions",
+      "source": "logs/mtf_bot.log and Alpaca order activity",
+      "direction": "none",
+      "bound": "exactly zero"
+    },
+    {
+      "name": "validated F6 symbols",
+      "source": "change_id startup log",
+      "direction": "none",
+      "bound": "equals the configured F6 universe count"
+    }
+  ],
+  "verification": "tests/test_f6_instrument_policy.py"
+}
