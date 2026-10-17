@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-16 (Claude + OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-17 (Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-17, Claude signed) — QHM owner-sale auto-heal live (#683)
+
+- PR #683 (`gh pr view 683`): a long-term hold left flat by a sale is closed instead of paging forever; an app sale
+  (raw Alpaca `source` null + UUID order id, same response shows bot orders `access_key`, exact qty) heals the QHM
+  record automatically and is not re-bought on restart. Design: `logs/design_records/qhm_owner_sale_autoheal_2026-10-17.md`.
+  Deployed + restarted 2026-10-17 05:19 UTC: LLY closed as `owner_confirmed`, "not re-adding" logged; page loop ended.
+- Owner fact (2026-10-17): the EWY cover on 10/13 was the owner's app order; EWY was a bot position (Day-tier short
+  10/7, carried to Swing).
+- Day-tier replay (32 trades): stops under 0.25% of price lost every time (−4.7R of −5.5R total); trades with both the
+  stock's and SPY's daily trend +1.3R (n=10) vs −6.8R against either (n=22).
+
+**Pick up here:** (1) test the trend filter + volatility stop floor on all 286 Day-tier decisions, then build the trend
+filter (selectivity, same-day) and take the stop floor to the board. (2) Swing tier: leveraged-ETF route when 1 share
+of the stock is all the budget allows — owner request, BGGN design first. (3) 5 failing tests in
+tests/test_qhm_tranche_adds.py on main since #667 (spawned task). (4) Weekly bot-only scorecard.
 
 ## ⏩ LATEST (2026-10-16 late night, OpenAI Codex signed) — typed F6 kill verdict live (#681)
 
