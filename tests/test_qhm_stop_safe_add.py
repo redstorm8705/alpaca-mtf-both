@@ -113,6 +113,7 @@ def _run(
     cancel_ok=True,
     order=None,
     terminal_order=None,
+    poll_orders=None,
     label="tranche-2",
 ):
     order = order or _add_order(qty=add_qty, filled_qty=add_qty)
@@ -122,8 +123,13 @@ def _run(
         cancels.append(oid)
         return cancel_ok if oid == "stop-old" else True
     clock = iter(range(0, 1000))
+    poll_iter = iter(poll_orders or ())
     # stand-in for execution.broker (the function imports these three names at call time)
     def _get_order(oid):
+        try:
+            return next(poll_iter)
+        except StopIteration:
+            pass
         if oid == "add-1" and "add-1" in cancels:
             if terminal_order is not None:
                 return terminal_order
@@ -208,6 +214,21 @@ class StopSafeAdd(unittest.TestCase):
         m = _mgr(pos, FakeBroker(2), d)
         _run(m, pos, add_qty=1, order=_add_order(status="canceled", filled_qty=0))
         self.assertEqual(m._ledger_credits, [])
+
+    def test_new_zero_fill_is_valid_then_cancelled_and_reprotected(self):
+        pos, dispatcher = _pos(qty=2), FakeDispatcher()
+        manager = _mgr(pos, FakeBroker(2), dispatcher, resync_qty=2)
+        got, cancels = _run(
+            manager,
+            pos,
+            add_qty=1,
+            order=_add_order(status="new", filled_qty=0),
+        )
+        self.assertEqual(got, 0)
+        self.assertEqual(cancels, ["stop-old", "add-1"])
+        self.assertEqual(manager._ledger_credits, [])
+        self.assertEqual(pos.state, qm.HoldState.ACTIVE)
+        self.assertEqual(dispatcher.stops, [("NVDA", 2, "sell", 200.0)])
 
     def test_market_closed_defers_untouched(self):
         pos, d = _pos(), FakeDispatcher()
@@ -326,6 +347,56 @@ class StopSafeAdd(unittest.TestCase):
         self.assertEqual(cancels, ["stop-old", "add-1"])
         self.assertEqual(d.stops, [("NVDA", 3, "sell", 200.0)])
 
+    def test_proven_partial_then_bad_terminal_never_understops(self):
+        pos, dispatcher = _pos(qty=2), FakeDispatcher()
+        manager = _mgr(pos, FakeBroker(3), dispatcher, resync_qty=3)
+        valid_partial = _add_order(
+            qty=2, status="partially_filled", filled_qty=1
+        )
+        invalid_snapshot = _add_order(
+            qty=2, status="partially_filled", filled_qty=1, symbol="MSFT"
+        )
+        got, cancels = _run(
+            manager,
+            pos,
+            add_qty=2,
+            order=invalid_snapshot,
+            terminal_order=invalid_snapshot,
+            poll_orders=[valid_partial, invalid_snapshot],
+        )
+        self.assertEqual(got, 0)
+        self.assertEqual(cancels, ["stop-old", "add-1"])
+        self.assertEqual(manager._ledger_credits, [])
+        self.assertEqual(pos.state, qm.HoldState.PENDING_STOP_REPLACE)
+        self.assertEqual(dispatcher.stops[-1], ("NVDA", 3, "sell", 200.0))
+
+    def test_proven_partial_then_regressive_terminal_never_understops(self):
+        for terminal_status in ("canceled", "new"):
+            with self.subTest(terminal_status=terminal_status):
+                pos, dispatcher = _pos(qty=2), FakeDispatcher()
+                manager = _mgr(pos, FakeBroker(3), dispatcher, resync_qty=3)
+                valid_partial = _add_order(
+                    qty=2, status="partially_filled", filled_qty=1
+                )
+                regressive = _add_order(
+                    qty=2, status=terminal_status, filled_qty=0
+                )
+                got, cancels = _run(
+                    manager,
+                    pos,
+                    add_qty=2,
+                    order=regressive,
+                    terminal_order=regressive,
+                    poll_orders=[valid_partial],
+                )
+                self.assertEqual(got, 0)
+                self.assertEqual(cancels, ["stop-old", "add-1"])
+                self.assertEqual(manager._ledger_credits, [])
+                self.assertEqual(pos.state, qm.HoldState.PENDING_STOP_REPLACE)
+                self.assertEqual(
+                    dispatcher.stops[-1], ("NVDA", 3, "sell", 200.0)
+                )
+
     def test_contradictory_polled_order_never_credits_qhm(self):
         mutations = (
             {"id": "other"},
@@ -358,7 +429,24 @@ class StopSafeAdd(unittest.TestCase):
                 )
                 self.assertEqual(got, 0)
                 self.assertEqual(manager._ledger_credits, [])
-                self.assertEqual(pos.state, qm.HoldState.PENDING_STOP_REPLACE)
+                # A transient status/quantity contradiction is retried to the
+                # deadline.  Once cancellation returns a coherent canceled/0
+                # terminal proof, the original holding is reprotected and the
+                # manager may safely return ACTIVE. Immutable identity/quantity
+                # contradictions remain pending for exact recovery.
+                resolved_after_cancel = mutation in (
+                    {"status": "filled", "filled_qty": 0},
+                    {"status": "partially_filled", "filled_qty": 0},
+                    {"status": "unknown", "filled_qty": 0},
+                )
+                self.assertEqual(
+                    pos.state,
+                    (
+                        qm.HoldState.ACTIVE
+                        if resolved_after_cancel
+                        else qm.HoldState.PENDING_STOP_REPLACE
+                    ),
+                )
 
     def test_contradictory_terminal_order_never_credits_qhm(self):
         pos, dispatcher = _pos(qty=2), FakeDispatcher()

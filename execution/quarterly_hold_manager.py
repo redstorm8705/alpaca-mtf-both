@@ -2881,11 +2881,19 @@ class QuarterlyHoldManager:
             except Exception:
                 pass
 
-        def _hold_ambiguous_add(_reason: str) -> None:
+        def _hold_ambiguous_add(
+            _reason: str, _proven_filled: int = 0
+        ) -> None:
             """Keep recovery armed; never turn malformed order evidence into ownership."""
-            _protect_qty = self._strict_resync_qty(pos, _orig_qty, _orig_qty)
+            _proven_owner_qty = _orig_qty + max(0, _proven_filled)
+            _protect_qty = self._strict_resync_qty(
+                pos, _proven_owner_qty, _orig_qty
+            )
             if _protect_qty is None:
-                _protect_qty = _orig_qty
+                # An earlier coherent order snapshot is immutable evidence of
+                # this partial fill. Never restore a stop below that proven QHM
+                # quantity merely because a later terminal snapshot is unreadable.
+                _protect_qty = _proven_owner_qty
             _restore_or_pending(_protect_qty, _reason)
             pos.state = HoldState.PENDING_STOP_REPLACE
             pos.updated_at = self._now_et().isoformat()
@@ -3038,24 +3046,35 @@ class QuarterlyHoldManager:
         _deadline = _time.monotonic() + 15.0
         _time.sleep(2)
         _filled = 0
-        _poll_invalid = False
+        _max_proven_filled = 0
         while _time.monotonic() < _deadline:
             try:
                 _o = _get_order(_add_id)
                 _proof = _validated_same_add(_o, _add_id)
                 if _proof is None:
-                    _poll_invalid = True
-                    break
-                _, _st, _filled = _proof
+                    # A single broker snapshot can lag across status/quantity
+                    # fields.  Do not credit it, but do not abandon the known
+                    # order either: keep polling to the bounded deadline, then
+                    # the normal branch below cancels the exact order ID and
+                    # requires a coherent terminal proof before any credit.
+                    _time.sleep(1)
+                    continue
+                _, _st, _observed_filled = _proof
+                if _observed_filled < _max_proven_filled:
+                    # Alpaca cumulative filled_qty cannot move backwards for
+                    # one immutable order. Treat a regressive snapshot as
+                    # incoherent and preserve the highest exact proof for stop
+                    # coverage and later ledger credit.
+                    _time.sleep(1)
+                    continue
+                _max_proven_filled = _observed_filled
+                _filled = _max_proven_filled
                 if _st in ("filled", "canceled", "cancelled", "rejected",
                            "expired"):
                     break
             except Exception:
                 pass
             _time.sleep(1)
-        if _poll_invalid:
-            _hold_ambiguous_add("add-order-poll-invalid")
-            return 0
 
         # Branch 2 — not fully filled: cancel the add (partials keep filled shares).
         if _filled < add_qty:
@@ -3085,8 +3104,14 @@ class QuarterlyHoldManager:
                         _terminal_order, _add_id
                     )
                     if _terminal_proof is None:
-                        break
-                    _, _terminal_status, _filled = _terminal_proof
+                        _time.sleep(0.5)
+                        continue
+                    _, _terminal_status, _terminal_filled = _terminal_proof
+                    if _terminal_filled < _max_proven_filled:
+                        _time.sleep(0.5)
+                        continue
+                    _max_proven_filled = _terminal_filled
+                    _filled = _max_proven_filled
                     if _terminal_status in (
                         "filled", "canceled", "cancelled", "rejected", "expired"
                     ):
@@ -3096,16 +3121,8 @@ class QuarterlyHoldManager:
                     pass
                 _time.sleep(0.5)
             if not _terminal_confirmed:
-                _known_owner_qty = self._strict_resync_qty(
-                    pos, _orig_qty + _filled, _orig_qty
-                )
-                _restore_or_pending(
-                    _known_owner_qty if _known_owner_qty is not None else _orig_qty,
-                    "add-cancel-not-terminal",
-                )
-                self._alert(
-                    ":rotating_light: QHM %s dip-add remainder did not confirm "
-                    "terminal — exact recovery remains pending." % pos.symbol
+                _hold_ambiguous_add(
+                    "add-cancel-not-terminal", _max_proven_filled
                 )
                 return 0
         # Credit the confirmed fill to QHM's ledger claim NOW (2026-10-15 NVDA): the ledger otherwise catches up only
