@@ -2795,6 +2795,12 @@ class QuarterlyHoldManager:
                     "expired",
                     "pending_cancel",
                 }
+                # These are state/evidence consistency rules, not success
+                # claims. ``new`` with zero filled is valid. A canceled/expired
+                # order may validly contain a smaller, confirmed partial fill;
+                # only those filled shares are later credited, while the
+                # unfilled remainder stays canceled. A fully filled order must
+                # report the full requested quantity.
                 if (
                     status not in (
                         zero_fill_statuses

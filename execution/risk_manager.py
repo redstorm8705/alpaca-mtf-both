@@ -626,6 +626,12 @@ class RiskManager:
                         if protected_qty is None:
                             total += float(p.get("unrealized_intraday_pl", 0.0) or 0.0)
                         else:
+                            # Account equity contains today's mark-to-market on
+                            # every net share. Excluding only protected shares
+                            # therefore requires the same prior-close delta on
+                            # exactly that protected quantity; using Alpaca's
+                            # whole-position field would also remove co-held
+                            # Day/Swing shares and could mask their loss.
                             total += (
                                 float(p.get("current_price"))
                                 - float(p.get("lastday_price"))
