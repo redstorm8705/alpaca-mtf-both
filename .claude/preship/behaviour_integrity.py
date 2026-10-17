@@ -32,13 +32,24 @@ def changed_paths(root: str) -> "tuple[list, list]":
     return ([p for p in diff.splitlines() if p.strip()], [p for p in untracked.splitlines() if p.strip()])
 
 
-def _page(text: str) -> bool:
-    """Slack the owner via the approval hook's sender (it loads the webhook from .env; hooks do not inherit it)."""
+def _page(text: str) -> None:
+    """Slack the owner when an unapproved change was undone. Hooks do not inherit the bot's .env, so the webhook is
+    read from it first. Best effort; silent under tests."""
+    if os.environ.get("MTF_TEST_MODE") == "1":
+        return
+    root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     try:
-        import owner_approval_capture as cap
-        return cap._page_owner(text)
+        if not os.environ.get("SLACK_WEBHOOK_URL"):
+            with open(os.path.join(root, ".env"), encoding="utf-8") as fh:
+                for line in fh:
+                    k, sep, v = line.strip().partition("=")
+                    if sep and k.strip() == "SLACK_WEBHOOK_URL":
+                        os.environ["SLACK_WEBHOOK_URL"] = v.strip().strip('"').strip("'")
+        sys.path.insert(0, root)
+        from alerts import send_slack
+        send_slack(text)
     except Exception:
-        return False
+        pass
 
 
 _GIT_HOOK = """#!/bin/sh
@@ -103,52 +114,6 @@ def clean_local_settings(root: str) -> list:
     return []
 
 
-def _settings_hashes(root: str) -> dict:
-    import hashlib
-    import owner_approval_gate as oag
-    cur = {}
-    for p in oag.settings_files(root):
-        try:
-            with open(p, "rb") as fh:
-                cur[p] = hashlib.sha256(fh.read()).hexdigest()
-        except OSError:
-            cur[p] = "absent"
-    return cur
-
-
-def _settings_snap(root: str) -> str:
-    return os.path.join(root, ".claude", "quarantine", "settings_watch.json")
-
-
-def watch_settings(root: str) -> list:
-    """Hash the Claude Code settings outside this checkout (owner_approval_gate.settings_files) after every tool call
-    and return what to report: changed files, or a note that the baseline is missing/unreadable (a deleted or
-    corrupted baseline is reported, never silently re-created). Does NOT advance the baseline — commit_settings()
-    does that only after the owner was told, so an undelivered notice is reported again on the next tool call.
-    Not undone: the owner edits these files himself. Same-user limit: a script that rewrites the baseline with the
-    new hashes cannot be detected from here; the root-owned managed settings are the wall for that."""
-    cur = _settings_hashes(root)
-    try:
-        with open(_settings_snap(root)) as fh:
-            old = json.load(fh)
-        if not isinstance(old, dict):
-            raise ValueError("not a mapping")
-    except OSError:
-        return ["(settings watch baseline missing — started now, or deleted; earlier changes cannot be verified)"]
-    except ValueError:
-        return ["(settings watch baseline unreadable — cannot verify the settings files)"]
-    return [p for p in cur if old.get(p) != cur[p]]
-
-
-def commit_settings(root: str) -> None:
-    snap = _settings_snap(root)
-    os.makedirs(os.path.dirname(snap), exist_ok=True)
-    tmp = snap + ".tmp"
-    with open(tmp, "w") as fh:
-        json.dump(_settings_hashes(root), fh)
-    os.replace(tmp, snap)
-
-
 def enforce(root: str) -> list:
     import owner_approval_gate as oag
     undone = ensure_git_hooks(root) + clean_local_settings(root)
@@ -192,35 +157,10 @@ def main() -> None:
         payload = {}
     root = os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
     try:
-        changed = watch_settings(root)
-    except Exception as exc:
-        changed = [f"(settings watch failed: {exc})"]
-    settings_msg = ""
-    if changed:
-        delivered = _page(f":warning: Claude Code settings check: {', '.join(changed)}. If you did not change these "
-                          "files, tell Claude to restore them — they control the approval hooks.")
-        if delivered:
-            try:
-                commit_settings(root)
-            except Exception as exc:
-                sys.stderr.write(f"BEHAVIOUR INTEGRITY: settings baseline not saved ({exc}).\n")
-            settings_msg = f"BEHAVIOUR INTEGRITY: Claude Code settings changed: {changed}. The owner was paged on Slack."
-        else:
-            settings_msg = (f"BEHAVIOUR INTEGRITY: Claude Code settings changed: {changed}. The Slack notice was NOT "
-                            "delivered — tell the owner in chat now (this repeats until a notice is delivered).")
-    try:
         undone = enforce(root)
     except Exception as exc:   # warn, do not block every tool on a transient git error
         sys.stderr.write(f"BEHAVIOUR INTEGRITY: check failed ({exc}).\n")
-        if settings_msg:
-            sys.stderr.write(settings_msg + "\n")
-            sys.exit(2)
         sys.exit(0)
-    if settings_msg and not undone:
-        sys.stderr.write(settings_msg + "\n")
-        sys.exit(2)                                       # exit 2 so the agent sees it (exit 0 stderr is hidden)
-    if settings_msg:
-        sys.stderr.write(settings_msg + "\n")
     if undone:
         tool = (payload or {}).get("tool_name", "?")
         msg = (f"BEHAVIOUR INTEGRITY: the last {tool} call changed trading-behaviour or gate code with no owner "

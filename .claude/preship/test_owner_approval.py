@@ -73,7 +73,7 @@ class CaptureTests(Base):
     def _natural_design(self):
         """A design whose ID ends in a number (here today's MMDD), so natural wording can name it."""
         from datetime import datetime, timezone
-        day = datetime.now(timezone.utc).date()      # the capture hook dates designs in UTC
+        day = datetime.now(timezone.utc).date()
         self.n = day.strftime("%m%d")
         os.remove(os.path.join(self.root, "logs/design_records/test.md"))
         with open(os.path.join(self.root, f"logs/design_records/test_{day.isoformat()}.md"), "w") as f:
@@ -116,28 +116,6 @@ class CaptureTests(Base):
         self.assertFalse(os.path.exists(os.path.join(self.root, ".claude/approvals/EXIT-689.json")))
         self.owner_says("approve pr 689")                     # naming the word resolves it
         self.assertTrue(os.path.exists(os.path.join(self.root, ".claude/approvals/PR-689.json")))
-
-    def test_every_recorded_approval_pages_the_owner(self):
-        self._natural_design()
-        sys.path.insert(0, HERE)
-        import owner_approval_capture as cap
-        sent = []
-        orig = cap._page_owner
-        cap._page_owner = lambda text: sent.append(text) or True      # in-process stub; no env-var seam
-        try:
-            for text in (f"approve test {self.n}", f"reject test {self.n}", f"APPROVE TEST-{self.n}"):
-                with open(self.transcript, "a") as f:
-                    f.write(json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n")
-                cap.capture({"prompt": text, "session_id": "s", "transcript_path": self.transcript}, self.root)
-        finally:
-            cap._page_owner = orig
-        self.assertEqual(len(sent), 2)                                 # natural + strict approvals, not the reject
-        self.assertTrue(all(f"TEST-{self.n}" in p and "execution/thing.py" in p for p in sent))
-
-    def test_undelivered_notice_is_reported(self):
-        self._natural_design()
-        code, out = self.owner_says(f"approve test {self.n}")          # MTF_TEST_MODE=1: no Slack -> False
-        self.assertIn("NOT delivered", out)
 
     def test_reported_or_example_lines_record_nothing(self):
         self._natural_design()
@@ -184,34 +162,6 @@ class WriteGateTests(Base):
                         f"{home}/.claude/../.claude/settings.local.json",
                         os.path.relpath(f"{home}/.claude/settings.json", self.root)):
             self.assertEqual(self.gate("Edit", {"file_path": spelled}), 2, spelled)
-
-    def test_settings_watch_reports_any_change(self):
-        sys.path.insert(0, HERE)
-        import behaviour_integrity as bi
-        import owner_approval_gate as oag
-        fake = os.path.join(self.root, "fake_settings.json")
-        with open(fake, "w") as f:
-            f.write("{}")
-        orig = oag.settings_files
-        oag.settings_files = lambda root=None: [fake]
-        snap = os.path.join(self.root, ".claude/quarantine/settings_watch.json")
-        try:
-            self.assertTrue(bi.watch_settings(self.root)[0].startswith("(settings watch baseline missing"))
-            bi.commit_settings(self.root)
-            self.assertEqual(bi.watch_settings(self.root), [])          # unchanged
-            with open(fake, "w") as f:                                  # changed by any route
-                f.write('{"env": {"MTF_TEST_MODE": "1"}}')
-            self.assertEqual(bi.watch_settings(self.root), [fake])
-            self.assertEqual(bi.watch_settings(self.root), [fake])      # not delivered yet: reported again
-            bi.commit_settings(self.root)                               # delivered: baseline advances
-            self.assertEqual(bi.watch_settings(self.root), [])
-            os.remove(snap)                                             # a deleted baseline is reported
-            self.assertTrue(bi.watch_settings(self.root)[0].startswith("(settings watch baseline missing"))
-            with open(snap, "w") as f:                                  # a corrupted one too
-                f.write("[]")
-            self.assertTrue(bi.watch_settings(self.root)[0].startswith("(settings watch baseline unreadable"))
-        finally:
-            oag.settings_files = orig
 
     def test_approvals_dir_never_writable_by_tools(self):
         self.assertEqual(self.gate("Write", {"file_path": ".claude/approvals/X-1.json"}), 2)
@@ -374,9 +324,6 @@ class IntegrityTests(Base):
         open(os.path.join(self.root, "docs/notes.md"), "w").write("n\n")
         g("add", "-A")
         g("commit", "-qm", "init")
-        sys.path.insert(0, HERE)
-        import behaviour_integrity as bi
-        bi.commit_settings(self.root)        # the settings-watch baseline exists, as after the first install page
 
     def hook(self):
         env = dict(os.environ, CLAUDE_PROJECT_DIR=self.root, MTF_TEST_MODE="1")

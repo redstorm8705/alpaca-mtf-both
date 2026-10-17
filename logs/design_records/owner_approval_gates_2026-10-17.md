@@ -244,3 +244,10 @@ repeats every tool call until delivered. A missing or unreadable baseline, or a 
 Same-user limit (documented, not fixable here): a script that rewrites the baseline with the new hashes cannot be
 detected by a file the agent's user can write — the root-owned managed settings (install_managed_gates.sh) are the
 wall for hook removal. 49 tests.
+
+## Owner correction 5 (2026-10-17): no extra alerts
+The owner: "Not necessary. We haven't had any issues with this. You're creating unnecessary processes and alerts."
+REMOVED: the Slack notice on every recorded approval, and the settings watch (hashing Claude Code settings after
+every tool call and paging on change). KEPT: natural approval wording incl. PR numbers (correction 4), and the silent
+Edit/Write block on user-level and main-checkout Claude Code settings by resolved path. The undo page in
+behaviour_integrity (pre-existing) now reads the webhook from .env so it actually reaches Slack. 46 tests.

@@ -82,9 +82,7 @@ def _segments(aid: str) -> list:
 def _match_ids(words: list, known: list) -> list:
     """The one ID the words name, or [] when none or several do. Every typed word must be a segment of the ID and the
     ID's number must be among them: 'gates 1017', '1017', 'PR 689', '689' (owner 2026-10-17: a PR number must work).
-    Ambiguity is decided over ALL declared IDs, so two designs ending in the same number record nothing. Because a
-    number the agent chose can now approve, every recorded approval pages the owner with what it covers (see
-    _page_owner), so an approval he did not mean is visible at once and 'reject <number>' undoes it."""
+    Ambiguity is decided over ALL declared IDs, so two designs ending in the same number record nothing."""
     words = [w.lower() for w in words]
     cands = []
     for aid in known:
@@ -94,37 +92,6 @@ def _match_ids(words: list, known: list) -> list:
     if len(cands) != 1:
         return []
     return cands
-
-
-def _load_webhook(root: str) -> None:
-    """Hooks do not inherit the bot's .env; put SLACK_WEBHOOK_URL in the environment before alerts is imported."""
-    if os.environ.get("SLACK_WEBHOOK_URL"):
-        return
-    try:
-        with open(os.path.join(root, ".env"), encoding="utf-8") as fh:
-            for line in fh:
-                k, sep, v = line.strip().partition("=")
-                if sep and k.strip() == "SLACK_WEBHOOK_URL":
-                    os.environ["SLACK_WEBHOOK_URL"] = v.strip().strip('"').strip("'")
-                    return
-    except OSError:
-        return
-
-
-def _page_owner(text: str) -> bool:
-    """Slack the owner. Returns True only on confirmed delivery; never raises (never blocks his prompt).
-    MTF_TEST_MODE=1 sends nothing and returns False, so the agent is told to tell the owner in chat."""
-    if os.environ.get("MTF_TEST_MODE") == "1":
-        return False
-    try:
-        root = project_dir()
-        _load_webhook(root)
-        sys.path.insert(0, root)
-        from alerts import send_slack_delivery
-        return bool(send_slack_delivery(text))
-    except Exception as exc:
-        print(f"[owner approval] Slack notice failed: {exc}")
-        return False
 
 
 def ids_in(prompt: str, root: "str | None" = None) -> "tuple[list, list]":
@@ -196,11 +163,6 @@ def capture(payload: dict, root: str) -> list:
         with open(tmp, "w") as f:
             json.dump(rec, f, indent=2)
         os.replace(tmp, os.path.join(adir, f"{aid}.json"))
-        delivered = _page_owner(f":white_check_mark: Approval recorded: *{aid}* ({found[0]}) now allows changes to: "
-                                f"{', '.join(found[1]) or '(nothing listed)'}. Not what you meant? In Claude Code, "
-                                f"type 'reject {aid}' (a Slack reply does not undo it).")
-        if not delivered:
-            notes.append(f"Slack notice for {aid} was NOT delivered — tell the owner in chat what this approval covers.")
         notes.append(f"Owner approval recorded: {aid} covers {len(found[1])} path(s); covers fingerprint "
                      f"{covers_sha(found[1])[:16]}.")
     for aid in rejected:
