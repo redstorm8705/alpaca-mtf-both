@@ -857,6 +857,29 @@ def _commit_worktree_mode(argv, subcmds):
     return False
 
 
+def _owner_approval_fails(range_args):
+    """Owner-approval mirror at ship time (design owner_approval_gates_2026-10-17.md, Approval-ID GATES-1017): every
+    trading-behaviour or gate path in the shipped range — deletions included — must be covered by an owner approval
+    recorded from the owner's own 'APPROVE <ID>' message. Tool-agnostic: catches files written by any route."""
+    ok, out = _git(["diff", "--name-only"] + range_args)
+    if not ok:
+        return ["FAIL-CLOSED: could not list shipped files for the owner-approval check (git error)."]
+    try:
+        import owner_approval_gate as oag
+        root = oag._root()
+        recs = oag.approvals(root)
+    except Exception as exc:  # fail closed
+        return [f"FAIL-CLOSED: owner-approval check unavailable ({exc})."]
+    fails = []
+    for path in (ln.strip() for ln in out.splitlines() if ln.strip()):
+        if path.startswith(".claude/preship/markers/"):
+            continue
+        if oag.is_behaviour(path) and not oag.covered(path, recs):
+            fails.append(f"  - {path}: [OWNER APPROVAL] trading-behaviour or gate code with no approval from the owner. "
+                         "Bring him the design; he approves with 'APPROVE <ID>'.")
+    return fails
+
+
 def _handle_git(cmd_argv, subcmds):
     """Check EVERY ship subcommand present, not just one.
 
@@ -886,6 +909,7 @@ def _handle_git(cmd_argv, subcmds):
         else:
             f, _ = _changed_gated(["--cached"], ":{}")
         fails += f
+        fails += _owner_approval_fails(["HEAD"] if _commit_worktree_mode(cmd_argv, subcmds) else ["--cached"])
     if "push" in subcmds:
         # @{upstream} is correct for any branch; fall back to origin/main. A missing
         # upstream fails CLOSED via _changed_gated's git-error path.
@@ -893,6 +917,8 @@ def _handle_git(cmd_argv, subcmds):
         rng = ["@{upstream}..HEAD"] if ok else ["origin/main..HEAD"]
         f, _ = _changed_gated(rng, "HEAD:{}")
         fails += f
+        _git(["fetch", "-q", "origin", "main"])
+        fails += _owner_approval_fails(["origin/main...HEAD"])   # the branch's own changes, not main's merged-in ones
     # De-duplicate: a chained commit+push reports the same file from both ranges.
     seen, uniq = set(), []
     for x in fails:

@@ -1,0 +1,240 @@
+{
+  "version": "RQ-3",
+  "about": "The owner's required questions for every design, build, recommendation and board/Gro/GAI design review (owner_approval_gates_2026-10-17.md, owner 2026-10-17: 'capture the most relevant and critical ones'). One source: bgg_call.py appends them to design prompts, bgg_prompt_bias_gate.py requires them in board prompts, record_design.py and owner_approval_capture.py require a design record to answer every one.",
+  "questions": [
+    {
+      "id": "Q1",
+      "group": "North Star",
+      "q": "Does this move data collection, edge evaluation or the $2.5K -> $25K goal on this PAPER account? If it is conservative, does it justify itself against growth rather than capital preservation?",
+      "source": "CLAUDE.md 'THIS IS A PAPER TRADING ACCOUNT'; 'NORTH-STAR-FIRST BOARD MANDATE'"
+    },
+    {
+      "id": "Q2",
+      "group": "North Star",
+      "q": "Does it change the number of trades the bot takes? More trades with conviction, never fewer: any reduction must be justified and approved by the owner.",
+      "source": "memory project_goal (2026-09-27); owner 2026-10-17 (#687)"
+    },
+    {
+      "id": "Q3",
+      "group": "North Star",
+      "q": "Should this exist at all, and is there a simpler way? If a capability looks risky, what must be built to make it safe (get to yes), rather than restricting it?",
+      "source": "memory feedback_get_to_yes; owner 2026-10-17"
+    },
+    {
+      "id": "Q4",
+      "group": "Existing work",
+      "q": "What existing work already covers this: design records, the Confluence 2.0 admission registry, open or merged PRs, parallel Codex/cloud sessions, the backlog? Does it duplicate or conflict with any of it?",
+      "source": "memory feedback_check_main_for_parallel_work, feedback_verify_scope_against_backlog; owner 2026-10-17"
+    },
+    {
+      "id": "Q5",
+      "group": "Dynamic",
+      "q": "Is it static? Can every threshold, multiplier or number be derived from rolling or observed data instead?",
+      "source": "memory feedback_no_static_regimes ('Is it static?' gate); CLAUDE.md 'NO STATIC-THRESHOLD EXEMPTIONS'"
+    },
+    {
+      "id": "Q6",
+      "group": "Dynamic",
+      "q": "What static assumption does this expose, and what dynamic, adaptive or regime-aware capability should be built next (the forward pass)?",
+      "source": "CLAUDE.md 'BUILD, DON'T JUST FIX' rule A (MODE-2 forward pass)"
+    },
+    {
+      "id": "Q7",
+      "group": "Interconnection",
+      "q": "Is it siloed? Which other paths (scoring, sizing, entry gates, exits, scanner, risk) could it fine-tune, confirm or filter, and does each connection add signal, fail safe and stay testable?",
+      "source": "CLAUDE.md 'ANTI-SILO MANDATE' and 'CONNECTION-OPTIMIZATION (CO) AUDIT'"
+    },
+    {
+      "id": "Q8",
+      "group": "Evidence",
+      "q": "Is every causal or performance claim backed by a measurement, a log line or a trace gathered first (else labelled a hypothesis)? Is the problem real and current in the logs?",
+      "source": "CLAUDE.md 'NO-GUESS MANDATE'; 'SELF-QA GATE' check 3"
+    },
+    {
+      "id": "Q9",
+      "group": "Evidence",
+      "q": "Front-loaded simulation: which historical cases and regimes was it tested on, what effect is expected (direction and size), and what live result would prove it wrong?",
+      "source": "CLAUDE.md 'BUILD, DON'T JUST FIX' rules B and C"
+    },
+    {
+      "id": "Q10",
+      "group": "Evidence",
+      "q": "Is a validated edge being held back only by calibration perfectionism (Profitable > Perfect)?",
+      "source": "CLAUDE.md 'PROFITABLE > PERFECT'"
+    },
+    {
+      "id": "Q11",
+      "group": "Risk",
+      "q": "Does it change position size, trade frequency or concurrency/exposure, including through a multiplier upstream of the Kelly or gross caps? If so it is risk-path: board plus the masked-loss seat.",
+      "source": "CLAUDE.md rule E (risk-path definition)"
+    },
+    {
+      "id": "Q12",
+      "group": "Risk",
+      "q": "Does it touch the safety envelope: a stop on every position, the 7% daily kill switch, never-mask-a-loss, paper=True, the data-source tiers? Bounded risk is fine; widening the envelope is not.",
+      "source": "CLAUDE.md rule E carve-out; memory feedback_safety_control_never_mask_loss"
+    },
+    {
+      "id": "Q13",
+      "group": "Risk",
+      "q": "What happens when its data or a dependency is missing, stale or wrong? Does it fail safe?",
+      "source": "CLAUDE.md 'FEATURE DESIGN PROTOCOL' (failure mode); ANTI-SILO 'FAILS SAFE'"
+    },
+    {
+      "id": "Q14",
+      "group": "Live",
+      "q": "Is any part a shadow: log-only, 'observe for N weeks', computed but not acted on? (Not allowed before $25K: ship live after the replay and the gate, or remove it.)",
+      "source": "CLAUDE.md 'No shadow logs or shadow periods'"
+    },
+    {
+      "id": "Q15",
+      "group": "Live",
+      "q": "Is every decision it makes logged with its full decision stack so it can be reverse-engineered from the logs?",
+      "source": "CLAUDE.md rule D (decision explainability)"
+    },
+    {
+      "id": "Q16",
+      "group": "Live",
+      "q": "After it ships, what log line proves it ran, and how will it be audited and replayed against its first full trading session?",
+      "source": "CLAUDE.md 'Post-live audit + replay'; memory feedback_post_live_audit_backtest"
+    },
+    {
+      "id": "Q17",
+      "group": "Live",
+      "q": "How will it be proven to work at runtime in its real process, not just present in the code?",
+      "source": "memory feedback_audit_efficacy_not_presence"
+    },
+    {
+      "id": "Q18",
+      "group": "Live",
+      "q": "Is an anomaly being explained away as 'by design' without re-examining the design against what actually happened?",
+      "source": "CLAUDE.md 'ANOMALY -> INVESTIGATE -> OPTIMIZE'"
+    },
+    {
+      "id": "Q19",
+      "group": "Process",
+      "q": "Does it change entry, exit, sizing or strategy routing? Then the owner approves the exact design before any commit.",
+      "source": "owner 2026-10-17; memory feedback_entry_exit_changes_need_owner_approval"
+    },
+    {
+      "id": "Q20",
+      "group": "Process",
+      "q": "Self-QA: are the review prompts neutral (no leading language)? Is this a lazy take or an overclaim? Have the logs been fully reviewed? Has the design been thought ahead and taken to the board, Gro and GAI?",
+      "source": "CLAUDE.md 'SELF-QA GATE' checks 1-4"
+    },
+    {
+      "id": "Q21",
+      "group": "Safety",
+      "q": "Can any test or check of this reach the real broker? Every new broker call must be mocked in tests, and the broker must refuse under test.",
+      "source": "memory feedback_tests_never_reach_broker (2026-10-11, 4 real UBER orders)"
+    },
+    {
+      "id": "Q22",
+      "group": "Live",
+      "q": "For a new fail-closed control: has it been run read-only on the server against the real broker and ledger before being called live?",
+      "source": "memory feedback_probe_new_controls_on_prod (2026-09-29 allocator denied all entries)"
+    },
+    {
+      "id": "Q23",
+      "group": "Live",
+      "q": "Has a full-path simulation passed before calling it ready? Deployed is not ready.",
+      "source": "memory feedback_deployed_not_ready_run_sim"
+    },
+    {
+      "id": "Q24",
+      "group": "Evidence",
+      "q": "Is any 'X doesn't exist / isn't tradable / has no ETF' claim checked against the source in this turn?",
+      "source": "memory feedback_verify_absence_claims (DAMD 2026-10-08)"
+    },
+    {
+      "id": "Q25",
+      "group": "Evidence",
+      "q": "Are stock or market statistics (volatility, typical moves, behaviour) measured from data (e.g. a year of Alpaca bars), not quoted from memory?",
+      "source": "memory feedback_measure_market_stats (NVDA 2026-10-15)"
+    },
+    {
+      "id": "Q26",
+      "group": "Feature design",
+      "q": "Data source: which tier (T1 Alpaca / T2 FMP / T3 breadth CSV / T4 yfinance only for VIX, VIX3M, JPY), which API, and what is the fallback behaviour?",
+      "source": "CLAUDE.md 'FEATURE DESIGN PROTOCOL' item 1 (Master Brain 2026-10-17)"
+    },
+    {
+      "id": "Q27",
+      "group": "Feature design",
+      "q": "Output: where does it write, in what format, and is an atomic write required?",
+      "source": "CLAUDE.md 'FEATURE DESIGN PROTOCOL' item 2 (Master Brain 2026-10-17)"
+    },
+    {
+      "id": "Q28",
+      "group": "Feature design",
+      "q": "Integration point: where in the existing flow does this connect, and what runs before and after it (threading, the run_cycle thread, check_exits)?",
+      "source": "CLAUDE.md 'FEATURE DESIGN PROTOCOL' item 3; 'COLD SECOND-AGENT REVIEW' runtime context"
+    },
+    {
+      "id": "Q29",
+      "group": "North Star",
+      "q": "Value rank: where does this rank against the other open items by expected value toward $25K per session of work, and why is it next?",
+      "source": "handoff.md Alignment Gate ('## Value rank'); MODE-2 'ITERATION PATH' (Master Brain 2026-10-17)"
+    },
+    {
+      "id": "Q30",
+      "group": "Evidence",
+      "q": "Whitespace and blind spots: what does a standard quantitative execution framework require here that the bot lacks, and what risk would our own audit (10-point, RC classes, board) underweight?",
+      "source": "CLAUDE.md 'NORTH STAR PERSONA MANDATE' MODE 2 (Master Brain 2026-10-17)"
+    },
+    {
+      "id": "Q31",
+      "group": "Hedge fund",
+      "q": "Out of sample: was it tested walk-forward or with purged cross-validation, how many variants were tried, and is the result still significant after that many tries (deflated Sharpe)? (The answer informs size and the reversal criterion; it never justifies a shadow or 'wait for N trades' period before $25K.)",
+      "source": "hedge-fund beta-model review (owner 2026-10-17); Lopez de Prado, Advances in Financial Machine Learning"
+    },
+    {
+      "id": "Q32",
+      "group": "Hedge fund",
+      "q": "Data honesty: could the replay contain look-ahead (using a bar before it closed), survivorship (only today's symbols), or data snooping?",
+      "source": "hedge-fund beta-model review (owner 2026-10-17)"
+    },
+    {
+      "id": "Q33",
+      "group": "Hedge fund",
+      "q": "Costs: are spread, slippage, missed fills and partial fills in the replay, and what do live fills show the real cost to be?",
+      "source": "hedge-fund beta-model review (owner 2026-10-17); CLAUDE.md roadmap TCA item"
+    },
+    {
+      "id": "Q34",
+      "group": "Hedge fund",
+      "q": "Alpha or beta: how much of the expected return is just exposure to SPY, a sector or momentum, and what is left after removing it?",
+      "source": "hedge-fund beta-model review (owner 2026-10-17); Asness / AQR factor research"
+    },
+    {
+      "id": "Q35",
+      "group": "Hedge fund",
+      "q": "Regimes and tails: how does it behave in high-VIX, trending and choppy markets, what is its worst day, and how correlated is it with what the book already holds?",
+      "source": "hedge-fund beta-model review (owner 2026-10-17)"
+    },
+    {
+      "id": "Q36",
+      "group": "Hedge fund",
+      "q": "Capacity and liquidity: does it still work at the $25K account size and in thin names (share of average daily volume, IEX-only quotes)?",
+      "source": "hedge-fund beta-model review (owner 2026-10-17)"
+    },
+    {
+      "id": "Q37",
+      "group": "Hedge fund",
+      "q": "Statistical power: how many trades are needed to tell this edge from noise, how many exist now, and what is the confidence interval on its expected value per trade? (The answer informs size and the reversal criterion; it never justifies a shadow or 'wait for N trades' period before $25K.)",
+      "source": "hedge-fund beta-model review (owner 2026-10-17)"
+    },
+    {
+      "id": "Q38",
+      "group": "Hedge fund",
+      "q": "Decay and replacement: how is edge decay measured, and what owner-approved definition of 'non-working' moves it to zero trades and triggers its replacement?",
+      "source": "owner 2026-10-17 (strategies are never paused automatically; a non-working strategy takes zero trades and is replaced)"
+    },
+    {
+      "id": "Q39",
+      "group": "Hedge fund",
+      "q": "Sizing follows edge: is the size tied to the measured win rate and payoff (Kelly fraction) rather than a fixed number, and is the P&L that feeds it taken from Alpaca fills?",
+      "source": "hedge-fund beta-model review (owner 2026-10-17); memory feedback_pnl_sourcing; project_kelly_config"
+    }
+  ]
+}
