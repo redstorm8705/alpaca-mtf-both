@@ -1,0 +1,26 @@
+{
+  "change": "f6-typed-kill-verdict",
+  "tier": 2,
+  "paths": [
+    "execution/risk_manager.py",
+    "strategy/run_cycle.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change_id=f6-typed-kill-verdict"
+    }
+  ],
+  "expected_rate": "Once at each daily reset, and once if the trading-tier kill creates a current-session typed verdict; the F6 bypass remains dormant while F6 is disabled.",
+  "window_sessions": 5,
+  "reversal": "Any missing, stale, legacy, corrupt, control-fault, or mathematically inconsistent verdict permits an F6 starter, or a valid current-session genuine trading loss still blocks F6 after F6 is enabled.",
+  "metrics": [
+    {
+      "name": "Typed F6 kill verdict integrity",
+      "source": "logs/mtf_bot.log and data/state/kill_switch_state.json",
+      "direction": "none",
+      "bound": "Every written state is schema version 2 and F6 bypass is possible only for a current-ET-session GENUINE_TRADING_LOSS whose stored P&L divided by baseline equals stored loss percentage at or beyond the active kill threshold."
+    }
+  ],
+  "verification": "tests/test_f6_typed_kill_verdict.py"
+}

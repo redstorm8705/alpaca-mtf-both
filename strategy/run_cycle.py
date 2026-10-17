@@ -261,6 +261,22 @@ def run_cycle(
     # book was left unmanaged exactly when it was losing. Exits keep running; each entry path
     # (execute_entries, QHM entries, overnight entries, F6 starter) is blocked via this flag.
     _kill_block_entries = _kill_tripped or bool(_control_fault)
+    # F6 is a cash-only accumulation tier intended to buy severe broad-market
+    # down days.  It may bypass ONLY a durable, schema-valid, current-ET-session
+    # GENUINE_TRADING_LOSS verdict.  The ordinary boolean is insufficient:
+    # account-read failures, attribution faults, legacy/stale state, and corrupt
+    # state all remain blocking.  Day, Swing, and QHM continue to use the normal
+    # entries block above.
+    _f6_kill_block_entries = _kill_block_entries
+    if config.FOREVER6_ENABLED and _kill_tripped and not _control_fault:
+        try:
+            _f6_kill_block_entries = not risk.f6_genuine_loss_bypass_allowed()
+        except Exception as _f6_verdict_err:
+            _f6_kill_block_entries = True
+            logger.error(
+                "F6 kill-verdict validation failed (%r) — starter remains blocked.",
+                _f6_verdict_err,
+            )
     global _control_fault_streak
     if not _control_fault:
         _control_fault_streak = 0
@@ -940,8 +956,10 @@ def run_cycle(
                 if _f6_prior and _f6_close and _f6_prior > 0:
                     _f6_spy_pct = (_f6_close - _f6_prior) / _f6_prior * 100.0
                     _f6_vix     = float(getattr(_main, "_last_vix", 0.0) or 0.0)
-                    # Kill switch blocks the starter (a new buy); trims already ran above.
-                    _f6_plan    = ({} if _kill_block_entries
+                    # F6 may enter through a genuine-loss trip only when the
+                    # current-session typed verdict proves that cause. Trims
+                    # already ran above and remain reachable under every cause.
+                    _f6_plan    = ({} if _f6_kill_block_entries
                                    else _f6_mgr.maybe_start_accumulation(_f6_spy_pct, _f6_vix))
                     if _f6_plan.get("plan"):
                         _f6_res = _f6_mgr.execute_starter(_f6_plan["plan"], _f6_plan["budget"])

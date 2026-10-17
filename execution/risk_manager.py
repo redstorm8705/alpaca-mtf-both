@@ -11,7 +11,9 @@ import math
 import os
 import requests  # type: ignore[import-untyped]
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -36,6 +38,105 @@ _ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 _KILL_STATE_FILE = (
     Path(__file__).resolve().parent.parent / "data" / "state" / "kill_switch_state.json"
 )
+_KILL_STATE_SCHEMA_VERSION = 2
+
+
+class KillVerdictCause(str, Enum):
+    """Machine-readable reason for the current ET-session kill verdict."""
+
+    CLEAR = "CLEAR"
+    GENUINE_TRADING_LOSS = "GENUINE_TRADING_LOSS"
+    CONTROL_FAULT = "CONTROL_FAULT"
+
+
+@dataclass(frozen=True)
+class KillVerdict:
+    """Validated durable kill verdict.
+
+    Only ``GENUINE_TRADING_LOSS`` may let the disabled F6 starter bypass the
+    trading-tier kill.  Invalid, legacy, stale, or control-fault records never
+    produce a verdict and therefore fail closed for F6.
+    """
+
+    session_date_et: str
+    cause: KillVerdictCause
+    killed: bool
+    halt_entries: bool
+    evaluated_at: str
+    trading_pnl: float | None = None
+    daily_start_value: float | None = None
+    loss_pct: float | None = None
+    attribution_exact: bool = False
+
+    @classmethod
+    def from_state(cls, state: Any) -> "KillVerdict | None":
+        if not isinstance(state, dict):
+            return None
+        try:
+            if state.get("schema_version") != _KILL_STATE_SCHEMA_VERSION:
+                return None
+            session_date = str(state["session_date_et"])
+            if session_date != datetime.now(_ET).strftime("%Y-%m-%d"):
+                return None
+            cause = KillVerdictCause(str(state["cause"]))
+            evaluated_at = str(state["evaluated_at"])
+            evaluated_dt = datetime.fromisoformat(evaluated_at)
+            if evaluated_dt.tzinfo is None:
+                return None
+            if evaluated_dt.astimezone(_ET).strftime("%Y-%m-%d") != session_date:
+                return None
+            killed = state["killed"]
+            halt_entries = state["halt_entries"]
+            if not isinstance(killed, bool) or not isinstance(halt_entries, bool):
+                return None
+
+            def _finite_optional(key: str) -> float | None:
+                value = state.get(key)
+                if value is None:
+                    return None
+                number = float(value)
+                return number if math.isfinite(number) else None
+
+            verdict = cls(
+                session_date_et=session_date,
+                cause=cause,
+                killed=killed,
+                halt_entries=halt_entries,
+                evaluated_at=evaluated_at,
+                trading_pnl=_finite_optional("trading_pnl"),
+                daily_start_value=_finite_optional("daily_start_value"),
+                loss_pct=_finite_optional("loss_pct"),
+                attribution_exact=state.get("attribution_exact") is True,
+            )
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+
+        if cause is KillVerdictCause.CLEAR:
+            return verdict if not killed and not halt_entries else None
+        if cause is KillVerdictCause.CONTROL_FAULT:
+            return verdict if killed and halt_entries else None
+        if not killed or not halt_entries:
+            return None
+        if (
+            verdict.trading_pnl is None
+            or verdict.daily_start_value is None
+            or verdict.daily_start_value <= 0
+            or verdict.loss_pct is None
+            or verdict.loss_pct > -float(config.MAX_DAILY_LOSS_PCT)
+            or not verdict.attribution_exact
+        ):
+            return None
+        expected_pct = verdict.trading_pnl / verdict.daily_start_value
+        # JSON's float representation round-trips these exact binary values;
+        # the persisted percentage was computed from these same two operands.
+        # Exact equality avoids introducing a new policy tolerance that could
+        # bless internally inconsistent loss evidence.
+        if expected_pct != verdict.loss_pct:
+            return None
+        return verdict
+
+    def allows_f6_starter(self) -> bool:
+        return self.cause is KillVerdictCause.GENUINE_TRADING_LOSS
 
 
 def _load_kill_state() -> dict:
@@ -60,7 +161,10 @@ def _load_kill_state() -> dict:
     try:
         if _KILL_STATE_FILE.exists():
             try:
-                return json.loads(_KILL_STATE_FILE.read_text())
+                parsed = json.loads(_KILL_STATE_FILE.read_text())
+                if not isinstance(parsed, dict):
+                    raise ValueError("kill state root must be a JSON object")
+                return parsed
             except FileNotFoundError:
                 # exists() → deleted-before-read race — genuinely absent.
                 logger.debug("kill state file vanished during load — treating as absent")
@@ -83,14 +187,27 @@ def _load_kill_state() -> dict:
         except Exception:
             logger.warning("corrupt-kill-state Slack alert failed")
         return {
+            "schema_version": _KILL_STATE_SCHEMA_VERSION,
             "date": datetime.now(_ET).strftime("%Y-%m-%d"),
+            "session_date_et": datetime.now(_ET).strftime("%Y-%m-%d"),
+            "cause": KillVerdictCause.CONTROL_FAULT.value,
             "killed": True,
             "halt_entries": True,
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
             "corrupt_state_fail_closed": True,
         }
 
 
-def _save_kill_state(killed: bool, halt_entries: bool = False) -> None:
+def _save_kill_state(
+    killed: bool,
+    halt_entries: bool = False,
+    *,
+    cause: KillVerdictCause = KillVerdictCause.CLEAR,
+    trading_pnl: float | None = None,
+    daily_start_value: float | None = None,
+    loss_pct: float | None = None,
+    attribution_exact: bool = False,
+) -> None:
     """
     Persist kill switch + halt state atomically.
     Never raises — cannot break the bot.
@@ -98,15 +215,32 @@ def _save_kill_state(killed: bool, halt_entries: bool = False) -> None:
     try:
         _KILL_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(str(_KILL_STATE_FILE) + ".tmp")
+        session_date = datetime.now(_ET).strftime("%Y-%m-%d")
         tmp.write_text(json.dumps({
+            "schema_version": _KILL_STATE_SCHEMA_VERSION,
             # ET date matches restoration check (Finding 1)
-            "date":         datetime.now(_ET).strftime("%Y-%m-%d"),
+            "date":         session_date,
+            "session_date_et": session_date,
+            "cause":        cause.value,
             "killed":       killed,
             "halt_entries": halt_entries,
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "trading_pnl": trading_pnl,
+            "daily_start_value": daily_start_value,
+            "loss_pct": loss_pct,
+            "attribution_exact": attribution_exact,
             # PT per CLAUDE.md Rule 8 (Finding 9)
             "triggered_at": datetime.now(_PT).isoformat(),
         }))
         tmp.replace(_KILL_STATE_FILE)
+        logger.info(
+            "change_id=f6-typed-kill-verdict session_date_et=%s cause=%s "
+            "killed=%s halt_entries=%s",
+            session_date,
+            cause.value,
+            killed,
+            halt_entries,
+        )
     except Exception as _e:
         try:
             # B6 hardening: failing to persist a FIRED kill switch means the
@@ -458,12 +592,25 @@ class RiskManager:
         # BUG-ADV-1: restore killed=True if same calendar day (survives os.execv)
         _ks = _load_kill_state()
         _today_et = datetime.now(_ET).strftime("%Y-%m-%d")
-        if _ks.get("date") == _today_et and _ks.get("killed"):
+        _ks_date = _ks.get("session_date_et", _ks.get("date"))
+        if _ks_date == _today_et and _ks.get("killed"):
             self.killed = True
             logger.warning(
                 "Kill switch restored from disk — killed=True persists from prior"
                 " watchdog restart. Manual daily_reset() required to clear."
             )
+
+    def f6_genuine_loss_bypass_allowed(self) -> bool:
+        """True only for a proven current-session trading-loss trip.
+
+        This deliberately re-reads the atomic durable record instead of
+        trusting the in-memory boolean.  A legacy, stale, missing, corrupt, or
+        internally inconsistent record returns False, leaving F6 blocked.
+        """
+        if not self.killed:
+            return False
+        verdict = KillVerdict.from_state(_load_kill_state())
+        return bool(verdict and verdict.allows_f6_starter())
 
     def update_portfolio_value(self, value: float):
         # Only update portfolio_value — do NOT write daily_pnl here.
@@ -844,7 +991,11 @@ class RiskManager:
             self.killed = True
             # B6 hardening: this kill previously did NOT persist — it silently
             # died on the next restart while the drawdown kill (below) survived.
-            _save_kill_state(killed=True, halt_entries=True)
+            _save_kill_state(
+                killed=True,
+                halt_entries=True,
+                cause=KillVerdictCause.CONTROL_FAULT,
+            )
             return True
         # PHANTOM-PROOF kill measure (2026-07-10, board + Gro + GAI). On 2026-07-07
         # the kill switch FALSELY tripped at -73.86% because self.daily_pnl (the
@@ -905,7 +1056,19 @@ class RiskManager:
             )
             self.killed = True
             # Finding 4: killed always implies halt_entries
-            _save_kill_state(killed=True, halt_entries=True)
+            _save_kill_state(
+                killed=True,
+                halt_entries=True,
+                cause=(
+                    KillVerdictCause.GENUINE_TRADING_LOSS
+                    if _pos_ok
+                    else KillVerdictCause.CONTROL_FAULT
+                ),
+                trading_pnl=intraday_equity_pnl,
+                daily_start_value=self.daily_start_value,
+                loss_pct=loss_pct,
+                attribution_exact=_pos_ok,
+            )
         return self.killed
 
     def can_open_position(self) -> bool:
@@ -1466,7 +1629,8 @@ class RiskManager:
         if self.killed:
             _ks = _load_kill_state()
             _today = datetime.now(_ET).strftime("%Y-%m-%d")
-            _ksdate = str(_ks.get("date")) if _ks.get("date") else ""
+            _ks_raw_date = _ks.get("session_date_et", _ks.get("date"))
+            _ksdate = str(_ks_raw_date) if _ks_raw_date else ""
             # Refuse a SAME-DAY active kill; ALSO fail-closed when the in-memory latch has NO backing
             # persisted date (persist FAILED — CRITICAL-logged — or the state file was cleared out from
             # under us): clearing then would silently drop a possibly-real same-session kill. Only a
@@ -1488,7 +1652,11 @@ class RiskManager:
         self.daily_pnl         = 0.0
         self.killed            = False
         # BUG-ADV-1: clear persisted state at daily reset
-        _save_kill_state(killed=False, halt_entries=False)
+        _save_kill_state(
+            killed=False,
+            halt_entries=False,
+            cause=KillVerdictCause.CLEAR,
+        )
         logger.info(f"Daily reset. Portfolio: ${portfolio_value:,.2f}")
 
     def sync_from_tracker(self, tracker) -> None:
