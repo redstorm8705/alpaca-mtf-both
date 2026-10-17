@@ -939,7 +939,10 @@ def run_cycle(
         # must never break the after-hours cycle (overnight stops etc. already ran above).
         if config.FOREVER6_ENABLED and _is_ah:
             try:
-                from execution.forever_hold_manager import ForeverHoldManager
+                from execution.forever_hold_manager import (
+                    ForeverHoldManager,
+                    _f6_entry_session,
+                )
                 import execution.broker as _f6_bk
                 _f6_mgr = ForeverHoldManager(_f6_bk)
                 # F6 trims are risk-reducing exits. They do not depend on SPY
@@ -949,11 +952,14 @@ def run_cycle(
                     _f6_mgr.evaluate_and_execute_trims()
                 except Exception as _f6_trim_e:
                     logger.warning("F6 trim evaluation failed (non-fatal): %s", _f6_trim_e)
-                _f6_df = fetch_bars(
-                    "SPY",
-                    config.TF_DAILY,
-                    num_bars=config.BARS_TO_FETCH[config.TF_DAILY],
-                )
+                if _f6_entry_session(_now_ah):
+                    _f6_df = fetch_bars(
+                        "SPY",
+                        config.TF_DAILY,
+                        num_bars=config.BARS_TO_FETCH[config.TF_DAILY],
+                    )
+                else:
+                    _f6_df = None
                 if _f6_df is not None and not _f6_df.empty:
                     # F6 may enter through a genuine-loss trip only when the
                     # current-session typed verdict proves that cause. Trims
@@ -967,9 +973,10 @@ def run_cycle(
                             trigger_evidence=_f6_plan.get("trigger_evidence"),
                         )
                         logger.warning(
-                            "[F6] starter executed: placed %s (spent $%.2f)",
-                            [p.get("symbol") for p in _f6_res.get("placed", [])],
-                            _f6_res.get("spent", 0.0),
+                            "[F6] starter executed: submitted %s (reserved $%.2f; "
+                            "actual spend comes from fills)",
+                            [p.get("symbol") for p in _f6_res.get("submitted", [])],
+                            _f6_res.get("reserved", 0.0),
                         )
             except Exception as _f6e:
                 logger.warning(f"F6 starter after-close eval failed (non-fatal): {_f6e}")

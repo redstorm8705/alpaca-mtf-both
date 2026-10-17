@@ -1,5 +1,6 @@
 # ruff: noqa: E501
 from types import SimpleNamespace
+from datetime import datetime, timedelta
 import json
 import threading
 import time
@@ -13,11 +14,16 @@ from execution import order_admission
 
 @pytest.fixture(autouse=True)
 def isolated_journal(tmp_path, monkeypatch):
+    from execution import forever_hold_manager as f6
+
     monkeypatch.setattr(ppb, "JOURNAL_PATH", tmp_path / "pending.json")
     monkeypatch.setattr(ppb, "LOCK_PATH", tmp_path / ".pending.lock")
     monkeypatch.setattr(order_admission, "_REDUCTION_PATH", tmp_path / "reductions.json")
     monkeypatch.setattr(order_admission, "_REDUCTION_LOCK", tmp_path / ".reductions.lock")
     monkeypatch.setattr(order_admission, "_LOCK_DIR", tmp_path / "symbol-locks")
+    monkeypatch.setattr(f6, "_STATE", tmp_path / "forever6_holds.json")
+    monkeypatch.setattr(f6, "_STATE_LOCK", tmp_path / ".forever6_holds.lock")
+    f6._F6_QUOTE_OBSERVATIONS.clear()
 
 
 def order(*, status="filled", filled=1, coid="F6-NVDA-b-1-test", oid="order-1"):
@@ -29,6 +35,10 @@ def order(*, status="filled", filled=1, coid="F6-NVDA-b-1-test", oid="order-1"):
         qty=1,
         filled_qty=filled,
         status=status,
+        type="limit",
+        time_in_force="day",
+        limit_price="100.01",
+        extended_hours=True,
     )
 
 
@@ -44,30 +54,64 @@ def clean_ledger(*, net, f6):
 
 def execution_ready_manager(f6_module):
     """Manager with the live asset boundary satisfied for order-path unit tests."""
-    asset = {
-        "symbol": "NVDA",
+    client = SimpleNamespace(get_asset=lambda symbol: {
+        "symbol": symbol,
         "status": "active",
         "tradable": True,
         "asset_class": "us_equity",
-        "name": "NVIDIA Corporation Common Stock",
-    }
-    client = SimpleNamespace(get_asset=lambda _symbol: asset)
+        "name": f"{symbol} Corporation Common Stock",
+    })
+    now = datetime(2026, 10, 16, 17, 0, tzinfo=f6_module.ET)
+    f6_module._F6_QUOTE_OBSERVATIONS.update({
+        symbol: now - timedelta(microseconds=2)
+        for symbol in ("NVDA", "META")
+    })
     manager = f6_module.ForeverHoldManager(
-        SimpleNamespace(get_trading_client=lambda: client)
+        SimpleNamespace(
+            get_trading_client=lambda: client,
+            get_account=lambda: SimpleNamespace(cash=1_000.0),
+        ),
+        clock=lambda: now,
+        quote_loader=lambda _symbol: {
+            "bid": 100.0, "ask": 100.01,
+            "ts": (now - timedelta(microseconds=1)).isoformat(),
+        },
     )
     manager._trigger_evidence_is_current = lambda _evidence: True
     return manager
 
 
+def test_empty_schema_one_journal_migrates_safely():
+    ppb.JOURNAL_PATH.write_text(
+        '{"schema": 1, "updated_at": "legacy", "reservations": {}}',
+        encoding="utf-8",
+    )
+
+    loaded = ppb.load()
+
+    assert loaded["schema"] == 2
+    assert loaded["reservations"] == {}
+
+
+def test_nonempty_schema_one_journal_remains_fail_closed():
+    ppb.JOURNAL_PATH.write_text(
+        '{"schema": 1, "updated_at": "legacy", "reservations": {"r": {}}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ppb.PendingProtectedBuyError, match="schema"):
+        ppb.load()
+
+
 def test_active_reservation_blocks_before_ledger_floor_exists():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     assert rid == "F6-NVDA-b-1-test"
     with pytest.raises(ppb.PendingProtectedBuyError, match="blocks reductions"):
         ppb.assert_reduction_clear("NVDA")
 
 
 def test_exact_terminal_zero_releases():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order(status="canceled", filled=0)
     ppb.bind(rid, broker_order)
     # Real first-ever rejected-buy replay shape: no fills/position means the
@@ -79,7 +123,7 @@ def test_exact_terminal_zero_releases():
 
 
 def test_terminal_zero_absent_symbol_requires_zero_baseline():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 2)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 2, limit_price=100.01, extended_hours=True)
     broker_order = order(status="rejected", filled=0)
     ppb.bind(rid, broker_order)
     assert ppb.reconcile([], [broker_order], {"order-1": rid}, {"healed": True, "positions": {}}) == {
@@ -96,7 +140,7 @@ def test_terminal_zero_absent_symbol_requires_zero_baseline():
     ],
 )
 def test_terminal_zero_buy_requires_authoritative_symbol_absence(ledger_result):
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order(status="rejected", filled=0)
     ppb.bind(rid, broker_order)
     assert ppb.reconcile([], [broker_order], {"order-1": rid}, ledger_result) == {
@@ -106,7 +150,7 @@ def test_terminal_zero_buy_requires_authoritative_symbol_absence(ledger_result):
 
 @pytest.mark.parametrize("coid_map", [{}, {"order-1": "F6-WRONG"}])
 def test_terminal_zero_buy_requires_exact_order_join(coid_map):
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order(status="rejected", filled=0)
     ppb.bind(rid, broker_order)
     assert ppb.reconcile(
@@ -115,7 +159,7 @@ def test_terminal_zero_buy_requires_exact_order_join(coid_map):
 
 
 def test_terminal_zero_buy_rejects_duplicate_broker_order_identity():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order(status="rejected", filled=0)
     ppb.bind(rid, broker_order)
     conflicting = SimpleNamespace(
@@ -129,7 +173,7 @@ def test_terminal_zero_buy_rejects_duplicate_broker_order_identity():
 
 
 def test_terminal_zero_with_exact_fill_stays_pending():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order(status="canceled", filled=0)
     ppb.bind(rid, broker_order)
     fill = {"id": "fill-1", "order_id": "order-1", "symbol": "NVDA", "side": "buy", "qty": "1"}
@@ -140,7 +184,7 @@ def test_terminal_zero_with_exact_fill_stays_pending():
 
 
 def test_filled_status_with_zero_fill_stays_pending():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order(status="filled", filled=0)
     ppb.bind(rid, broker_order)
     clean = clean_ledger(net=0, f6=0)
@@ -150,7 +194,7 @@ def test_filled_status_with_zero_fill_stays_pending():
 
 
 def test_positive_fill_requires_exact_same_replay_provenance():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order()
     ppb.bind(rid, broker_order)
     fill = {
@@ -173,7 +217,7 @@ def test_positive_fill_requires_exact_same_replay_provenance():
 
 
 def test_aggregate_claim_without_exact_fill_never_releases():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order()
     ppb.bind(rid, broker_order)
     ledger = {
@@ -185,7 +229,7 @@ def test_aggregate_claim_without_exact_fill_never_releases():
 
 
 def test_exact_fill_without_f6_claim_increase_never_releases():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 2)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 2, limit_price=100.01, extended_hours=True)
     broker_order = order()
     ppb.bind(rid, broker_order)
     fill = {
@@ -209,7 +253,7 @@ def test_exact_fill_without_f6_claim_increase_never_releases():
 
 
 def test_wrong_side_and_offsetting_negative_fill_never_release():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     broker_order = order()
     ppb.bind(rid, broker_order)
     malformed = [
@@ -237,11 +281,12 @@ def test_corrupt_journal_fails_closed():
 def test_malformed_client_id_fails_closed_without_ownership_guard(bad_coid):
     """Journal validation is type-safe and has no ownership-guard import edge."""
     ppb.JOURNAL_PATH.write_text(
-        '{"schema":1,"reservations":{"x":{'
+        '{"schema":2,"reservations":{"x":{'
         '"status":"reserved","symbol":"NVDA","qty":1,'
         f'"client_order_id":{json.dumps(bad_coid)},'
         '"order_id":null,"created_at":"2026-10-14T00:00:00+00:00",'
-        '"baseline_f6_qty":0}}}'
+        '"baseline_f6_qty":0,"limit_price":"100.01","order_type":"limit",'
+        '"time_in_force":"day","extended_hours":true}}}'
     )
     with pytest.raises(ppb.PendingProtectedBuyError, match="invalid client ID"):
         ppb.load()
@@ -249,18 +294,18 @@ def test_malformed_client_id_fails_closed_without_ownership_guard(bad_coid):
 
 def test_reserve_rejects_bare_f6_prefix():
     with pytest.raises(ppb.PendingProtectedBuyError, match="invalid F6 reservation"):
-        ppb.reserve("NVDA", 1, "F6", 0)
+        ppb.reserve("NVDA", 1, "F6", 0, limit_price=100.01, extended_hours=True)
 
 
 def test_bind_rejects_wrong_identity_and_retains_reservation():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     with pytest.raises(ppb.PendingProtectedBuyError, match="exactly match"):
         ppb.bind(rid, order(coid="F6-NVDA-b-1-other"))
     assert ppb.load()["reservations"][rid]["status"] == "reserved"
 
 
 def test_bind_is_idempotent_only_for_the_exact_submitted_order():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     accepted = order()
     ppb.bind(rid, accepted)
     ppb.bind(rid, accepted)
@@ -271,7 +316,7 @@ def test_bind_is_idempotent_only_for_the_exact_submitted_order():
 
 
 def test_only_reserved_exact_identity_can_release_definitive_reject():
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     with pytest.raises(ppb.PendingProtectedBuyError, match="definitive broker rejection"):
         ppb.release_definitive_reject(rid, "F6-NVDA-b-1-wrong")
     assert ppb.load()["reservations"][rid]["status"] == "reserved"
@@ -282,7 +327,7 @@ def test_only_reserved_exact_identity_can_release_definitive_reject():
 
 
 def test_pending_reservation_blocks_direct_sell_before_broker(monkeypatch):
-    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     client = SimpleNamespace(
         submit_order=lambda _request: pytest.fail("broker was called")
     )
@@ -304,7 +349,7 @@ def test_side_parameter_binding_admits_buys_and_blocks_sells(monkeypatch, keywor
         calls.append((symbol, qty, side))
         return "submitted"
 
-    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     if keyword_side:
         assert submit("NVDA", 1, side="sell") == "blocked"
         assert submit("NVDA", 1, side="buy") == "submitted"
@@ -318,7 +363,7 @@ def test_pending_reservation_blocks_f6_trim_at_its_chokepoint(monkeypatch):
     """F6 trim must fail before position reads or its delegated sell path."""
     import config
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
-    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     monkeypatch.setattr(
         broker, "get_open_position", lambda _symbol: pytest.fail("position was read")
     )
@@ -333,7 +378,7 @@ def test_pending_reservation_blocks_f6_trim_at_its_chokepoint(monkeypatch):
 def test_pre_submit_blocked_sell_does_not_leak_reducer_admission(monkeypatch):
     import config
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0, limit_price=100.01, extended_hours=True)
     client = SimpleNamespace(
         submit_order=lambda _request: pytest.fail("broker was called")
     )
@@ -480,7 +525,7 @@ def test_f6_starter_exception_recovers_and_binds_exact_order(monkeypatch):
     monkeypatch.setattr(broker, "_make_idem_id", lambda *_args: recovered.client_order_id)
     monkeypatch.setattr(broker, "get_open_orders", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
-        broker, "submit_market_order",
+        broker, "submit_limit_order",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("lost response")),
     )
     monkeypatch.setattr(broker, "get_order_by_client_order_id", lambda _coid: recovered)
@@ -498,7 +543,6 @@ def test_f6_starter_exception_recovers_and_binds_exact_order(monkeypatch):
     monkeypatch.setattr(ownership_guard, "tier_qty", lambda *_args: 0.0)
 
     manager = execution_ready_manager(f6)
-    monkeypatch.setattr(manager, "_record_event", lambda *_args: None)
     monkeypatch.setattr(manager, "_verify_ledger_reflects", lambda *_args: None)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=1_000.0,
@@ -524,7 +568,7 @@ def test_f6_definitive_buy_reject_releases_both_intents_and_stops_batch(monkeypa
     monkeypatch.setattr(broker, "_make_idem_id", lambda *_args: coid)
     monkeypatch.setattr(broker, "get_open_orders", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
-        broker, "submit_market_order",
+        broker, "submit_limit_order",
         lambda *_args, **_kwargs: broker.ORDER_DEFINITIVELY_REJECTED,
     )
     monkeypatch.setattr(
@@ -541,7 +585,7 @@ def test_f6_definitive_buy_reject_releases_both_intents_and_stops_batch(monkeypa
 
     manager = execution_ready_manager(f6)
     result = manager.execute_starter(
-        [{"symbol": "NVDA", "price": 100.0}, {"symbol": "AAPL", "price": 100.0}],
+            [{"symbol": "NVDA", "price": 100.0}, {"symbol": "META", "price": 100.0}],
         300.0,
         settled_cash=1_000.0,
     )
@@ -570,7 +614,7 @@ def test_allocator_release_failure_keeps_f6_rejection_reservation_active(monkeyp
     monkeypatch.setattr(broker, "_make_idem_id", lambda *_args: coid)
     monkeypatch.setattr(broker, "get_open_orders", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
-        broker, "submit_market_order",
+        broker, "submit_limit_order",
         lambda *_args, **_kwargs: broker.ORDER_DEFINITIVELY_REJECTED,
     )
     monkeypatch.setattr(broker, "get_order_by_client_order_id", lambda _coid: None)
@@ -608,7 +652,7 @@ def test_f6_ambiguous_timeout_keeps_protected_intent_active(monkeypatch):
     monkeypatch.setattr(f6, "_read_sync_degraded", lambda: False)
     monkeypatch.setattr(broker, "_make_idem_id", lambda *_args: coid)
     monkeypatch.setattr(broker, "get_open_orders", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(broker, "submit_market_order", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(broker, "submit_limit_order", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(broker, "get_order_by_client_order_id", lambda _coid: None)
     monkeypatch.setattr(
         allocator, "live_admit",
@@ -643,7 +687,7 @@ def test_f6_starter_recovers_after_pending_bind_then_allocator_bind_raises(monke
     monkeypatch.setattr(f6, "_read_sync_degraded", lambda: False)
     monkeypatch.setattr(broker, "_make_idem_id", lambda *_args: recovered.client_order_id)
     monkeypatch.setattr(broker, "get_open_orders", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(broker, "submit_market_order", lambda *_args, **_kwargs: recovered)
+    monkeypatch.setattr(broker, "submit_limit_order", lambda *_args, **_kwargs: recovered)
     monkeypatch.setattr(broker, "get_order_by_client_order_id", lambda _coid: recovered)
     monkeypatch.setattr(
         allocator, "live_admit",
@@ -663,7 +707,6 @@ def test_f6_starter_recovers_after_pending_bind_then_allocator_bind_raises(monke
     monkeypatch.setattr(ownership_guard, "tier_qty", lambda *_args: 0.0)
 
     manager = execution_ready_manager(f6)
-    monkeypatch.setattr(manager, "_record_event", lambda *_args: None)
     monkeypatch.setattr(manager, "_verify_ledger_reflects", lambda *_args: None)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=1_000.0,
@@ -753,7 +796,7 @@ def test_false_f6_flag_sell_creates_no_pending_journal_or_lock(monkeypatch):
 def test_false_f6_flag_existing_active_journal_still_blocks_sell(monkeypatch):
     import config
     monkeypatch.setattr(config, "FOREVER6_ENABLED", False)
-    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-existing", 0)
+    ppb.reserve("NVDA", 1, "F6-NVDA-b-1-existing", 0, limit_price=100.01, extended_hours=True)
     calls = []
     monkeypatch.setattr(
         broker, "_get_trading_client",
@@ -893,10 +936,11 @@ def test_malformed_boolean_fill_identity_cannot_release_either_journal(monkeypat
     )
     assert len(result["pending"]) == 1
 
-    rid = ppb.reserve("AAPL", 1, "F6-AAPL-b-1-x", 0)
+    rid = ppb.reserve("AAPL", 1, "F6-AAPL-b-1-x", 0, limit_price=100.01, extended_hours=True)
     buy = SimpleNamespace(
         id="buy-1", client_order_id=rid, symbol="AAPL", side="buy", qty=1,
-        filled_qty=1, status="filled",
+        filled_qty=1, status="filled", type="limit", time_in_force="day",
+        limit_price="100.01", extended_hours=True,
     )
     ppb.bind(rid, buy)
     malformed_buy = {
@@ -916,7 +960,7 @@ def test_malformed_boolean_fill_identity_cannot_release_either_journal(monkeypat
 @pytest.mark.parametrize("bad", [True, False])
 @pytest.mark.parametrize("field", ["qty", "filled_qty"])
 def test_boolean_order_quantities_cannot_bind_or_release_journals(bad, field):
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-bool-order", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-bool-order", 0, limit_price=100.01, extended_hours=True)
     malformed_buy = order(coid=rid, oid="buy-1")
     setattr(malformed_buy, field, bad)
     with pytest.raises(ppb.PendingProtectedBuyError, match="does not exactly match"):
@@ -939,7 +983,7 @@ def test_boolean_order_quantities_cannot_bind_or_release_journals(bad, field):
 @pytest.mark.parametrize("bad", [True, False])
 @pytest.mark.parametrize("evidence", ["order_qty", "order_filled", "fill_qty", "ledger_drift"])
 def test_boolean_reconciliation_evidence_keeps_both_journals_pending(bad, evidence):
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-bool-proof", 0)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-bool-proof", 0, limit_price=100.01, extended_hours=True)
     buy = order(coid=rid, oid="buy-1")
     ppb.bind(rid, buy)
     terminal_buy = order(coid=rid, oid="buy-1")
@@ -1030,7 +1074,7 @@ def test_f6_trim_replay_precedes_new_buy_baseline(
     assert replay["pending"] == []
     assert order_admission.active_reductions("NVDA") == ()
 
-    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-after-trim", after)
+    rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-after-trim", after, limit_price=100.01, extended_hours=True)
     buy = order(coid=rid, oid="buy-1")
     ppb.bind(rid, buy)
     buy_fill = {"id": "buy-fill", "order_id": "buy-1", "symbol": "NVDA", "side": "buy", "qty": 1}

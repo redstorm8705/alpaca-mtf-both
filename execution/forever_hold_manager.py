@@ -18,14 +18,18 @@ never places an order; execute_starter is the money-moving boundary.
 from __future__ import annotations
 
 import hashlib
+import contextlib
+import fcntl
 import json
 import logging
 import math
 import os
+import threading
+import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 from zoneinfo import ZoneInfo
 
 import config
@@ -51,10 +55,27 @@ _SYNC_DEGRADED = _ROOT / "data" / "state" / "forever6_sync_degraded.json"
 # reserve/confirm transition vs. once per starter event).
 _TRIM_STATE = _ROOT / "data" / "state" / "forever6_trims.json"
 _TRIGGER_EVIDENCE = _ROOT / "data" / "state" / "forever6_trigger_evidence.jsonl"
+_STATE_LOCK = _ROOT / "data" / "state" / ".forever6_holds.lock"
 _EPS = 1e-6
 # Process-local half of the startup interlock.  Durable state protects restarts;
 # this boolean also fails closed if persisting that state itself fails.
 _STARTUP_READY = False
+_F6_ENTRY_START = time.fromisoformat("16:05")
+_F6_ENTRY_END = time.fromisoformat("20:00")
+_F6_QUOTE_OBSERVATIONS: dict[str, datetime] = {}
+_F6_QUOTE_OBSERVATIONS_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _state_locked():
+    """Serialize the F6 event journal across bot processes."""
+    _STATE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+    with open(_STATE_LOCK, "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -122,19 +143,117 @@ def _write_sync_degraded(degraded: bool, detail: str = "") -> bool:
                         f"— next seed may NOT be auto-blocked; verify manually.")
         return False
 
-# Reserve slightly MORE than the planned price per leg so a market-order fill above the planned
-# price can never push cumulative spend past `spendable` and breach the cash floor (GAI pre-ship
-# catch: a HARD cash limit must reserve against slippage, not the planned price). 1% is very
-# conservative for a 1-share order in the most-liquid mega-caps; it only ever SKIPS a marginal name.
-_STARTER_SLIPPAGE_BUFFER = 1.01
+def _f6_entry_session(now_et: datetime) -> bool:
+    """F6 starters may submit only while Alpaca accepts extended-hours DAY orders."""
+    local_time = now_et.timetz().replace(tzinfo=None)
+    return now_et.weekday() < 5 and _F6_ENTRY_START <= local_time < _F6_ENTRY_END
+
+
+def _quote_time(value: object) -> datetime | None:
+    """Parse Alpaca's RFC3339 timestamp, including nanosecond fractions on Python 3.10."""
+    raw = str(value or "")
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    if "." in raw:
+        head, tail = raw.split(".", 1)
+        split_at = next((i for i, char in enumerate(tail) if char in "+-"), len(tail))
+        raw = f"{head}.{tail[:split_at][:6]}{tail[split_at:]}"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def _validated_quote(raw: object, now_et: datetime) -> tuple[float, float, datetime] | None:
+    """Return a structurally valid quote from the active ET session."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        bid = float(raw.get("bid", 0) or 0)
+        ask = float(raw.get("ask", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    quote_ts = _quote_time(raw.get("ts"))
+    quote_et = quote_ts.astimezone(ET) if quote_ts is not None else None
+    if (not all(math.isfinite(value) and value > 0 for value in (bid, ask))
+            or bid > ask or quote_et is None or quote_et > now_et
+            or quote_et.date() != now_et.date()
+            or quote_et.timetz().replace(tzinfo=None) < _F6_ENTRY_START):
+        return None
+    return bid, ask, quote_et
+
+
+def _observe_advancing_quote(
+    symbol: str, raw: object, observed_at: datetime,
+) -> tuple[float, float, datetime] | None:
+    """Prove feed liveness across cycles without a static quote-age threshold.
+
+    The first current-session observation arms the symbol but cannot authorize a
+    buy.  A later cycle must observe a strictly newer exchange timestamp.  An
+    unchanged 4:05 PM quote therefore remains blocked at 7:59 PM, while ordinary
+    REST calls do not depend on a quote changing within a few milliseconds.
+    """
+    confirmed, _ = _observe_advancing_basket(
+        {symbol: _validated_quote(raw, observed_at)}
+    )
+    return confirmed.get(symbol)
+
+
+def _observe_advancing_basket(
+    observations: dict[str, tuple[float, float, datetime] | None],
+) -> tuple[dict[str, tuple[float, float, datetime]], set[str]]:
+    """Atomically advance a complete basket's monotonic quote watermarks.
+
+    Missing/current-day-first observations seed only their own watermark.  A
+    regression never lowers it.  If any name is blocked, otherwise-valid names
+    retain their prior watermark so a sparse symbol cannot force every basket
+    member to print again in the same later runner cycle.
+    """
+    blocked: set[str] = set()
+    with _F6_QUOTE_OBSERVATIONS_LOCK:
+        for symbol, quote in observations.items():
+            if quote is None:
+                blocked.add(symbol)
+                continue
+            prior = _F6_QUOTE_OBSERVATIONS.get(symbol)
+            if (prior is None
+                    or prior.astimezone(ET).date() != quote[2].astimezone(ET).date()):
+                _F6_QUOTE_OBSERVATIONS[symbol] = quote[2]
+                blocked.add(symbol)
+            elif quote[2] <= prior:
+                blocked.add(symbol)
+        if blocked:
+            return {}, blocked
+        confirmed = {
+            symbol: quote
+            for symbol, quote in observations.items()
+            if quote is not None
+        }
+        for symbol, quote in confirmed.items():
+            _F6_QUOTE_OBSERVATIONS[symbol] = quote[2]
+        return confirmed, set()
 
 
 class ForeverHoldManager:
     """F6 never-sell accumulation, disabled until the launch gate is approved."""
 
-    def __init__(self, broker) -> None:
+    def __init__(
+        self,
+        broker,
+        *,
+        clock: Callable[[], datetime] | None = None,
+        quote_loader: Callable[[str], dict | None] | None = None,
+    ) -> None:
         self.broker = broker
         self.universe = list(config.FOREVER6_UNIVERSE)
+        self.clock = clock or (lambda: datetime.now(ET))
+        if quote_loader is None:
+            from data.alpaca_data import get_latest_quote
+            quote_loader = get_latest_quote
+        self.quote_loader = quote_loader
 
     def reconcile_on_startup(self) -> F6StartupReconcileResult:
         """Rebuild and verify F6 ownership before any F6 action after restart.
@@ -264,9 +383,32 @@ class ForeverHoldManager:
             logger.warning("forever6: state read failed: %s", e)
         return {"events": []}
 
+    @staticmethod
+    def _load_state_strict() -> dict:
+        """Execution-boundary state read; corruption blocks rather than looking empty."""
+        if not _STATE.exists():
+            return {"events": []}
+        try:
+            state = json.loads(_STATE.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"F6 event state unreadable: {exc}") from exc
+        if not isinstance(state, dict) or not isinstance(state.get("events"), list):
+            raise RuntimeError("F6 event state is malformed")
+        return state
+
     def _events_this_month(self, state: dict) -> int:
         ym = datetime.now(PT).strftime("%Y-%m")
-        return sum(1 for e in state.get("events", []) if str(e.get("date", "")).startswith(ym))
+        return sum(
+            1
+            for e in state.get("events", [])
+            if isinstance(e, dict)
+            and str(e.get("date", "")).startswith(ym)
+            and e.get("status") != "released_no_order"
+        )
+
+    @staticmethod
+    def _event_counts(event: object) -> bool:
+        return isinstance(event, dict) and event.get("status") != "released_no_order"
 
     # ── starter evaluation (returns a plan; execute_starter owns order placement) ──
     def maybe_start_accumulation(
@@ -292,13 +434,13 @@ class ForeverHoldManager:
             return {"triggered": False, "reason": verdict.reason, "plan": [],
                     "budget": 0.0, "trigger_evidence": evidence}
 
-        state = self._load_state()
+        state = self._load_state_strict()
         # Durable per-DAY idempotency: if a starter event was already recorded today, do NOT
         # place again. This is the definitive anti-double-place guard for the run_cycle after-close
         # hook, which re-evaluates every closed-market cycle (and could otherwise re-fire after a
         # mid-evening restart). State-based → survives restarts, unlike an in-process flag.
         _today_str = datetime.now(PT).strftime("%Y-%m-%d")
-        if any(isinstance(e, dict) and str(e.get("date", "")) == _today_str
+        if any(self._event_counts(e) and str(e.get("date", "")) == _today_str
                for e in state.get("events", [])):
             return {"triggered": True, "reason": f"already ran today ({_today_str})", "plan": [], "budget": 0.0}
         n_month = self._events_this_month(state)
@@ -457,8 +599,8 @@ class ForeverHoldManager:
         NEVER sells. FAIL-CLOSED: stops on the FIRST broker failure and never counts an unconfirmed
         order as placed (never-mask — a data/broker fault must not manufacture or hide a fill).
 
-        PRECONDITION: the CALLER (run_cycle, increment 1c) has already checked config.FOREVER6_ENABLED
-        AND the after-close timing. This method does the money-moving part only.
+        The money-moving boundary independently enforces the approved weekday
+        4:05–8:00 PM ET extended-hours session.
         Returns {"placed": [...], "skipped": [...], "spent": float, "reason": str}."""
         if not plan:
             return {"placed": [], "skipped": [], "spent": 0.0, "reason": "empty plan"}
@@ -486,6 +628,14 @@ class ForeverHoldManager:
                 "reason": "startup ownership preflight not ready",
             }
 
+        boundary_now = self.clock().astimezone(ET)
+        if not _f6_entry_session(boundary_now):
+            return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                    "reason": "outside F6 entry session"}
+        if len(plan) > config.FOREVER6_STARTER_MAX_NAMES:
+            return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                    "reason": "starter name cap exceeded"}
+
         # C-3 (design 2026-07-17): refuse to place if a prior post-buy sync left the ledger
         # degraded (a fresh F6 lot unreflected). Blocks a BUY only — never a sell — the safe
         # direction for a never-sell book. Auto-cleared when a later sync verifies clean (C-2).
@@ -496,6 +646,34 @@ class ForeverHoldManager:
                         "buys held until a clean ledger sync clears it.")
             return {"placed": [], "skipped": list(plan), "spent": 0.0,
                     "reason": "sync-degraded block"}
+
+        from execution import pending_protected_buys as _pending_f6
+        try:
+            if any(
+                row.get("status") in _pending_f6.ACTIVE
+                for row in _pending_f6.load()["reservations"].values()
+            ):
+                return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                        "reason": "prior protected buy unresolved"}
+        except Exception as exc:
+            logger.critical("[F6] pending-buy journal unreadable — starter blocked: %s", exc)
+            return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                    "reason": "protected-buy journal unreadable"}
+
+        try:
+            state = self._load_state_strict()
+        except Exception as exc:
+            logger.critical("[F6] event state unreadable — starter blocked: %s", exc)
+            return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                    "reason": "event state unreadable"}
+        today_pt = datetime.now(PT).strftime("%Y-%m-%d")
+        if any(self._event_counts(event) and str(event.get("date", "")) == today_pt
+               for event in state.get("events", [])):
+            return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                    "reason": "starter already reserved today"}
+        if self._events_this_month(state) >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH:
+            return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                    "reason": "starter monthly cap reached"}
 
         # Re-verify SETTLED CASH at execution time. F6 is CASH-ONLY — margin is FORBIDDEN (the cold
         # board's decisive ruin finding: a maintenance call from ANY other strategy's bad day would
@@ -513,8 +691,100 @@ class ForeverHoldManager:
         from execution import broker as _bk
         placed: list[dict] = []
         skipped: list[dict] = []
-        reserved = 0.0      # slippage-buffered UPPER BOUND on spend — the cash-floor guard variable
-        for i, p in enumerate(plan):
+        reserved = 0.0
+        event_id: str | None = None
+
+        # Reject malformed or forbidden products before touching market data.
+        # The same checks repeat inside each symbol lock because the live asset
+        # description or configured universe can change between preflight and
+        # the money-moving boundary.
+        admissible_plan: list[dict] = []
+        for candidate in plan:
+            candidate_symbol = str(candidate.get("symbol", "")).upper()
+            try:
+                candidate_price = float(candidate.get("price", 0) or 0)
+            except (TypeError, ValueError):
+                candidate_price = 0.0
+            if not candidate_symbol or candidate_price <= 0:
+                skipped.append({**candidate, "skip": "bad symbol/price"})
+                continue
+            eligible, policy_reason = f6_symbol_eligible(
+                candidate_symbol, config.FOREVER6_UNIVERSE
+            )
+            if not eligible:
+                skipped.append({**candidate, "skip": f"instrument policy: {policy_reason}"})
+                logger.critical(
+                    "[F6] BUY BLOCKED %s — instrument policy: %s",
+                    candidate_symbol, policy_reason,
+                )
+                _slack_safe(
+                    f":no_entry: F6 BUY BLOCKED for {candidate_symbol} — instrument "
+                    f"policy: {policy_reason}. No order was sent."
+                )
+                continue
+            try:
+                live_asset = self.broker.get_trading_client().get_asset(candidate_symbol)
+            except Exception:
+                skipped.append({
+                    **candidate, "skip": "Alpaca asset classification unavailable",
+                })
+                continue
+            live_ok, live_reason = f6_live_asset_eligible(candidate_symbol, live_asset)
+            if not live_ok:
+                skipped.append({
+                    **candidate, "skip": f"live instrument policy: {live_reason}",
+                })
+                logger.critical(
+                    "[F6] BUY BLOCKED %s — live instrument policy: %s",
+                    candidate_symbol, live_reason,
+                )
+                _slack_safe(
+                    f":no_entry: F6 BUY BLOCKED for {candidate_symbol} — live instrument "
+                    f"policy: {live_reason}. No order was sent."
+                )
+                continue
+            admissible_plan.append(candidate)
+        if not admissible_plan:
+            return {
+                "placed": [], "submitted": [], "skipped": skipped,
+                "spent": 0.0, "reserved": 0.0,
+                "reason": "no admissible F6 starter names",
+            }
+
+        # Feed-liveness preflight happens before the first irreversible action.
+        # A latest-quote REST call commonly returns the same quote when repeated
+        # immediately, especially after hours.  Instead, each symbol must advance
+        # beyond the timestamp observed on a prior scan cycle.  Observe every
+        # planned symbol together so a partially live feed cannot create a partial
+        # basket and then strand the remaining names behind daily idempotency.
+        observations: dict[str, tuple[float, float, datetime] | None] = {}
+        for candidate in admissible_plan:
+            candidate_symbol = str(candidate.get("symbol", "")).upper()
+            if not candidate_symbol:
+                continue
+            raw_quote = self.quote_loader(candidate_symbol)
+            observed_at = self.clock().astimezone(ET)
+            observations[candidate_symbol] = _validated_quote(raw_quote, observed_at)
+        confirmed_quotes, blocked_symbols = _observe_advancing_basket(observations)
+        if blocked_symbols:
+            skipped.extend(
+                {
+                    **candidate,
+                    "skip": (
+                        "quote feed freshness awaits a later cross-cycle update"
+                        if str(candidate.get("symbol", "")).upper() in blocked_symbols
+                        else "basket held until every quote proves freshness"
+                    ),
+                }
+                for candidate in admissible_plan
+            )
+            return {
+                "placed": [], "submitted": [], "skipped": skipped,
+                "spent": 0.0, "reserved": 0.0,
+                "reason": "quote feed freshness not yet proven across cycles",
+            }
+
+        for i, p in enumerate(admissible_plan):
             sym = str(p.get("symbol", "")).upper()
             try:
                 px = float(p.get("price", 0) or 0)
@@ -575,14 +845,6 @@ class ForeverHoldManager:
                     "evidence is unresolved. No order was sent."
                 )
                 continue
-            # Reserve a slippage-buffered amount; a market fill above the planned price can then NEVER
-            # push cumulative spend past `spendable` and breach the cash floor (ruin finding #1).
-            px_reserve = px * _STARTER_SLIPPAGE_BUFFER
-            if px_reserve > (spendable - reserved):
-                skipped.append({**p, "skip": "budget/floor exhausted"})
-                continue
-            # CASH-ONLY 1-share market buy, tier-tagged "forever6" (never-sell attribution).
-            # Signed: ChatGPT/Codex, 2026-09-27.
             from execution.tier_capital_allocator import (
                 live_admit,
                 live_bind,
@@ -590,39 +852,65 @@ class ForeverHoldManager:
                 live_release_proven_no_order,
             )
             from execution.order_admission import active_reductions, symbol_order_gate
-            from execution import pending_protected_buys as _pending_f6
+
             _coid = _bk._make_idem_id("forever6", sym, "buy")
-            _capital = live_admit("forever6", "forever6", sym, "buy", 1, px_reserve,
-                                  stop_price=px * 0.01, client_order_id=_coid)
-            if not _capital.approved:
-                skipped.append({**p, "skip": f"allocator: {_capital.reason}"})
-                continue
+            _capital = None
             _reservation_written = False
+            _event_intent_written = False
+            order = None
+            hard_limit = 0.0
             try:
                 with symbol_order_gate(sym):
-                    # Reducers clear only in run_ledger_sync after their exact fills
-                    # are reflected by the canonical ownership replay.  A terminal
-                    # broker status alone can precede that replay and is not enough.
+                    submit_now = self.clock().astimezone(ET)
+                    if not _f6_entry_session(submit_now):
+                        skipped.append({**p, "skip": "F6 entry session closed"})
+                        break
+
+                    boundary_raw_quote = self.quote_loader(sym)
+                    quote_observed_at = self.clock().astimezone(ET)
+                    confirmed_quote = _validated_quote(boundary_raw_quote, quote_observed_at)
+                    if (confirmed_quote is None
+                            or confirmed_quote[2] < confirmed_quotes[sym][2]):
+                        raise RuntimeError(
+                            "boundary quote is invalid, regressed, crossed, future, or outside this ET session"
+                        )
+                    _, ask, _ = confirmed_quote
+                    hard_limit = _bk.canonical_buy_limit_price(ask)
+
+                    current_cash = self._fetch_cash()
+                    current_capacity = min(
+                        float(budget),
+                        current_cash - config.FOREVER6_STARTER_CASH_FLOOR,
+                    ) - reserved
+                    if (not math.isfinite(current_cash) or current_cash < 0
+                            or not math.isfinite(current_capacity) or hard_limit > current_capacity):
+                        skipped.append({**p, "skip": "exact limit exceeds current cash/event capacity"})
+                        continue
+                    current_state = self._load_state_strict()
+                    current_today = datetime.now(PT).strftime("%Y-%m-%d")
+                    other_counted = [
+                        event for event in current_state.get("events", [])
+                        if self._event_counts(event) and event.get("event_id") != event_id
+                    ]
+                    if any(str(event.get("date", "")) == current_today for event in other_counted):
+                        raise RuntimeError("another F6 event is already reserved today")
+                    if sum(1 for event in other_counted
+                           if str(event.get("date", "")).startswith(current_today[:7])) \
+                            >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH:
+                        raise RuntimeError("F6 monthly event cap reached")
+
                     _unsettled_reducers = active_reductions(sym)
                     if _unsettled_reducers:
-                        live_release(_capital.lease, "pre_submit_reducing_intent")
                         skipped.append({**p, "skip": "reducing order admission unresolved"})
-                        logger.warning(
-                            "[F6] BUY BLOCKED %s: %d reducing admission(s) unresolved",
-                            sym, len(_unsettled_reducers),
-                        )
                         continue
-                    # A broker-resting sell can execute after this buy fills and consume
-                    # the new protected share without entering a fresh guard.  Refuse the
-                    # buy instead of cancelling another tier's protection.
                     _open = _bk.get_open_orders(sym, nested=True)
                     if _open is None:
                         raise RuntimeError("open-order state unreadable")
-                    _reducing = []
                     _all_open = []
                     for _parent in _open:
                         _all_open.append(_parent)
                         _all_open.extend(list(getattr(_parent, "legs", None) or []))
+                    _reducing = []
                     for _o in _all_open:
                         _symbol = str(getattr(_o, "symbol", "") or "").upper()
                         _side = str(getattr(getattr(_o, "side", ""), "value", getattr(_o, "side", ""))).lower()
@@ -631,9 +919,17 @@ class ForeverHoldManager:
                         if _side in {"sell", "sell_short"}:
                             _reducing.append(str(getattr(_o, "id", "unknown")))
                     if _reducing:
-                        live_release(_capital.lease, "pre_submit_reducing_order")
                         skipped.append({**p, "skip": "live reducing order exists"})
-                        logger.warning("[F6] BUY BLOCKED %s: live reducing order(s) %s", sym, _reducing)
+                        continue
+
+                    _capital = live_admit(
+                        "forever6", "forever6", sym, "buy", 1, hard_limit,
+                        stop_price=math.nextafter(0.0, 1.0), exact_cash_reserve=True,
+                        order_type="limit", time_in_force="day", extended_hours=True,
+                        client_order_id=_coid,
+                    )
+                    if not _capital.approved:
+                        skipped.append({**p, "skip": f"allocator: {_capital.reason}"})
                         continue
 
                     from execution import ownership_guard as _og
@@ -644,87 +940,95 @@ class ForeverHoldManager:
                             or abs(_baseline - round(_baseline)) > _EPS
                             or (_entry is not None and abs(float(_entry.get("drift", 0) or 0)) > _EPS)):
                         raise RuntimeError("baseline F6 ownership is unresolved")
-                    _reservation = _pending_f6.reserve(sym, 1, _coid, _baseline)
+
+                    event_id = self._reserve_event_intent(
+                        event_id, sym, _coid, hard_limit, trigger_evidence
+                    )
+                    _event_intent_written = True
+                    _reservation = _pending_f6.reserve(
+                        sym, 1, _coid, _baseline,
+                        limit_price=hard_limit, extended_hours=True,
+                    )
                     _reservation_written = True
-                    order = _bk.submit_market_order(
-                        sym, 1, "buy", tier="forever6", client_order_id=_coid,
-                        distinguish_rejection=True,
+                    order = _bk.submit_limit_order(
+                        sym, 1, "buy", hard_limit, extended_hours=True,
+                        tier="forever6", client_order_id=_coid,
+                        time_in_force="day", distinguish_rejection=True,
                     )
                     if order is _bk.ORDER_DEFINITIVELY_REJECTED:
-                        # Alpaca explicitly declined before accepting an order.
-                        # This is the only no-order result that can safely retire
-                        # both durable intents without fill replay.  Stop the batch
-                        # so a buying-power/auth failure is not repeated by symbol.
                         if not live_release_proven_no_order(
                             _capital.lease, "broker_definitive_reject"
                         ):
-                            raise RuntimeError(
-                                "allocator failed to persist definitive-reject release"
-                            )
+                            raise RuntimeError("allocator failed to persist definitive-reject release")
                         _pending_f6.release_definitive_reject(_reservation, _coid)
+                        self._update_event_intent(event_id, _coid, "rejected", None)
                         skipped.append({**p, "skip": "broker definitively rejected order"})
-                        skipped.extend(
-                            {**q, "skip": "stopped after broker rejection"}
-                            for q in plan[i + 1:]
-                        )
-                        logger.error(
-                            "[F6] BUY REJECTED %s — reservations released from explicit "
-                            "broker proof; stopping starter batch",
-                            sym,
-                        )
+                        skipped.extend({**q, "skip": "stopped after broker rejection"}
+                                       for q in admissible_plan[i + 1:])
                         break
                     if order is None:
-                        # Exact-ID lookup is the only permitted recovery. Absence is
-                        # ambiguous and leaves both reservations active.
                         order = live_release(_capital.lease, "submit_none")
                         if order is None:
                             order = _bk.get_order_by_client_order_id(_coid)
                     if order is not None:
                         _pending_f6.bind(_reservation, order)
-                        live_bind(_capital.lease, order)
-            except Exception as e:
+                        if not live_bind(_capital.lease, order):
+                            raise RuntimeError("allocator could not bind exact broker order")
+            except Exception as exc:
                 order = None
-                if not _reservation_written:
-                    live_release(_capital.lease, "pre_submit_reservation_failed")
-                else:
-                    # Once protected intent exists, an exception may follow an
-                    # accepted broker request.  Run both exact-ID recovery paths:
-                    # live_release releases the capital lease only for a proven
-                    # terminal-zero order and otherwise retains/binds it; the broker
-                    # lookup supplies that same exact order to the ownership journal.
-                    order = live_release(_capital.lease, "submit_none")
-                    if order is None:
-                        order = _bk.get_order_by_client_order_id(_coid)
-                    if order is not None:
-                        _pending_f6.bind(_reservation, order)
-                        live_bind(_capital.lease, order)
+                if _capital is not None:
+                    if not _reservation_written:
+                        live_release(_capital.lease, "pre_submit_reservation_failed")
+                    else:
+                        recovered = live_release(_capital.lease, "submit_none")
+                        if recovered is None:
+                            recovered = _bk.get_order_by_client_order_id(_coid)
+                        if recovered is not None:
+                            _pending_f6.bind(_reservation, recovered)
+                            live_bind(_capital.lease, recovered)
+                            order = recovered
                 if order is None:
-                    logger.error("[F6] BUY EXCEPTION %s: %s — STOPPING starter (fail-closed; exact-ID recovery unresolved)", sym, e)
-                    skipped.extend({**q, "skip": "stopped after broker exception"} for q in plan[i + 1:])
+                    if event_id is not None and _event_intent_written:
+                        self._update_event_intent(event_id, _coid, "ambiguous", None)
+                    logger.error("[F6] BUY EXCEPTION %s: %s — STOPPING starter", sym, exc)
+                    skipped.append({**p, "skip": f"broker boundary unresolved: {exc}"})
+                    skipped.extend({**q, "skip": "stopped after broker exception"}
+                                   for q in admissible_plan[i + 1:])
                     break
                 logger.warning("[F6] BUY EXCEPTION %s recovered exact order %s by client ID",
                                sym, getattr(order, "id", None))
+
             if order is None:
-                # broker returned None → NOT a confirmed order. Never-mask: do not count it placed,
-                # and do NOT keep placing (a systemic fault would repeat down the plan).
-                logger.error("[F6] BUY UNCONFIRMED %s (broker returned None) — STOPPING starter (fail-closed)", sym)
-                skipped.extend({**q, "skip": "stopped after unconfirmed order"} for q in plan[i + 1:])
+                if event_id is not None and _event_intent_written:
+                    self._update_event_intent(event_id, _coid, "ambiguous", None)
+                logger.error("[F6] BUY UNCONFIRMED %s — stopping starter", sym)
+                skipped.extend({**q, "skip": "stopped after unconfirmed order"}
+                               for q in admissible_plan[i + 1:])
                 break
             oid = getattr(order, "id", None)
-            # The cash-floor guard is enforced ENTIRELY by `reserved` (the slippage-buffered upper
-            # bound) above — it does not depend on the fill price. Record the PLANNED price as display
-            # metadata; Alpaca holds the authoritative fill / cost-basis (a market order's fill price is
-            # not reliably available synchronously at submit, and duplicating it here adds no safety).
-            placed.append({"symbol": sym, "qty": 1, "price": round(px, 2),
-                           "reserved": round(px_reserve, 2), "order_id": str(oid) if oid else None})
-            reserved += px_reserve
-            logger.warning("[F6] STARTER BUY placed: %s 1sh planned~$%.2f (reserved $%.2f, order %s)", sym, px, px_reserve, oid)
+            status = str(getattr(getattr(order, "status", ""), "value",
+                                 getattr(order, "status", ""))).lower()
+            submitted = {
+                "symbol": sym, "qty": 1, "hard_limit": hard_limit,
+                "reserved": hard_limit, "order_id": str(oid) if oid else None,
+                "status": status or "submitted", "client_order_id": _coid,
+            }
+            placed.append(submitted)
+            reserved += hard_limit
+            self._update_event_intent(
+                cast(str, event_id), _coid, "submitted", submitted
+            )
+            logger.warning("[F6] STARTER BUY submitted: %s 1sh limit $%.2f (order %s, status %s)",
+                           sym, hard_limit, oid, status or "unknown")
 
-        planned_spent = round(sum(float(p["price"]) for p in placed), 2)
+        if event_id is not None and not placed:
+            self._release_empty_event(event_id)
         if placed:
-            self._record_event(placed, planned_spent, trigger_evidence)
-            self._verify_ledger_reflects(placed)   # C-2: sync + verify the F6 floor landed
-        return {"placed": placed, "skipped": skipped, "spent": planned_spent, "reason": "ok"}
+            self._verify_ledger_reflects(placed)
+        return {
+            "placed": placed, "submitted": placed, "skipped": skipped,
+            "spent": 0.0, "reserved": round(reserved, 2), "reason": "ok",
+        }
 
     def _verify_ledger_reflects(self, placed: list[dict]) -> None:
         """C-2 wrapper — STRUCTURALLY enforces 'never raises into execute_starter': on ANY
@@ -764,7 +1068,7 @@ class ForeverHoldManager:
             _write_sync_degraded(True, f"import failure: {e}")
             return
 
-        want: dict[str, int] = {}
+        want: dict[str, float] = {}
         oid_by_sym: dict[str, str] = {}
         for p in placed:
             s = str(p.get("symbol", "")).upper()
@@ -788,22 +1092,45 @@ class ForeverHoldManager:
 
         _delays = (2.0, 4.0, 8.0)
         for _attempt in range(len(_delays) + 1):
-            # Drop terminally-rejected orders — no anchor exists, so do not wait/alert on them.
+            resting: list[str] = []
+            # A valid DAY limit may remain open until the session ends.  Zero-fill
+            # open orders stay protected by both durable journals and are not an
+            # ownership-sync failure.  Positive fills must be proved in the ledger.
             for s in list(want):
                 _oid = oid_by_sym.get(s)
                 if not _oid:
                     continue
                 try:
-                    _st = str(getattr(_bk.get_order(_oid), "status", "") or "").lower()
+                    _order = _bk.get_order(_oid)
+                    _st = str(getattr(getattr(_order, "status", ""), "value",
+                                      getattr(_order, "status", "")) or "").lower()
+                    _filled = float(getattr(_order, "filled_qty", 0) or 0)
                 except Exception:
                     _st = ""
-                if _st in ("rejected", "canceled", "cancelled", "expired"):
+                    _filled = math.nan
+                if (_st in {"new", "accepted", "pending_new", "partially_filled",
+                            "pending_cancel", "pending_replace", "done_for_day"}
+                        and math.isfinite(_filled) and _filled == 0):
+                    resting.append(s)
+                    want.pop(s, None)
+                    continue
+                if (math.isfinite(_filled) and _filled > 0
+                        and _filled <= float(want[s])):
+                    want[s] = _filled
+                    continue
+                if (_st in ("rejected", "canceled", "cancelled", "expired")
+                        and math.isfinite(_filled) and _filled == 0):
                     logger.warning("[F6] post-buy verify: %s order %s is %s — no anchor; "
                                    "dropping from wait-set.", s, _oid, _st)
                     want.pop(s, None)
             if not want:
-                logger.info("[F6] post-buy verify: no pending anchors to verify.")
-                _write_sync_degraded(False, "no pending anchors")
+                if resting:
+                    logger.warning(
+                        "[F6] bounded BUY pending without fill: %s; durable cash/ownership "
+                        "reservations remain active.", resting,
+                    )
+                else:
+                    logger.info("[F6] post-buy verify: no filled anchors to verify.")
                 return
 
             _rls.sync_once()
@@ -846,37 +1173,117 @@ class ForeverHoldManager:
                     f"next restart.")
         _write_sync_degraded(True, f"verify failed for {list(want)}")
 
-    def _record_event(self, placed: list[dict], spent: float,
-                      trigger_evidence: dict | None = None) -> None:
-        """Durably append a starter event — the SOURCE OF TRUTH for the per-month event cap.
-        Atomic (RC-5 tmp→fsync→replace). Recorded AFTER confirmed placement so a failed/partial
-        placement never phantom-counts against the cap; a persist failure is logged LOUDLY (the cap
-        may then under-count, allowing a later extra event — the safe-side error for an anti-overtrade
-        cap, vs. blocking legitimate events by over-counting)."""
+    @staticmethod
+    def _save_state(state: dict) -> None:
+        _STATE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _STATE.with_suffix(f".json.{os.getpid()}.tmp")
         try:
-            state = self._load_state()
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(state, handle, indent=2, allow_nan=False)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(str(tmp), str(_STATE))
+            directory_fd = os.open(_STATE.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _reserve_event_intent(
+        self,
+        event_id: str | None,
+        symbol: str,
+        client_order_id: str,
+        hard_limit: float,
+        trigger_evidence: dict | None,
+    ) -> str:
+        """Persist same-day idempotency before the broker can accept an order."""
+        with _state_locked():
+            state = self._load_state_strict()
             events = state.get("events", [])
             if not isinstance(events, list):
-                events = []
-            now_pt = datetime.now(PT)   # capture once — no date/ts skew across a midnight boundary
-            events.append({
-                "date": now_pt.strftime("%Y-%m-%d"),
-                "ts":   now_pt.isoformat(),
-                "placed": placed,
-                "spent": round(float(spent), 2),
-                "trigger_evidence": trigger_evidence,
+                raise RuntimeError("F6 event state is malformed")
+            now_pt = datetime.now(PT)
+            today = now_pt.strftime("%Y-%m-%d")
+            month = today[:7]
+            other_counted = [
+                row for row in events
+                if self._event_counts(row) and row.get("event_id") != event_id
+            ]
+            if any(str(row.get("date", "")) == today for row in other_counted):
+                raise RuntimeError("another F6 event is already reserved today")
+            if (sum(1 for row in other_counted
+                    if str(row.get("date", "")).startswith(month))
+                    >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH):
+                raise RuntimeError("F6 monthly event cap reached")
+            if event_id is None:
+                event_id = str(uuid.uuid4())
+                events.append({
+                    "event_id": event_id,
+                    "date": today,
+                    "ts": now_pt.isoformat(),
+                    "status": "reserved",
+                    "intents": [],
+                    "submitted": [],
+                    "spent": 0.0,
+                    "trigger_evidence": trigger_evidence,
+                })
+            event = next((row for row in events if row.get("event_id") == event_id), None)
+            if not isinstance(event, dict) or event.get("status") == "released_no_order":
+                raise RuntimeError("F6 event reservation is missing")
+            intents = event.setdefault("intents", [])
+            if any(row.get("client_order_id") == client_order_id for row in intents):
+                raise RuntimeError("F6 event intent client ID was already used")
+            intents.append({
+                "symbol": symbol,
+                "qty": 1,
+                "client_order_id": client_order_id,
+                "hard_limit": round(float(hard_limit), 2),
+                "status": "reserved",
             })
             state["events"] = events
-            _STATE.parent.mkdir(parents=True, exist_ok=True)
-            tmp = _STATE.with_suffix(f".json.{os.getpid()}.tmp")
-            with open(tmp, "w") as f:
-                json.dump(state, f, indent=2)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(str(tmp), str(_STATE))
-        except Exception as e:
-            logger.error("[F6] _record_event FAILED to persist starter event — per-month cap may "
-                         "under-count next trigger: %s", e)
+            self._save_state(state)
+            return event_id
+
+    def _update_event_intent(
+        self, event_id: str, client_order_id: str, status: str, order: dict | None,
+    ) -> None:
+        with _state_locked():
+            state = self._load_state_strict()
+            events = state.get("events", [])
+            event = next((row for row in events if row.get("event_id") == event_id), None)
+            if not isinstance(event, dict):
+                raise RuntimeError("F6 event reservation disappeared")
+            intent = next((row for row in event.get("intents", [])
+                           if row.get("client_order_id") == client_order_id), None)
+            if not isinstance(intent, dict):
+                raise RuntimeError("F6 event intent disappeared")
+            intent["status"] = status
+            if order is not None:
+                event.setdefault("submitted", []).append(order)
+            statuses = {str(row.get("status", "")) for row in event.get("intents", [])}
+            event["status"] = "ambiguous" if "ambiguous" in statuses else (
+                "submitted" if "submitted" in statuses else "reserved"
+            )
+            self._save_state(state)
+
+    def _release_empty_event(self, event_id: str) -> None:
+        with _state_locked():
+            state = self._load_state_strict()
+            event = next((row for row in state.get("events", [])
+                          if row.get("event_id") == event_id), None)
+            if not isinstance(event, dict):
+                raise RuntimeError("F6 event reservation disappeared")
+            statuses = {str(row.get("status", "")) for row in event.get("intents", [])}
+            if statuses and statuses <= {"rejected"}:
+                event["status"] = "released_no_order"
+                event["released_at"] = datetime.now(PT).isoformat()
+                self._save_state(state)
 
     # ── read helpers (1a) ──────────────────────────────────────────────────────
     def _fetch_cash(self) -> float:
