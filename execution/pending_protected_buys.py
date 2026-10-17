@@ -16,6 +16,7 @@ import math
 import os
 import logging
 import uuid
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,7 +26,7 @@ _CHANGE = "change_id=f6-pending-buy-reservation"
 _ROOT = Path(__file__).resolve().parent.parent
 JOURNAL_PATH = _ROOT / "data" / "state" / "pending_protected_buys.json"
 LOCK_PATH = _ROOT / "data" / "state" / ".pending_protected_buys.lock"
-SCHEMA = 1
+SCHEMA = len(("legacy", "bounded"))
 ACTIVE = frozenset({"reserved", "submitted"})
 TERMINAL = frozenset({"released_zero", "released_accounted"})
 KNOWN_ORDER_STATUSES = frozenset({
@@ -67,6 +68,24 @@ def _number(value) -> float:
         return float(value)
     except (TypeError, ValueError):
         return math.nan
+
+
+def _money(value) -> str:
+    """Canonical two-decimal order ceiling; rejects coercible booleans/nonfinite values."""
+    if isinstance(value, bool):
+        return ""
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return ""
+    if not amount.is_finite() or amount <= 0:
+        return ""
+    fixed = amount.quantize(Decimal("1").scaleb(-len("00")))
+    return format(fixed, ".2f") if amount == fixed else ""
+
+
+def _enum_text(value) -> str:
+    return str(getattr(value, "value", value) or "").lower()
 
 
 def _is_f6_coid(value) -> bool:
@@ -121,6 +140,12 @@ def _validate(data: dict) -> dict:
             raise PendingProtectedBuyError(f"pending F6 journal {rid} has invalid baseline")
         if not isinstance(row.get("created_at"), str) or not row["created_at"]:
             raise PendingProtectedBuyError(f"pending F6 journal {rid} has invalid timestamp")
+        if _money(row.get("limit_price")) != row.get("limit_price"):
+            raise PendingProtectedBuyError(f"pending F6 journal {rid} has invalid limit price")
+        if row.get("order_type") != "limit" or row.get("time_in_force") != "day":
+            raise PendingProtectedBuyError(f"pending F6 journal {rid} has invalid order contract")
+        if row.get("extended_hours") is not True:
+            raise PendingProtectedBuyError(f"pending F6 journal {rid} has invalid session contract")
         oid = row.get("order_id")
         if oid is not None and (not isinstance(oid, str) or not oid):
             raise PendingProtectedBuyError(f"pending F6 journal {rid} has invalid order ID")
@@ -141,7 +166,16 @@ def load() -> dict:
     if not JOURNAL_PATH.exists():
         return _empty()
     try:
-        return _validate(json.loads(JOURNAL_PATH.read_text(encoding="utf-8")))
+        data = json.loads(JOURNAL_PATH.read_text(encoding="utf-8"))
+        # Schema 1 did not record a bounded order contract.  It is safe to
+        # migrate only an empty journal; any historical row remains fail-closed
+        # because inventing a limit/TIF/session contract would hide ambiguity.
+        if (isinstance(data, dict) and not isinstance(data.get("schema"), bool)
+                and data.get("schema") == 1
+                and data.get("reservations") == {}):
+            logger.warning("migrating empty pending F6 journal schema 1 -> 2")
+            return _empty()
+        return _validate(data)
     except PendingProtectedBuyError:
         raise
     except Exception as exc:
@@ -169,13 +203,22 @@ def _save(data: dict) -> None:
             tmp.unlink()
 
 
-def reserve(symbol: str, qty: int, client_order_id: str, baseline_f6_qty: float) -> str:
+def reserve(
+    symbol: str,
+    qty: int,
+    client_order_id: str,
+    baseline_f6_qty: float,
+    *,
+    limit_price: float,
+    extended_hours: bool,
+) -> str:
     symbol = str(symbol or "").upper()
     if (not symbol or not isinstance(qty, int) or isinstance(qty, bool) or qty < 1
             or not _is_f6_coid(client_order_id)
             or not isinstance(baseline_f6_qty, (int, float)) or isinstance(baseline_f6_qty, bool)
             or not math.isfinite(float(baseline_f6_qty)) or baseline_f6_qty < 0
-            or abs(float(baseline_f6_qty) - round(float(baseline_f6_qty))) > 1e-6):
+            or abs(float(baseline_f6_qty) - round(float(baseline_f6_qty))) > 1e-6
+            or not _money(limit_price) or extended_hours is not True):
         raise PendingProtectedBuyError("invalid F6 reservation request")
     with _locked():
         data = load()
@@ -191,6 +234,8 @@ def reserve(symbol: str, qty: int, client_order_id: str, baseline_f6_qty: float)
             "created_at": _now(), "submitted_at": None, "released_at": None,
             "fill_ids": [], "accounted_qty": 0,
             "baseline_f6_qty": float(baseline_f6_qty),
+            "limit_price": _money(limit_price), "order_type": "limit",
+            "time_in_force": "day", "extended_hours": True,
         }
         _save(data)
         logger.warning("[%s] reserved %s %s share(s) coid=%s baseline=%s",
@@ -211,10 +256,16 @@ def bind(reservation_id: str, order) -> None:
         qty = _number(_field(order, "qty", 0))
         filled = _number(_field(order, "filled_qty", 0))
         status = str(getattr(_field(order, "status", ""), "value", _field(order, "status", ""))).lower()
+        order_type = _enum_text(_field(order, "type", _field(order, "order_type", "")))
+        tif = _enum_text(_field(order, "time_in_force", ""))
+        limit_price = _money(_field(order, "limit_price", ""))
+        extended_hours = _field(order, "extended_hours", None)
         if (not oid or coid != row["client_order_id"] or symbol != row["symbol"] or side != "buy"
                 or not math.isfinite(qty) or qty != row["qty"]
                 or not math.isfinite(filled) or not 0 <= filled <= qty
-                or status not in KNOWN_ORDER_STATUSES):
+                or status not in KNOWN_ORDER_STATUSES
+                or order_type != row["order_type"] or tif != row["time_in_force"]
+                or limit_price != row["limit_price"] or extended_hours is not True):
             raise PendingProtectedBuyError("broker order does not exactly match F6 reservation")
         if row["status"] == "submitted":
             if row.get("order_id") != oid:
@@ -305,9 +356,15 @@ def reconcile(fills: list, orders: list, coid_map: dict, ledger_result: dict) ->
             status = str(getattr(_field(order, "status", ""), "value", _field(order, "status", ""))).lower()
             qty = _number(_field(order, "qty", 0))
             filled = _number(_field(order, "filled_qty", 0))
+            order_type = _enum_text(_field(order, "type", _field(order, "order_type", "")))
+            tif = _enum_text(_field(order, "time_in_force", ""))
+            limit_price = _money(_field(order, "limit_price", ""))
+            extended_hours = _field(order, "extended_hours", None)
             valid = (oid and coid == row["client_order_id"] and symbol == row["symbol"] and side == "buy"
                      and status in KNOWN_ORDER_STATUSES and math.isfinite(qty) and qty == row["qty"]
                      and math.isfinite(filled) and 0 <= filled <= qty
+                     and order_type == row["order_type"] and tif == row["time_in_force"]
+                     and limit_price == row["limit_price"] and extended_hours is True
                      and len(by_oid.get(oid, [])) == 1
                      and coid_map.get(oid) == row["client_order_id"])
             if not valid or (row["order_id"] is not None and row["order_id"] != oid):

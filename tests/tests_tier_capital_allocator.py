@@ -790,7 +790,8 @@ class AllocatorTests(unittest.TestCase):
         )
         self.assertIn("risk_price_bound=_execution_limit", swing)
         f6 = (root / "execution/forever_hold_manager.py").read_text()
-        self.assertIn('"buy", 1, px_reserve', f6)
+        self.assertIn('"buy", 1, hard_limit', f6)
+        self.assertIn("exact_cash_reserve=True", f6)
 
     def test_qhm_recovery_metadata_must_persist_before_stop_cancel(self):
         manager = object.__new__(QuarterlyHoldManager)
