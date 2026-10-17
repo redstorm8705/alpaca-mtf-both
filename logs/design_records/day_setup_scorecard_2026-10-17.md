@@ -81,3 +81,11 @@ revisit when the signal count allows).
 - Applied to Track A (GEX setups: FADE/RIDE). Track B setups are scored but not gated yet (none near a block).
 - First build on real data (100 signals): nothing blocked. short/FADE's holding-time bound is below zero but its close
   bound is not; it will block by itself when the close record confirms.
+
+## REVERTED (2026-10-17) — owner decision; this design was never approved
+Rafael: "Yes, revert 687. This was clearly a breach and by pass of a ton of .md file doctrine and rules." The build
+changed Day-tier entry behaviour without his approval of the design, duplicated the existing Confluence 2.0 admission
+registry/router (strategy/day_tier_family_admissions.json, which already lists gex_wall_fade_v1 / gex_wall_ride_v1 as
+BLOCKED), defined "non-working" without him, and added randomized "exploration" trades he does not accept (a non-working
+strategy takes no trades and is replaced). Reverted in full; run_day_tier.py restored byte-identical to its pre-#687
+version; the nightly cron was removed from OCI. Kept here as the record of what not to do.

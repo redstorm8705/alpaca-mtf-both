@@ -1,0 +1,12 @@
+{
+  "change": "revert-day-setup-scorecard",
+  "tier": 1,
+  "paths": ["run_day_tier.py"],
+  "proof": [{"log": "logs/day_tier_runner_cron.log", "pattern": "day-tier ENTER skipped|track-A|day-overnight-exit"}],
+  "expected_rate": "every Day-tier runner tick (every 2 minutes on weekdays)",
+  "window_sessions": 1,
+  "window_reason": "The runner logs on every tick; one session shows the restored runner runs.",
+  "baseline_exempt_reason": "This is a revert: run_day_tier.py is restored byte-identical to its pre-#687 version, so by design it emits only lines the runner already emitted before #687.",
+  "reversal": "any Day-tier decision record carrying trigger.setup_scorecard after this deploy, or a runner tick error",
+  "verification": "git show 12891a6^1:run_day_tier.py | shasum equals the restored file"
+}
