@@ -99,6 +99,10 @@ class EntryRequest:
     risk_price_bound: float = 0.0
     overnight: bool = False
     exempt_existing_notional: float = 0.0
+    exact_cash_reserve: bool = False
+    order_type: str = ""
+    time_in_force: str = ""
+    extended_hours: bool = False
     regime_evidence: dict[str, Any] = field(default_factory=dict)
 
 
@@ -392,7 +396,11 @@ class TierCapitalAllocator:
             return self._decision(False, "unverified regime evidence", req)
         cash_reserve = (
             notional
-            * (self.policy.f6_slippage_buffer if req.tier == "forever6" else 1.0)
+            * (
+                1.0
+                if req.exact_cash_reserve
+                else self.policy.f6_slippage_buffer if req.tier == "forever6" else 1.0
+            )
             if req.tier in _CASH_TIERS and req.side.lower() == "buy"
             else 0.0
         )
@@ -714,6 +722,15 @@ class TierCapitalAllocator:
             not math.isfinite(req.risk_price_bound) or req.risk_price_bound <= 0
         ):
             return "invalid risk price bound"
+        if req.exact_cash_reserve and req.tier != "forever6":
+            return "exact cash reserve is F6-only"
+        if req.exact_cash_reserve and (
+            req.order_type != "limit"
+            or req.time_in_force != "day"
+            or req.extended_hours is not True
+            or req.side.lower() != "buy"
+        ):
+            return "exact F6 cash reserve requires bounded extended-hours DAY limit"
         if req.client_order_id:
             expected = {"daytrade": "DT-", "swing": "IN-", "qhm": "QH-", "forever6": "F6-"}[req.tier]
             if not req.client_order_id.startswith(expected):
@@ -872,6 +889,10 @@ def live_admit(
     exempt_existing_notional: float = 0.0,
     regime_evidence: dict[str, Any] | None = None,
     risk_price_bound: float = 0.0,
+    exact_cash_reserve: bool = False,
+    order_type: str = "",
+    time_in_force: str = "",
+    extended_hours: bool = False,
     client_order_id: str = "",
 ) -> Decision:
     """Live caller bridge. Disabled only for backwards-compatible unit imports; enabled config fails closed."""
@@ -927,6 +948,10 @@ def live_admit(
             risk_price_bound=risk_price_bound,
             overnight=overnight,
             exempt_existing_notional=exempt_existing_notional,
+            exact_cash_reserve=exact_cash_reserve,
+            order_type=order_type,
+            time_in_force=time_in_force,
+            extended_hours=extended_hours,
             client_order_id=client_order_id,
             regime_evidence=_evidence,
         )

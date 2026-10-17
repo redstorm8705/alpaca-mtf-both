@@ -4,6 +4,7 @@ Signed: OpenAI Codex, 2026-10-15.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from unittest import mock
 
 import config
@@ -15,6 +16,10 @@ from execution.instrument_policy import (
     is_leveraged_etf,
 )
 from strategy import day_tier_leverage
+
+
+def _entry_clock():
+    return datetime(2026, 10, 16, 17, 0, tzinfo=f6.ET)
 
 
 def test_current_f6_universe_has_no_leveraged_etf() -> None:
@@ -134,7 +139,7 @@ def test_f6_activation_requires_enforced_ownership(monkeypatch) -> None:
 
 def test_execute_starter_blocks_leveraged_symbol_before_broker(monkeypatch) -> None:
     broker = mock.Mock()
-    manager = f6.ForeverHoldManager(broker)
+    manager = f6.ForeverHoldManager(broker, clock=_entry_clock)
     monkeypatch.setattr(config, "FOREVER6_UNIVERSE", ["NVDA", "NVDL"])
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
     monkeypatch.setattr(f6, "_STARTUP_READY", True)
@@ -162,7 +167,7 @@ def test_execute_starter_blocks_live_asset_contradiction_before_reservation(
     client.get_asset.return_value = _asset(name="Example Daily 2X Long NVDA ETF")
     broker = mock.Mock()
     broker.get_trading_client.return_value = client
-    manager = f6.ForeverHoldManager(broker)
+    manager = f6.ForeverHoldManager(broker, clock=_entry_clock)
     monkeypatch.setattr(config, "FOREVER6_UNIVERSE", ["NVDA"])
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
     monkeypatch.setattr(f6, "_STARTUP_READY", True)
@@ -182,7 +187,7 @@ def test_execute_starter_blocks_live_asset_contradiction_before_reservation(
 
 def test_execute_starter_blocks_symbol_removed_after_plan(monkeypatch) -> None:
     broker = mock.Mock()
-    manager = f6.ForeverHoldManager(broker)
+    manager = f6.ForeverHoldManager(broker, clock=_entry_clock)
     monkeypatch.setattr(config, "FOREVER6_UNIVERSE", ["NVDA"])
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
     monkeypatch.setattr(f6, "_STARTUP_READY", True)

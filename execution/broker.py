@@ -14,6 +14,7 @@ import logging
 import math
 import ast
 import json
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -107,6 +108,22 @@ PROTECTION_UNKNOWN = _ProtectionSentinel("PROTECTION_UNKNOWN")
 # sentinel so a broker-proven rejection can be distinguished from a timeout/lost
 # response, where an order may exist and ownership must remain reserved.
 ORDER_DEFINITIVELY_REJECTED = object()
+
+
+def canonical_buy_limit_price(value: float) -> float:
+    """Return the exact cent-denominated ceiling sent for a stock BUY limit.
+
+    F6 reserves this returned value before submitting.  Keeping normalization in
+    the broker layer prevents the caller's cash reservation from differing from
+    the price encoded in Alpaca's request.
+    """
+    try:
+        price = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise ValueError("invalid buy limit price") from exc
+    if not price.is_finite() or price <= 0:
+        raise ValueError("invalid buy limit price")
+    return float(price.quantize(Decimal("0.01"), rounding=ROUND_CEILING))
 
 
 # ── Singleton client ──────────────────────────────────────────────────────────
@@ -706,13 +723,16 @@ def submit_limit_order(
     tier: str = "intraday",   # owning strategy tier — tags client_order_id for attribution
     client_order_id: str | None = None,
     time_in_force: str = "day",   # "day" (default, unchanged) or "gtc" — Alpaca accepts both for extended hours
+    distinguish_rejection: bool = False,
 ) -> object:
     """
     Submit a limit order (DAY by default; time_in_force="gtc" for a good-till-cancelled order — the day
     tier's after-hours exit, CEO 2026-10-07). Used for overnight swing entries.
     extended_hours=True only works during active AH/PM sessions (4–8 PM ET, 4–9:30 AM ET).
     After 8 PM ET, submit without extended_hours — order queues for pre-market open.
-    Returns order object or None on failure.
+    Returns order object or None on failure.  Opt-in ``distinguish_rejection``
+    returns ``ORDER_DEFINITIVELY_REJECTED`` only for a broker-proven
+    pre-accept rejection; ambiguous outcomes keep the historical ``None``.
     """
     _tif_s = str(time_in_force or "day").lower()
     if _tif_s not in ("day", "gtc"):
@@ -760,11 +780,21 @@ def submit_limit_order(
     # ambiguous-success scenario, not theoretical. Now tier-tagged.
     _idem_id   = client_order_id or _make_idem_id(tier, symbol, side)
 
+    try:
+        _request_limit = (
+            canonical_buy_limit_price(limit_price)
+            if tier == "forever6" and side == "buy"
+            else round(limit_price, 2)
+        )
+    except ValueError:
+        logger.warning(f"[{symbol}] Limit order rejected: invalid price={limit_price}")
+        return None
+
     order_data = LimitOrderRequest(
         symbol=symbol,
         qty=qty,
         side=order_side,
-        limit_price=round(limit_price, 2),
+        limit_price=_request_limit,
         time_in_force=TimeInForce.GTC if _tif_s == "gtc" else TimeInForce.DAY,
         extended_hours=extended_hours,
         client_order_id=_idem_id,
@@ -797,16 +827,18 @@ def submit_limit_order(
                 logger.error(f"[{symbol}] LIMIT {side.upper()} rejected — WASH-TRADE rule (an opposite-side "
                              f"market/stop order rests on {symbol}): {e}")
                 _note_reduction_not_submitted()
-                return None
+                return ORDER_DEFINITIVELY_REJECTED if distinguish_rejection else None
             if "40310000" in err or "not allowed to short" in err:
                 logger.warning(f"[{symbol}] Limit order rejected — shorting not enabled")
                 _note_reduction_not_submitted()
-                return None
+                return ORDER_DEFINITIVELY_REJECTED if distinguish_rejection else None
             elif not _is_retryable(err):
                 # H-7: non-retryable errors (buying power, auth) must not burn 2s sleep × 3
                 logger.error(f"[{symbol}] submit_limit_order failed (non-retryable): {e}")
                 if _is_explicit_alpaca_reject(err):
                     _note_reduction_not_submitted()
+                    if distinguish_rejection:
+                        return ORDER_DEFINITIVELY_REJECTED
                 return None
             elif _attempt < 2:
                 logger.warning(
