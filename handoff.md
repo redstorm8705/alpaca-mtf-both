@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-15 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-16 (Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,37 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-16 evening, Claude signed) — manual-sale alerts (#673), stale-data alarm 3x/day (#670)
+
+- **Owner habit (standing fact, owner 2026-10-16):** when the owner sells by hand in the Alpaca app, he ALWAYS picks
+  "cancel all open orders" for that symbol. So after a manual sale no bot stop or order is left resting on it. Do not
+  ask him whether a leftover stop needs cancelling. (Also in `logs/design_records/owner_operating_facts.md`.)
+- PR #673 (`gh pr view 673`, merged): `run_ledger_sync.py` manual-sale pages in plain English (symbol, shares on
+  record vs broker, the exact `confirm_ledger_heal.py` command, "if you did NOT sell, do not confirm"); the STALE
+  reminder pages once at 3 passes, then once per ET day (was every 20-min pass). Cron script, no restart.
+- PR #670 (`gh pr view 670`): stale-data alarm cron at 12:50, 17:50, 21:50 UTC weekdays, installed on OCI via
+  `scripts/install_state_freshness_cron.sh` (one crontab line `50 12,17,21 * * 1-5`; the old once-a-day line is gone).
+  OCI at `f63e76a` (#670/#673/#674), no restart.
+- **Open bug (proposal, needs Gro/GAI vote):** QHM pages "stop coverage unresolved (ownership proof unavailable)" every
+  cycle after any sale that leaves a hold flat, and never closes the hold; same path blocks the QHM stop-out auto-heal.
+  Since #596 (2026-10-11). Probe-verified. Fix design: `logs/design_records/manual_sell_alerts_2026-10-16.md` Part B.
+- LLY (sold by hand 2026-10-16 11:07 PT): broker flat, no open LLY orders; `confirm_ledger_heal.py LLY qhm 0` then one
+  manual `run_ledger_sync.py` pass (2026-10-17 00:01 UTC) logged "OPERATOR-CONFIRMED heal-down applied LLY/qhm 1 -> 0"
+  and "ledger_sync OK", no `[LLY]` row. The QHM LLY page keeps repeating until Part B ships. "Session so far" booked
+  LLY under Swing because the P&L reporter tags lots by client_order_id only: LLY fills were QH- buy 8/24 @ $1,244.86
+  (qhm) and an untagged buy 8/26 @ $1,199.37 (UUID coid, tier None -> defaults to Swing in
+  `scripts/pnl_snapshot._realized_by_tier`), which QHM resynced into its hold (qty 1->2) and the ledger counted as qhm.
+  The 10/14 after-hours sale (untagged) took the older QH- lot by FIFO; the 10/16 sale took the untagged 8/26 lot ->
+  +$56.86 booked to Swing. No "no open long lots"/synthetic-short line for LLY on 10/16 (only the old 8/21 one).
+- Anomaly noted, not investigated: ledger_sync shows `[UBER] net=0 intraday=-72` (since 2026-10-14).
+- Slack alert review (about 385 send sites graded, 2026-10-16 cloud session): fix order = QHM loop, stop-failure
+  repeat limit, Day-tier repeats, duplicate trade pings, false wording, afternoon report digest.
+
+**Pick up here:** (1) Part B of the manual-sale design record → board + Gro/GAI vote, then build in
+`execution/quarterly_hold_manager.py`. (2) Stop-failure page repeat limit (`alerts.alert_gtc_failed`). (3) LLY P&L
+under Swing — the P&L tier tag should fall back to the ownership ledger's tier for untagged lots the ledger already
+attributes (here the 8/26 LLY buy), instead of defaulting to Swing.
 
 ## ⏩ LATEST (2026-10-16, Claude signed) — Day-tier feed-gap fix (#660), QHM add ledger credit (#662), NVDA heal
 
