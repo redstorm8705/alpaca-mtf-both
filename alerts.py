@@ -96,7 +96,7 @@ _JARGON = (
     ("PHANTOM ENTRY",   "UNVERIFIED ENTRY"),
     ("phantom entry",   "unverified entry"),
     ("GTC-RACE",        "GTC order conflict"),
-    ("RC-4",            "Position-Mismatch check"),
+    ("RC-4",            "Fill-price check"),   # RC-4 = exit recorded without a verified fill price (not a position mismatch)
 )
 
 
@@ -499,17 +499,21 @@ def alert_venue_halt(venue_status: dict, spy_5m_pct: float, qqq_5m_pct: float) -
 
 
 def alert_stop_breach(symbol: str, direction: str, current_price: float,
-                      stop: float, gtc_submitted: bool = True) -> None:
-    """Fire when stop is breached and position cannot be closed immediately:
-    GTC stop placed for next RTH open, or close_position() hard-failed.
-    """
-    title = f"{SEV_CRITICAL} — STOP BREACH BLOCKED — {symbol}"
+                      stop: float, gtc_submitted: bool = False) -> None:
+    """Fire when price crossed the stop and the position could not be closed.
+
+    gtc_submitted=True: a GTC stop was placed instead and fires at the next regular-hours open.
+    gtc_submitted=False (default; the only caller, exit_logic's hard-stop path, calls this after close_position()
+    FAILED): nothing confirmed the close, so the text must not claim a stop was placed (CEO 2026-10-16 Slack review:
+    the old default printed "GTC stop placed" on a failed close)."""
+    title = f"{SEV_CRITICAL} — STOP HIT, CLOSE FAILED — {symbol}"
     if gtc_submitted:
-        action = "GTC stop placed — fires next RTH open."
+        action = "A GTC stop was placed instead; it fires at the next regular-hours open."
     else:
-        action = "⛔ GTC stop FAILED — MANUAL ACTION REQUIRED in Alpaca app."
+        action = (f"The close order failed, so {symbol} may still be open with no protection. "
+                  f"Check {symbol} in the Alpaca app now and close it or place a stop by hand.")
     body  = (
-        f"Price ${current_price:.2f} breached stop ${stop:.2f}\n"
+        f"{symbol} ({direction}) traded at ${current_price:.2f}, past its stop ${stop:.2f}.\n"
         f"{action}"
     )
     _send(title, body, priority=5, tags=["warning", "lock"],
@@ -701,12 +705,13 @@ def alert_startup_test() -> bool:
 
 
 def alert_systemic_stale_feed(median_age: float, cycles: int) -> None:
-    """Fire when median bar age > 20 min for 3 consecutive cycles — systemic yfinance degradation."""
-    title = f"{SEV_CRITICAL} — SYSTEMIC FEED DEGRADATION"
+    """Fire when the median bar age stays past the caller's limit for several cycles (the caller, entry_logic, sends
+    its own limit in the log line). The bars come from Alpaca Data (T1); the old text blamed yfinance."""
+    title = f"{SEV_CRITICAL} — MARKET DATA RUNNING LATE"
     body  = (
-        f"Median bar age {median_age:.0f} min > 20 min threshold\n"
-        f"for {cycles} consecutive cycles — yfinance feed degraded.\n"
-        f"All stale-bar entries are blocked. Check Alpaca data feed status."
+        f"The price bars the bot trades on are typically {median_age:.0f} minutes old, "
+        f"for {cycles} scans in a row.\n"
+        f"Any stock whose own bars are past the stale limit is skipped; the rest still trade. Check the Alpaca data status page."
     )
     _send(title, body, priority=4, tags=["satellite", "warning", "chart_with_downwards_trend"],
           emoji=":satellite:")
