@@ -1,0 +1,18 @@
+{
+  "change": "gtc-failed-page-dedupe",
+  "tier": 1,
+  "paths": [
+    "alerts.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "GTC STOP FAILED — no page sent|STOP ORDER FAILED"
+    }
+  ],
+  "expected_rate": "only when a protective stop order fails; zero lines on a day with no stop failure is normal",
+  "window_sessions": 5,
+  "window_reason": "Stop failures are rare; five sessions give a fair chance to see one page and its suppressed retries.",
+  "reversal": "the same stop paging Slack or the phone more than once on one ET day, or a stop failure logged by a caller with no page that day",
+  "verification": "tests/test_alert_gtc_failed_dedupe.py"
+}

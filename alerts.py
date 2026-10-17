@@ -380,7 +380,7 @@ def send_slack_delivery(message: str) -> bool:
     return ok
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# ── Public API ─────────────────────────────────────────────────────────────────────────
 
 def alert_entry(symbol: str, direction: str, shares: int, price: float,
                 score: int, size_mult: float,
@@ -582,16 +582,83 @@ def alert_stale_bar(symbol: str, age_min: float) -> None:
     logger.info(f"[STALE BAR] {symbol}: last 15m bar is {age_min:.0f} min old — entry skipped.")
 
 
+_GTC_FAIL_PAGES = _STATE_DIR / "gtc_failed_pages.json"
+_ET = ZoneInfo("America/New_York")
+
+
+def _gtc_fail_key(symbol: str, side: str, stop_px: float) -> str:
+    try:
+        px = f"{float(stop_px):.2f}"
+    except (TypeError, ValueError):
+        px = str(stop_px)
+    return f"{str(symbol).upper()}|{str(side).lower()}|{px}"
+
+
+def _gtc_fail_day(today: str) -> dict:
+    """Today's {"<key>|<transport>": "HH:MM PT"} stamps. An unreadable or malformed file reads as empty, so a page is
+    never lost to a bad file (and the next confirmed send rewrites it clean)."""
+    try:
+        if _GTC_FAIL_PAGES.exists():
+            state = json.loads(_GTC_FAIL_PAGES.read_text(encoding="utf-8"))
+            day = state.get(today) if isinstance(state, dict) else None
+            return dict(day) if isinstance(day, dict) else {}
+    except Exception as e:
+        logger.warning(f"alert_gtc_failed: page-state read failed ({e}) — paging")
+    return {}
+
+
+def _gtc_fail_mark(stamps: list, today: str) -> None:
+    """Record delivered sends for today's ET date; earlier dates and a damaged file are replaced."""
+    try:
+        day = _gtc_fail_day(today)
+        for s in stamps:
+            day[s] = datetime.now(PT).strftime("%H:%M PT")
+        _atomic_write(_GTC_FAIL_PAGES, {today: day})
+    except Exception as e:
+        logger.warning(f"alert_gtc_failed: page-state write failed ({e}) — the next failure pages again")
+
+
 def alert_gtc_failed(symbol: str, side: str, stop_px: float, reason: str) -> None:
-    """Fire when an overnight GTC stop order cannot be placed — position is unprotected."""
-    title = f"{SEV_CRITICAL} — GTC STOP FAILED — {symbol}"
-    body  = (
-        f"Could not place {side.upper()} stop @ ${stop_px:.2f}.\n"
-        f"Reason: {reason}\n"
-        f"Position is UNPROTECTED overnight. Manual action required."
-    )
-    _send(title, body, priority=5, tags=["sos", "rotating_light", "stop_sign"],
-          emoji=":rotating_light:")
+    """Fire when a protective stop order cannot be placed (GTC or DAY) — the position has no broker stop.
+
+    CEO 2026-10-16 (Slack review): callers retry every cycle (e.g. orphan_manager pages on every cycle once a stop
+    has been blocked 5 cycles), and each retry paged Slack + the phone at top priority. Now each transport (phone,
+    Slack) sends ONE page per (symbol, side, stop price) per ET day, stamped only after that transport confirms
+    delivery (a failed send is retried on the next failure). A different stop price, side or symbol pages at once;
+    the next ET day pages again while it is still failing. Every attempt is still logged. Never raises."""
+    try:
+        today = datetime.now(_ET).strftime("%Y-%m-%d")
+        key = _gtc_fail_key(symbol, side, stop_px)
+        day = _gtc_fail_day(today)
+        need_ntfy = bool(_NTFY_TOPIC) and f"{key}|ntfy" not in day
+        need_slack = bool(_SLACK_WEBHOOK) and f"{key}|slack" not in day
+        if not (need_ntfy or need_slack):
+            logger.critical(f"[GTC STOP FAILED — no page sent (already paged today or no transport)] "
+                            f"{symbol} {side} stop @ {stop_px}: {reason}")
+            return
+        title = f"{SEV_CRITICAL} — STOP ORDER FAILED — {symbol}"
+        _px = key.rsplit("|", 1)[-1]
+        what = (f"{symbol} has no stop price or share count in the trade log, so the bot cannot place its protective stop."
+                if str(side).lower() == "unknown" else
+                f"The bot could not place the {str(side).upper()} protective stop @ ${_px} for {symbol}.")
+        body = (
+            f"{what}\n"
+            f"Reason: {reason}\n"
+            f"Until this is fixed, {symbol} has no stop at the broker. The bot keeps retrying; check the stop "
+            f"in the Alpaca app. This page is sent once a day per stop; every retry is in the log."
+        )
+        full_body = f"{body}\n— {datetime.now(PT).strftime('%H:%M PT')}"
+        delivered = []
+        if need_ntfy and _ntfy(title, full_body, priority=5, tags=["sos", "rotating_light", "stop_sign"]):
+            delivered.append(f"{key}|ntfy")
+        if need_slack and _slack(title, full_body, emoji=":rotating_light:"):
+            delivered.append(f"{key}|slack")
+        if delivered:
+            _gtc_fail_mark(delivered, today)
+        else:
+            logger.warning(f"[ALERT FAILED] {title}: {body}")
+    except Exception as e:  # never fail the caller's stop path because of an alert
+        logger.critical(f"alert_gtc_failed: could not page for {symbol} ({e}); reason: {reason}")
 
 
 def alert_floor_blind(symbol: str, tier: str, kind: str, detail: str, critical: bool) -> bool:
