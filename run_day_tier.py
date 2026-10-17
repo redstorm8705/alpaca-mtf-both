@@ -38,7 +38,6 @@ order module's own try/except owns that). Nothing here runs on the 5-min main-sc
 from __future__ import annotations
 
 import fcntl
-import calendar
 import json
 import logging
 import math
@@ -793,61 +792,6 @@ def _last_bar_date(df) -> "str | None":
         return None
 
 
-def _setup_scorecard_gate(sym: str, decision: dict, trigger: dict, card: dict, bar_id: str) -> "dict | None":
-    """Per-setup evidence gate (design record day_setup_scorecard_2026-10-17.md). Returns the verdict, or None when
-    the entry must be skipped (a blocked setup; the skip and its evidence are logged). Never raises; any error allows."""
-    try:
-        from strategy import day_setup_scorecard as _sc
-        # One fixed draw per signal (symbol, ET day, setup): the 2-minute cron re-evaluates the same signal several
-        # times, and a fresh draw each time would let a blocked setup through more often than its stated probability.
-        import random as _random
-        _seed = f"{sym}|{datetime.now(ET).date().isoformat()}|{_sc.setup_key(trigger.get('direction'), trigger.get('mode'))}"
-        verdict = _sc.evaluate(trigger.get("direction"), trigger.get("mode"), card, _random.Random(_seed))
-    except Exception as e:  # noqa: BLE001 — the gate never blocks on its own failure
-        logger.warning("[%s] setup scorecard error (allowing): %s", sym, e)
-        return {"action": "allow", "reason": f"scorecard error: {e}"}
-    if verdict.get("action") == "block":
-        _log_direction_skip(sym, decision, {**trigger, "setup_scorecard": verdict}, verdict.get("reason", ""), bar_id)
-        return None
-    return verdict
-
-
-def _setup_scorecard_for_tick(now_et: datetime) -> dict:
-    """Load the setup scorecard once per tick; page once per ET day when it is missing or older than the latest
-    completed session (it is still used: the last good card beats no gate). Never raises."""
-    try:
-        from strategy import day_setup_scorecard as _sc
-        card = _sc.load_scorecard()
-    except Exception as e:  # noqa: BLE001
-        logger.warning("setup scorecard load failed (no gate this tick): %s", e)
-        return {}
-    try:
-        # Previous weekday, no network call on the trading tick (a holiday can cause one extra page that day).
-        prev_d = now_et.date() - timedelta(days=1)
-        while prev_d.weekday() >= calendar.SATURDAY:
-            prev_d -= timedelta(days=1)
-        prev = prev_d.isoformat()
-        stale = (not card) or str(card.get("built_for_session") or "") < prev
-        if stale:
-            today = now_et.strftime("%Y-%m-%d")
-            mark = _sc.SCORECARD_PATH.with_name("day_setup_scorecard.paged")
-            if not (mark.exists() and mark.read_text().strip() == today):
-                logger.warning("day setup scorecard missing or stale (built for %s, latest session %s)",
-                               (card or {}).get("built_for_session"), prev)
-                try:
-                    from alerts import send_slack
-                    send_slack(f"⚠️ Day tier: the setup scorecard is {'missing' if not card else 'out of date'} "
-                               f"(built for {(card or {}).get('built_for_session') or 'never'}, latest session {prev}). "
-                               f"The Day tier keeps trading with {'no setup gate' if not card else 'the most recent scorecard'}. "
-                               f"Check the nightly run_day_setup_scorecard.py cron.")
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("scorecard stale page failed: %s", e)
-                mark.write_text(today)
-    except Exception as e:  # noqa: BLE001 — a staleness/page failure never drops the card
-        logger.warning("setup scorecard staleness check failed: %s", e)
-    return card or {}
-
-
 def _prev_session_date(now_et: datetime) -> "str | None":
     """The previous trading session (YYYY-MM-DD) before `now_et`'s date, from the Alpaca trading calendar
     (reporting.pnl_ledger REST plumbing — the same calendar source execution/orphan_manager uses). None if the
@@ -1132,7 +1076,6 @@ def run_tick() -> dict:
     _held_other = _held_by_other_tiers()   # ONCE per tick (co-hold routing); place_entry re-checks before submit
     _foreign = _foreign_signed_qty() if _held_other else {}   # ONCE per tick: same-direction co-hold check
     _dt_exp = _day_tier_exposure()          # ONCE per tick (one direction per stock); updated on each new entry
-    _setup_card = _setup_scorecard_for_tick(datetime.now(ET))   # ONCE per tick (design day_setup_scorecard_2026-10-17)
     # TRACK M — QQQ Monday weekend-gap-down buy (Rafael-approved 2026-10-05). Runs FIRST inside its 09:45-10:15 ET
     # window (one shot per day); a no-op on every other tick. Same reconcile/force-flat/kill/budget machinery.
     entered_m, track_m_note = 0, "disabled"
@@ -1173,10 +1116,6 @@ def run_tick() -> dict:
                 continue
             if _counter and str(trigger.get("direction")) == "short":
                 trigger = {**trigger, "watch_day": True, "watch_day_reason": _wd_why}
-            _sc_verdict = _setup_scorecard_gate(sym, decision, trigger, _setup_card, bar_id)
-            if _sc_verdict is None:
-                continue
-            trigger = {**trigger, "setup_scorecard": _sc_verdict}
             _ct_decision_id = ""
             if _gate["counter_trend"]:
                 # Never-mask-a-loss: the counter-trend tag must be DURABLE before any fade order exists, so its
