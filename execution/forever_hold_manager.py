@@ -899,6 +899,7 @@ class ForeverHoldManager:
                         continue
                     current_state = self._load_state_strict()
                     current_today = datetime.now(PT).strftime("%Y-%m-%d")
+                    current_month = current_today.rpartition("-")[0]
                     other_counted = [
                         event for event in current_state.get("events", [])
                         if self._event_counts(event) and event.get("event_id") != event_id
@@ -906,7 +907,7 @@ class ForeverHoldManager:
                     if any(str(event.get("date", "")) == current_today for event in other_counted):
                         raise RuntimeError("another F6 event is already reserved today")
                     if sum(1 for event in other_counted
-                           if str(event.get("date", "")).startswith(current_today[:7])) \
+                           if str(event.get("date", "")).startswith(current_month)) \
                             >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH:
                         raise RuntimeError("F6 monthly event cap reached")
 
