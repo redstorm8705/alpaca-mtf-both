@@ -46,8 +46,8 @@ import math
 import os
 import time
 import uuid
-from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from dataclasses import asdict, dataclass, field, fields
+from datetime import date, datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
@@ -324,6 +324,12 @@ class HoldState(str, Enum):
     PENDING_EARNINGS     = "PENDING_EARNINGS"       # GTC stop cancelled pre-earnings
 
 
+# Owner-sale auto-heal kill switch (design record qhm_owner_sale_autoheal_2026-10-17.md). False = every
+# outside-the-bot sale goes back to the operator-confirm path; the flat-hold hand-off and page dedupe stay.
+_OWNER_SALE_AUTOHEAL_ENABLED = True
+_OWNER_EXIT_REASONS = ("owner_app_sale", "owner_confirmed")
+
+
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
@@ -362,6 +368,10 @@ class HoldPosition:
     stop_recovery_add_submitted: bool = False
     stop_recovery_client_order_id: Optional[str] = None
     stop_recovery_intended_qty: Optional[int] = None
+    # Owner-sale auto-heal (2026-10-17, design record qhm_owner_sale_autoheal_2026-10-17.md).
+    qty_proven_at: Optional[str] = None        # UTC ISO: last time the broker provably held qty_filled
+    coverage_page_key: Optional[str] = None    # "<ET date>|<reason>;<reason>" stop-coverage pages sent today
+    closed_reason: Optional[str] = None        # why the hold closed; "owner_app_sale"/"owner_confirmed" = owner's exit
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -370,7 +380,13 @@ class HoldPosition:
 
     @classmethod
     def from_dict(cls, d: dict) -> "HoldPosition":
-        d = dict(d)
+        # Unknown keys are ignored (logged) so a newer state file never makes an older/rolled-back
+        # loader drop every hold (reliability seat 2026-10-17).
+        known = {f.name for f in fields(cls)}
+        extra = sorted(k for k in d if k not in known)
+        if extra:
+            logger.warning("HoldPosition.from_dict: ignoring unknown state keys %s for %s", extra, d.get("symbol"))
+        d = {k: v for k, v in d.items() if k in known}
         d["state"] = HoldState(d["state"])
         return cls(**d)
 
@@ -531,6 +547,8 @@ class QuarterlyHoldManager:
         self._clock = clock  # injected for deterministic testing
         self._dispatcher = OrderDispatcher()
         self._positions: dict[str, HoldPosition] = {}
+        self._owner_sale_unproven: dict[str, tuple] = {}   # symbol -> facts that last failed the owner-sale proof
+        self._owner_sale_retry_day: dict[str, str] = {}   # symbol -> ET date the owner-sale order read first failed
         self._thesis_config: dict[str, dict] = self._load_thesis_config()
 
         self._load_state()
@@ -646,6 +664,10 @@ class QuarterlyHoldManager:
                     result.symbols_reconciled.append(symbol)
 
                 elif pos.state == HoldState.ACTIVE:
+                    # A hold found flat at startup is closed now, not at the next RTH cycle.
+                    if self._detect_external_close(pos, result):
+                        result.symbols_reconciled.append(symbol)
+                        continue
                     # The single-snapshot preflight above already proved and
                     # durably adopted/resized this stop.
                     result.orders_verified += 1
@@ -1181,6 +1203,23 @@ class QuarterlyHoldManager:
                 symbol,
             )
             return
+        _prev = self._positions.get(symbol)
+        if (_prev is not None and _prev.state == HoldState.CLOSED
+                and _prev.closed_reason in _OWNER_EXIT_REASONS):
+            # The OWNER sold this hold (owner-sale auto-heal 2026-10-17): that is his exit decision, so the bot
+            # does not buy it back. Re-dating the pick's not_before_date past the sale re-enables it.
+            _nbf = str((self._thesis_config.get(symbol) or {}).get("not_before_date") or "")
+            try:
+                _closed_on = datetime.fromisoformat(str(_prev.updated_at)).date()
+                _redated = bool(_nbf) and date.fromisoformat(_nbf) > _closed_on
+            except (TypeError, ValueError):
+                _redated = False
+            if not _redated:
+                logger.info(
+                    "QuarterlyHoldManager: %s was sold by the owner (%s, %s) — not re-adding; move its "
+                    "not_before_date past that date to buy it again", symbol, _prev.closed_reason, _prev.updated_at,
+                )
+                return
         if symbol in self._positions and self._positions[symbol].state not in (
             HoldState.CLOSED,
         ):
@@ -2035,10 +2074,44 @@ class QuarterlyHoldManager:
                             pos.symbol, _sfe,
                         )
                         _stop_filled = False
-                _exit_reason = "qhm_stop_out" if _stop_filled else "external_close_detected"
-                _data_source = "qhm_stop_out" if _stop_filled else "qhm_external_close"
+                # OWNER-SALE PROOF (2026-10-17): a close that is not our filled stop is checked against the
+                # broker's order sources. Proven only when every share sold since the last verified count was
+                # sold in the Alpaca app (never through the API key the bot uses). Unproven -> unchanged
+                # freeze + operator confirm. Our own filled stop takes precedence (checked above).
+                _owner_proof = None
+                if not _stop_filled and _OWNER_SALE_AUTOHEAL_ENABLED:
+                    try:
+                        from execution.manual_sale_proof import prove_owner_sale
+                        _owner_proof = prove_owner_sale(
+                            pos.symbol, pos.qty_proven_at, int(pos.qty_filled), 0,
+                            orders_from_iso=self._orders_from_iso(pos))
+                        logger.warning(
+                            "QHM %s owner-sale check (flat): proven=%s reason=%s orders=%s",
+                            pos.symbol, _owner_proof.proven, _owner_proof.reason, _owner_proof.order_ids)
+                    except Exception as _op_e:  # RC-3: unproven
+                        logger.warning("QHM %s owner-sale check failed: %s", pos.symbol, _op_e)
+                        _owner_proof = None
+                if (not _stop_filled and _owner_proof is not None
+                        and _owner_proof.reason == "order history unreadable"):
+                    # Could not read the order history this cycle: keep the hold open and retry next cycle, so
+                    # an owner sale is not mislabelled (and later bought back) because of one failed read.
+                    _today = self._now_et().strftime("%Y-%m-%d")
+                    _first = self._owner_sale_retry_day.setdefault(pos.symbol, _today)
+                    if _first == _today:
+                        logger.warning("QHM %s flat but order history unreadable — retrying next cycle",
+                                       pos.symbol)
+                        return False
+                    logger.warning("QHM %s order history unreadable since %s — closing unproven",
+                                   pos.symbol, _first)
+                self._owner_sale_retry_day.pop(pos.symbol, None)
+                _owner_sale = bool(_owner_proof is not None and _owner_proof.proven)
+                _exit_reason = ("qhm_stop_out" if _stop_filled
+                                else "owner_app_sale" if _owner_sale else "external_close_detected")
+                _data_source = ("qhm_stop_out" if _stop_filled
+                                else "qhm_owner_app_sale" if _owner_sale else "qhm_external_close")
                 # Position closed (our GTC stop fired, or an external/manual close)
                 pos.state = HoldState.CLOSED
+                pos.closed_reason = _exit_reason
                 pos.updated_at = self._now_et().isoformat()  # RC-1
                 _deregister_symbol(pos.symbol)
                 result.positions_closed_externally += 1
@@ -2100,10 +2173,57 @@ class QuarterlyHoldManager:
                             "(non-blocking; operator confirm_ledger_heal remains the fallback).",
                             pos.symbol, _hc_e,
                         )
+                elif _owner_sale:
+                    _healed = False
+                    self._cancel_own_sells_on_flat(pos)   # stop first, then the record (GAI 2026-10-17)
+                    try:
+                        from execution import ownership_guard as _og
+                        # Fresh flat read immediately before the write (GAI 2026-10-17).
+                        if self.broker.get_position(pos.symbol) is None:
+                            _healed = _og.apply_authorized_tier_reduction(
+                                pos.symbol, "qhm", 0.0, "owner_app_sale")
+                            if not _healed:   # already reconciled (e.g. the owner confirmed first)
+                                _healed = _og.tier_qty(_og.load_ledger(), pos.symbol, "qhm") <= 0
+                    except Exception as _oh_e:  # RC-3: never break the close path
+                        logger.warning("QHM %s owner-sale ledger heal failed: %s", pos.symbol, _oh_e)
+                    if _healed:
+                        self._record_owner_sale(pos, int(pos.qty_filled), 0,
+                                                _owner_proof.order_ids if _owner_proof else [])
+                        self._alert(
+                            f"✅ {pos.symbol} (long-term hold) was sold in the Alpaca app/website, not by the bot. "
+                            f"The bot closed this hold, updated its share record to 0 and will not buy it back. Nothing to do."
+                        )
+                    else:
+                        self._alert(
+                            f"📊 {pos.symbol} (long-term hold) was sold in the Alpaca app/website and the bot "
+                            f"closed this hold, but it could not update its share record by itself. Confirm "
+                            f"with: python3 confirm_ledger_heal.py {pos.symbol} qhm 0 (on the server, in "
+                            f"/home/ubuntu/mtf-bot)."
+                        )
                 else:
+                    self._cancel_own_sells_on_flat(pos)
+                    _already = False
+                    try:
+                        from execution import ownership_guard as _og2
+                        _already = _og2.tier_qty(_og2.load_ledger(), pos.symbol, "qhm") <= 0
+                    except Exception as _lq_e:  # RC-3: unknown -> ask for confirmation
+                        logger.warning("QHM %s ledger read failed: %s", pos.symbol, _lq_e)
+                    _api_sale = bool(_owner_proof is not None and "access_key" in _owner_proof.reason)
+                    if _already and not _api_sale:
+                        # The owner already confirmed this sale (confirm_ledger_heal): his exit decision.
+                        pos.closed_reason = "owner_confirmed"
+                        self._alert(
+                            f"📊 {pos.symbol} (long-term hold) was sold outside the bot; its share record was "
+                            f"already updated to 0 by your confirmation. The bot closed this hold and will not "
+                            f"buy it back. Nothing to do.")
+                        self._save_state()
+                        return True
+                    _why = _owner_proof.reason if _owner_proof is not None else "order history unreadable"
                     self._alert(
-                        f"📊 QHM: {pos.symbol} CLOSED externally (manual/unattributed) — ledger frozen "
-                        f"pending operator confirm. Review P&L via Alpaca fills API."
+                        f"📊 {pos.symbol} (long-term hold) was sold outside the bot and the bot closed this "
+                        f"hold. It could not prove you placed the sale ({_why}). If you sold it yourself, "
+                        f"confirm with: python3 confirm_ledger_heal.py {pos.symbol} qhm 0 (on the server, in "
+                        f"/home/ubuntu/mtf-bot). If you did NOT sell, do not confirm — tell Claude."
                     )
                 self._save_state()
                 return True
@@ -4987,6 +5107,7 @@ class QuarterlyHoldManager:
         """Refresh QHM-owned qty without converting another tier's shares into QHM."""
         if self.dry_run:
             return None
+        _read_started = datetime.now(timezone.utc).isoformat()   # proof window starts BEFORE the read
         try:
             alpaca_pos = self.broker.get_position(pos.symbol)
             if alpaca_pos is None:
@@ -5032,6 +5153,7 @@ class QuarterlyHoldManager:
         pos.qty_filled = live_qty
         pos.qty_total = live_qty
         pos.updated_at = self._now_et().isoformat()
+        pos.qty_proven_at = _read_started   # owner-sale proof window start
         return live_qty
 
     @staticmethod
@@ -5074,20 +5196,194 @@ class QuarterlyHoldManager:
                 return order
         return None
 
-    def _stop_coverage_pending(self, pos: HoldPosition, reason: str) -> bool:
-        """Persist fail-closed recovery state and page. Returns the save result."""
+    def _confirm_hint(self, pos: HoldPosition) -> str:
+        """Plain-English tail for an unproven sale: the exact confirm command (owner-sale auto-heal 2026-10-17)."""
+        try:
+            _p = self.broker.get_position(pos.symbol)
+            _net = self._whole_share_qty(getattr(_p, "qty", None)) if _p is not None else 0
+        except Exception:  # RC-3: the hint is optional
+            return ""
+        if _net is None or _net >= pos.qty_filled:
+            return ""
+        return (f" If you sold {pos.symbol} yourself, confirm with: python3 confirm_ledger_heal.py "
+                f"{pos.symbol} qhm {_net} (on the server, in /home/ubuntu/mtf-bot). If you did NOT sell, "
+                f"do not confirm — tell Claude.")
+
+    def _heal_owner_partial_sale(self, pos: HoldPosition) -> bool:
+        """Owner sold PART of a long-term hold in the Alpaca app: prove it from the broker's order
+        sources, then heal the share record to the broker-verified quantity. Returns True iff healed.
+        Fail-closed: anything unproven returns False and the caller pages with the confirm command."""
+        if self.dry_run or pos.direction != "long":
+            return False
+        try:
+            from execution.ownership_guard import load_ledger, tier_qty, apply_authorized_tier_reduction
+            from execution.manual_sale_proof import prove_owner_sale
+            _p = self.broker.get_position(pos.symbol)
+            if _p is None:
+                return False   # flat is handled by _detect_external_close
+            _side = str(getattr(getattr(_p, "side", ""), "value", None) or getattr(_p, "side", "")).lower()
+            broker_qty = self._whole_share_qty(getattr(_p, "qty", None))
+            held = self._whole_share_qty(tier_qty(load_ledger(), pos.symbol, "qhm"))
+            if (broker_qty is None or held is None or broker_qty <= 0 or broker_qty >= held
+                    or _side not in ("long", "position_side.long")):
+                return False
+            if not _OWNER_SALE_AUTOHEAL_ENABLED:
+                return False
+            _ck = (pos.symbol, held, broker_qty, pos.qty_proven_at)
+            if self._owner_sale_unproven.get(pos.symbol) == _ck:
+                return False   # same facts already failed the proof: do not re-query every cycle
+            proof = prove_owner_sale(pos.symbol, pos.qty_proven_at, held, broker_qty,
+                                     orders_from_iso=self._orders_from_iso(pos))
+            logger.warning("QHM %s owner-sale check (partial): proven=%s reason=%s orders=%s",
+                           pos.symbol, proof.proven, proof.reason, proof.order_ids)
+            if not proof.proven:
+                if proof.reason != "order history unreadable":   # a network failure is retried next cycle
+                    self._owner_sale_unproven[pos.symbol] = _ck
+                return False
+            # Fresh broker read immediately before the write (GAI 2026-10-17): heal only to the qty
+            # the proof explained; any movement since aborts (next cycle re-evaluates from truth).
+            _p2 = self.broker.get_position(pos.symbol)
+            if _p2 is None or self._whole_share_qty(getattr(_p2, "qty", None)) != broker_qty:
+                logger.warning("QHM %s position moved during the owner-sale check — retry next cycle",
+                               pos.symbol)
+                return False
+            # STOP FIRST (GAI 2026-10-17): a QHM stop larger than the shares still held could open a short
+            # when it fires. Shrink it to the held quantity BEFORE the record changes; if that cannot be
+            # confirmed, the record is not changed (next cycle retries from broker truth).
+            if not self._shrink_own_stop_to(pos, broker_qty):
+                return False
+            if not apply_authorized_tier_reduction(pos.symbol, "qhm", float(broker_qty), "owner_app_sale"):
+                return False
+        except Exception as exc:  # RC-3: never break the coverage path
+            logger.warning("QHM %s owner partial-sale heal failed: %s", pos.symbol, exc)
+            return False
+        self._owner_sale_unproven.pop(pos.symbol, None)
+        self._record_owner_sale(pos, held - broker_qty, broker_qty, proof.order_ids)
+        self._alert(
+            f"✅ {pos.symbol} (long-term hold): {held - broker_qty} share(s) were sold in the Alpaca app/website, not by the bot. "
+            f"The bot updated its record to {broker_qty} share(s) and is re-placing the protective stop "
+            f"for them. Nothing to do."
+        )
+        return True
+
+    def _shrink_own_stop_to(self, pos: HoldPosition, qty: int) -> bool:
+        """Ensure no QHM sell stop on the symbol exceeds `qty` shares. True when that is confirmed (no QH stop,
+        or the single QH stop already covers <= qty, or it was resized in place to exactly qty)."""
+        book = self._get_open_orders()
+        if book is None:
+            return False
+        own = [o for o in book
+               if str(getattr(o, "symbol", "") or "").upper() == pos.symbol.upper()
+               and str(getattr(o, "client_order_id", "") or "").startswith("QH-")
+               and "sell" in str(getattr(getattr(o, "side", ""), "value", None) or getattr(o, "side", "")).lower()]
+        if not own:
+            return True
+        if len(own) != 1:
+            logger.warning("QHM %s has %d own sell orders — not shrinking blindly", pos.symbol, len(own))
+            return False
+        shape = self._qh_stop_shape(own[0], pos)
+        if shape is None or not shape["id"]:
+            return False
+        if shape["remaining"] <= qty:
+            return True
+        from execution.broker import replace_stop_order
+        replacement = replace_stop_order(pos.symbol, shape["id"], float(shape["stop_price"]), qty=qty)
+        new_shape = self._qh_stop_shape(replacement, pos) if replacement is not None else None
+        if new_shape is None or not new_shape["id"] or new_shape["remaining"] != qty:
+            logger.critical("QHM %s could not confirm the stop shrink to %d shares", pos.symbol, qty)
+            return False
+        pos.stop_order_id = new_shape["id"]
+        logger.warning("QHM %s stop resized %s -> %s to %d shares after an owner sale",
+                       pos.symbol, shape["id"], new_shape["id"], qty)
+        return True
+
+    def _cancel_own_sells_on_flat(self, pos: HoldPosition) -> None:
+        """The hold is flat: cancel every still-open QHM sell order on the symbol (its stop), so a resting
+        sell-stop cannot open a short later. Exact QH- ids only; other tiers' orders are never touched."""
+        try:
+            book = self._get_open_orders()
+            if book is None:
+                self._alert(f"🚨 {pos.symbol} (long-term hold) is sold, but the bot could not read open orders "
+                            f"to cancel its old stop. Check the Alpaca app for a leftover {pos.symbol} sell order.")
+                return
+            if not book:
+                return
+            from execution.broker import cancel_order
+            for o in book:
+                if (str(getattr(o, "symbol", "") or "").upper() == pos.symbol.upper()
+                        and str(getattr(o, "client_order_id", "") or "").startswith("QH-")
+                        and "sell" in str(getattr(getattr(o, "side", ""), "value", None)
+                                          or getattr(o, "side", "")).lower()):
+                    _ok = cancel_order(str(getattr(o, "id", "")))
+                    logger.warning("QHM %s flat: cancelled leftover own sell order %s ok=%s",
+                                   pos.symbol, getattr(o, "id", None), _ok)
+                    if not _ok:
+                        self._alert(
+                            f"🚨 {pos.symbol} (long-term hold) is sold, but the bot could not cancel its old "
+                            f"stop order {getattr(o, 'id', None)}. Cancel it in the Alpaca app so it cannot "
+                            f"sell shares the account no longer holds.")
+        except Exception as exc:  # RC-3
+            logger.warning("QHM %s leftover-stop cleanup failed: %s", pos.symbol, exc)
+
+    @staticmethod
+    def _orders_from_iso(pos: HoldPosition) -> Optional[str]:
+        """Earliest order time the owner-sale proof reads from: the hold's creation (UTC ISO)."""
+        try:
+            ts = datetime.fromisoformat(str(pos.created_at))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=ET)
+            return ts.astimezone(timezone.utc).isoformat()
+        except (TypeError, ValueError):
+            return None
+
+    def _record_owner_sale(self, pos: HoldPosition, sold: int, remaining: int, order_ids: list) -> None:
+        """Audit line in trade_events.jsonl for an auto-healed owner sale (decision explainability)."""
+        try:
+            _te = {
+                "ts": datetime.now(PT).isoformat(), "event": "owner_sale_autoheal", "symbol": pos.symbol,
+                "tier": "qhm", "size": sold, "remaining": remaining, "order_ids": order_ids,
+                "proof": "alpaca source!=access_key and no bot order id", "since": pos.qty_proven_at,
+                "price": None, "price_pending": True, "score": 0, "mri_level": "N/A",
+                "data_source": "qhm_owner_app_sale",
+            }
+            with open(_ROOT / "logs" / "trade_events.jsonl", "a") as _f:  # RC-2
+                _f.write(json.dumps(_te) + "\n")
+        except Exception as exc:  # RC-3
+            logger.warning("QHM %s owner-sale audit write failed: %s", pos.symbol, exc)
+
+    _COVERAGE_PAGE_TEXT = {
+        "ownership proof unavailable": (
+            "the bot cannot confirm how many {sym} shares the long-term hold owns (the broker and the bot's share "
+            "record disagree), so it is not touching the protective stop."),
+        "no live QH stop": "no protective stop was found at the broker; the bot is re-placing it now.",
+    }
+
+    def _stop_coverage_pending(self, pos: HoldPosition, reason: str, extra: str = "") -> bool:
+        """Persist fail-closed recovery state and page. Returns the save result.
+
+        The state change and the log line happen every call; the Slack page is sent once per
+        (symbol, reason) per ET day (owner-sale auto-heal 2026-10-17)."""
         pos.state = HoldState.PENDING_STOP_REPLACE
         pos.updated_at = self._now_et().isoformat()
+        _today = self._now_et().strftime("%Y-%m-%d")
+        _day, _, _seen = (pos.coverage_page_key or "").partition("|")
+        _reasons = set(filter(None, _seen.split(";"))) if _day == _today else set()
+        send_page = reason not in _reasons
+        _reasons.add(reason)
+        pos.coverage_page_key = f"{_today}|{';'.join(sorted(_reasons))}"
         saved = self._save_state()
         logger.critical(
             "QuarterlyHoldManager: %s stop coverage unresolved (%s); "
-            "state=PENDING_STOP_REPLACE saved=%s",
-            pos.symbol, reason, saved,
+            "state=PENDING_STOP_REPLACE saved=%s paged=%s",
+            pos.symbol, reason, saved, send_page,
         )
-        self._alert(
-            ":rotating_light: QHM %s stop coverage unresolved (%s) — "
-            "PENDING_STOP_REPLACE; no blind stop mutation." % (pos.symbol, reason)
-        )
+        if send_page:
+            plain = self._COVERAGE_PAGE_TEXT.get(
+                reason, "the bot could not verify the protective stop ({reason}), so it is not changing it.")
+            self._alert(
+                ":rotating_light: %s (long-term hold): %s%s (Sent once a day while this lasts.)"
+                % (pos.symbol, plain.format(sym=pos.symbol, reason=reason), extra)
+            )
         return saved
 
     def _recover_or_submit_stop(
@@ -5338,9 +5634,28 @@ class QuarterlyHoldManager:
 
         Returns (skip_stray_guard_for_symbol, block_remaining_qhm_loop_for_symbol).
         """
+        # FLAT HOLD (owner-sale auto-heal 2026-10-17): a confirmed-flat broker position (get_position
+        # returns None ONLY on a genuine 404; any API error raises) must reach _detect_external_close,
+        # which closes the hold and heals or asks for confirmation. Paging here and blocking the loop
+        # stranded the hold forever (#596 ordering). A raised read keeps the fail-closed page below.
+        if pos.qty_filled > 0:
+            try:
+                _flat = self.broker.get_position(pos.symbol) is None
+            except Exception as _flat_exc:  # RC-3: unreadable -> not proven flat
+                logger.warning("QHM %s flat check failed: %s", pos.symbol, _flat_exc)
+                _flat = False
+            if _flat:
+                logger.info("QHM %s broker position is flat — handing to the external-close check",
+                            pos.symbol)
+                # (False, False): the stray-sell guard still runs here — on a flat symbol any resting
+                # non-own sell would open a short (masked-loss seat 2026-10-17).
+                return False, False
         desired_qty = self._strict_resync_qty(pos)
         if desired_qty is None or desired_qty <= 0:
-            self._stop_coverage_pending(pos, "ownership proof unavailable")
+            if self._heal_owner_partial_sale(pos):
+                desired_qty = self._strict_resync_qty(pos)
+        if desired_qty is None or desired_qty <= 0:
+            self._stop_coverage_pending(pos, "ownership proof unavailable", self._confirm_hint(pos))
             return True, True
 
         # Any QH-tagged order on this symbol participates in ambiguity detection,
@@ -5382,6 +5697,7 @@ class QuarterlyHoldManager:
             pos.state = HoldState.ACTIVE
             pos.updated_at = self._now_et().isoformat()
             confirmed_qty = self._strict_resync_qty(pos)
+            pos.coverage_page_key = None   # coverage restored: a later loss pages again
             if confirmed_qty != desired_qty or not self._save_state():
                 pos.stop_order_id = old_id or shape["id"]
                 pos.stop_recovery_client_order_id = old_recovery_coid
@@ -5413,6 +5729,7 @@ class QuarterlyHoldManager:
         pos.stop_recovery_client_order_id = None
         pos.stop_recovery_intended_qty = None
         pos.state = HoldState.ACTIVE
+        pos.coverage_page_key = None   # coverage restored: a later loss pages again
         pos.updated_at = self._now_et().isoformat()
         if not self._save_state():
             pos.stop_order_id = old_id or new_shape["id"]
