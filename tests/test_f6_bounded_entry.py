@@ -233,8 +233,8 @@ def test_blocked_basket_does_not_consume_other_names_advancement():
     base = datetime(2026, 10, 16, 17, 0, tzinfo=f6.ET)
     later = base + timedelta(minutes=1)
     f6._F6_QUOTE_OBSERVATIONS.update({"NVDA": base, "META": base})
-    valid = (100.0, 100.01, later)
-    unchanged = (100.0, 100.01, base)
+    valid = f6.F6Quote(100.0, 100.01, later)
+    unchanged = f6.F6Quote(100.0, 100.01, base)
 
     confirmed, blocked = f6._observe_advancing_basket({
         "NVDA": valid, "META": unchanged,

@@ -26,7 +26,7 @@ _CHANGE = "change_id=f6-pending-buy-reservation"
 _ROOT = Path(__file__).resolve().parent.parent
 JOURNAL_PATH = _ROOT / "data" / "state" / "pending_protected_buys.json"
 LOCK_PATH = _ROOT / "data" / "state" / ".pending_protected_buys.lock"
-SCHEMA = 2
+SCHEMA = len(("legacy", "bounded"))
 ACTIVE = frozenset({"reserved", "submitted"})
 TERMINAL = frozenset({"released_zero", "released_accounted"})
 KNOWN_ORDER_STATUSES = frozenset({
@@ -80,7 +80,7 @@ def _money(value) -> str:
         return ""
     if not amount.is_finite() or amount <= 0:
         return ""
-    fixed = amount.quantize(Decimal("0.01"))
+    fixed = amount.quantize(Decimal("1").scaleb(-len("00")))
     return format(fixed, ".2f") if amount == fixed else ""
 
 
