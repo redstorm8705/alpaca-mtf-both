@@ -99,7 +99,7 @@ source timestamp. Groq then approved. No NVIDIA vote was needed.
 
 ## Next implementation contract
 
-1. Ship this instrument/attribution foundation through the full exact-diff gate.
+1. **SHIPPED:** instrument/attribution foundation merged in PR #667 and deployed on OCI at `6d7947d`.
 2. Add the typed durable kill verdict and make F6 bypass only a verified genuine trading-loss cause.
 3. Replace the static starter formula with the paired empirical post-close trigger and append-only
    evidence; run a front-loaded historical replay.
@@ -107,5 +107,24 @@ source timestamp. Groq then approved. No NVIDIA vote was needed.
    detection, then run the full-path pre-market simulation.
 5. Do not set `FOREVER6_ENABLED=True`. Present a one-page, stock-and-dollar approval package only after
    every prerequisite and simulation passes.
+
+Signed: **OpenAI Codex**
+
+## Ship and deployment record — 2026-10-16
+
+PR #667 merged at `6d7947d40a7440bce43bc1c2dfd03f708a89e32f`. GitHub CI passed. The exact final
+local suite passed 186 tests plus 25 parameterized subtests, Python 3.10 compilation, Ruff E/W/F/B,
+mypy `--warn-unreachable`, the repository preship gate, and diff checks. The independent board/cold
+review passed after two concrete partial-fill under-protection paths were corrected. Google AI Studio
+approved the exact files; Rafael waived Groq for the final diff.
+
+OCI is running the merge SHA with `mtf-bot`, `mtf-writer`, and `mtf-http` active. Python 3.10
+compile/import passed, each current universe member returned `ok` from the deployed admission policy,
+and `FOREVER6_ENABLED=False` was read back. The server's local report-sync commit `d68b9ee` was
+preserved on `oci/report-sync-drift-20261016-2345` before the production branch fast-forward; no report
+content was discarded.
+
+The next change is the separately gated typed kill verdict. This shipment does not implement a kill
+exception, the empirical starter, or F6 enablement.
 
 Signed: **OpenAI Codex**

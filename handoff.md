@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-16 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-16 (Claude + OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,34 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-16 night, OpenAI Codex signed) — F6 instrument admission and exact protected attribution live (#667)
+
+PR #667 merged at `6d7947d40a7440bce43bc1c2dfd03f708a89e32f` and is deployed on OCI at that exact SHA.
+`mtf-bot`, `mtf-writer`, and `mtf-http` are active after restart. **F6 remains OFF**
+(`FOREVER6_ENABLED=False`); this shipment does not authorize or place an F6 trade.
+
+- F6 now refuses leveraged/inverse products at configuration, planning, and the final broker boundary. A new Day
+  tactical-product map entry also bars that product from F6 automatically. Current reviewed universe evidence passes for
+  TSLA, GOOGL, AMZN, CRWD, META, NVDA, MU, SNDK, DRAM, and EWY; DRAM/EWY are ordinary unleveraged ETFs.
+- The 7% trading-loss numerator now removes only exactly proven QHM/F6 shares. Day and Swing shares on the same
+  symbol remain visible; missing, malformed, duplicate, fractional, mismatched, or stale proof becomes a control fault
+  that blocks entries while leaving exits/protection reachable. This is attribution groundwork only: the typed F6
+  exception from a genuine trading-loss kill has not been built yet.
+- Claude's QHM immediate add-credit path is preserved and hardened. QHM accepts fill evidence only for the exact buy
+  order, symbol, side, client ID, and whole-share quantity. A previously proven partial fill cannot be erased by a
+  later stale snapshot; recovery protects the original QHM shares plus that proven partial.
+- Gate: independent board/cold PASS after fixing two partial-fill under-protection cases; Google AI Studio APPROVE;
+  Groq waived by Rafael; local Python 3.10 compile, Ruff E/W/F/B, mypy, preship, and 186 tests + 25 subtests PASS;
+  GitHub CI PASS. OCI compile/import and all ten current universe classifications PASS.
+- OCI's recurring report-sync commit `d68b9ee` was preserved as branch
+  `oci/report-sync-drift-20261016-2345`; production `main` was then fast-forwarded to the merge. No report was deleted.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** build the versioned, current-ET-session typed kill verdict and
+decouple F6 only from a proven `GENUINE_TRADING_LOSS` trip. Missing, stale, corrupt, unknown, ownership-drift, broker,
+or other control-fault causes must still block F6. Run the full risk-path board + Gro/GAI gate and do not enable F6.
+After that, replace the static starter with the paired completed-bar empirical trigger and historical replay. Claude's
+manual-sale/QHM/Slack queue below remains separate and unchanged.
 
 ## ⏩ LATEST (2026-10-16 evening, Claude signed) — manual-sale alerts (#673), stale-data alarm 3x/day (#670)
 
