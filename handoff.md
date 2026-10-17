@@ -8,6 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-17, OpenAI Codex signed) — bounded F6 starter live but F6 OFF (#690)
+
+PR #690 merged at `ebcdf4e8982854b13494992ba25b49ccb5942e9d` and is deployed on OCI at that exact SHA. `mtf-bot`, `mtf-writer`, and `mtf-http` are active. **F6 remains OFF** (`FOREVER6_ENABLED=False`), so this shipment cannot place an F6 order.
+
+- Future F6 starter orders are exact one-share extended-hours DAY limits. The same ceiling drives settled-cash capacity, allocator admission, both durable journals, the broker request, and reporting; no fill is called spend.
+- Quote liveness must advance monotonically within the same ET date across cycles for the complete basket, then pass another boundary read. Regressed, frozen, crossed, future, cross-day, or partially stale baskets block. The session is checked after the quote response and again adjacent to broker submission.
+- Event caps and intents are serialized across processes. Accepted zero-fill and ambiguous orders stay reserved until canonical fill/ownership replay. Explicit no-order paths durably release allocator, protected-buy, and event intents. Empty schema-1 journals migrate; nonempty legacy ambiguity fails closed.
+- Gate: Thorp/Taleb board PASS; cold/adversarial PASS after correcting quote starvation, cross-day/regression, event-lock, later-leg, and 8 PM race findings; Google AI Studio APPROVE; Groq waived by Rafael; 272 tests + 9 subtests, compile, Ruff, mypy, dynamic gate, and GitHub CI PASS. OCI emitted `DEPLOY_OK:ebcdf4e8982854b13494992ba25b49ccb5942e9d`.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** build trim resync, then allocator/emergency-flatten integration, ETF wind-down detection, and the full-path pre-market simulation. Do not enable F6. Claude's Day/Swing/QHM work remains separate and preserved.
+
 ## ⏩ LATEST (2026-10-17, OpenAI Codex signed) — empirical F6 starter live but F6 OFF (#685)
 
 PR #685 merged at `36d04de0aefdb26b202c076294d958f0de8153a3` and is deployed on OCI at that exact
