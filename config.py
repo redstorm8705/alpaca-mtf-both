@@ -426,10 +426,8 @@ FOREVER6_UNIVERSE = ["TSLA", "GOOGL", "AMZN", "CRWD", "META", "NVDA",
 # sponsor's timeline, possibly while underwater — a failure class single-stocks don't have. Add
 # fund-closure/wind-down detection before this tier goes live. Separate caveat: memory is a cyclical
 # (boom/bust) sub-sector, so "forever" duration is a judgment call for these names (tier is DARK).
-# Dynamic starter trigger: SPY down ≥ max(2.0, 0.15×VIX)% on the CLOSE — keeps it a ~2σ event across
-# regimes (VIX 13→2% floor, 20→3%, 27→4%). Board Shaw/Dalio formula; NOT a static −2% (no-static rule).
-FOREVER6_STARTER_TRIGGER_FLOOR_PCT = 2.0
-FOREVER6_STARTER_TRIGGER_VIX_SLOPE = 0.15
+# Starter timing is derived from completed SPY return and volume-stress distributions in
+# execution/f6_empirical_trigger.py. No fixed price/volatility threshold is configured.
 FOREVER6_STARTER_MAX_NAMES = 3                 # fund at most 3 names per starter event (breadth-first)
 FOREVER6_STARTER_MAX_EVENTS_PER_MONTH = 4      # per-month event cap (anti-overtrade)
 # Segregated starter budget: the starter may spend at most this fraction of SETTLED CASH per event

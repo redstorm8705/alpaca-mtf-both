@@ -42,6 +42,23 @@ def clean_ledger(*, net, f6):
     }
 
 
+def execution_ready_manager(f6_module):
+    """Manager with the live asset boundary satisfied for order-path unit tests."""
+    asset = {
+        "symbol": "NVDA",
+        "status": "active",
+        "tradable": True,
+        "asset_class": "us_equity",
+        "name": "NVIDIA Corporation Common Stock",
+    }
+    client = SimpleNamespace(get_asset=lambda _symbol: asset)
+    manager = f6_module.ForeverHoldManager(
+        SimpleNamespace(get_trading_client=lambda: client)
+    )
+    manager._trigger_evidence_is_current = lambda _evidence: True
+    return manager
+
+
 def test_active_reservation_blocks_before_ledger_floor_exists():
     rid = ppb.reserve("NVDA", 1, "F6-NVDA-b-1-test", 0)
     assert rid == "F6-NVDA-b-1-test"
@@ -480,7 +497,7 @@ def test_f6_starter_exception_recovers_and_binds_exact_order(monkeypatch):
     )
     monkeypatch.setattr(ownership_guard, "tier_qty", lambda *_args: 0.0)
 
-    manager = f6.ForeverHoldManager(SimpleNamespace())
+    manager = execution_ready_manager(f6)
     monkeypatch.setattr(manager, "_record_event", lambda *_args: None)
     monkeypatch.setattr(manager, "_verify_ledger_reflects", lambda *_args: None)
     result = manager.execute_starter(
@@ -522,7 +539,7 @@ def test_f6_definitive_buy_reject_releases_both_intents_and_stops_batch(monkeypa
     monkeypatch.setattr(ownership_guard, "load_ledger", lambda: clean_ledger(net=0, f6=0))
     monkeypatch.setattr(ownership_guard, "tier_qty", lambda *_args: 0.0)
 
-    manager = f6.ForeverHoldManager(SimpleNamespace())
+    manager = execution_ready_manager(f6)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}, {"symbol": "AAPL", "price": 100.0}],
         300.0,
@@ -566,7 +583,7 @@ def test_allocator_release_failure_keeps_f6_rejection_reservation_active(monkeyp
     monkeypatch.setattr(ownership_guard, "load_ledger", lambda: clean_ledger(net=0, f6=0))
     monkeypatch.setattr(ownership_guard, "tier_qty", lambda *_args: 0.0)
 
-    manager = f6.ForeverHoldManager(SimpleNamespace())
+    manager = execution_ready_manager(f6)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=1_000.0,
     )
@@ -601,7 +618,7 @@ def test_f6_ambiguous_timeout_keeps_protected_intent_active(monkeypatch):
     monkeypatch.setattr(ownership_guard, "load_ledger", lambda: clean_ledger(net=0, f6=0))
     monkeypatch.setattr(ownership_guard, "tier_qty", lambda *_args: 0.0)
 
-    manager = f6.ForeverHoldManager(SimpleNamespace())
+    manager = execution_ready_manager(f6)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=1_000.0,
     )
@@ -645,7 +662,7 @@ def test_f6_starter_recovers_after_pending_bind_then_allocator_bind_raises(monke
     monkeypatch.setattr(ownership_guard, "load_ledger", lambda: clean_ledger(net=0, f6=0))
     monkeypatch.setattr(ownership_guard, "tier_qty", lambda *_args: 0.0)
 
-    manager = f6.ForeverHoldManager(SimpleNamespace())
+    manager = execution_ready_manager(f6)
     monkeypatch.setattr(manager, "_record_event", lambda *_args: None)
     monkeypatch.setattr(manager, "_verify_ledger_reflects", lambda *_args: None)
     result = manager.execute_starter(

@@ -1,7 +1,7 @@
 # F6 instrument, loss-attribution, and starter policy — 2026-10-15
 
 **Author:** OpenAI Codex
-**Status:** instrument and attribution foundation implemented; starter-policy implementation pending; F6 remains disabled
+**Status:** instrument, attribution, typed-kill, and empirical-starter foundations implemented; F6 remains disabled
 
 ## Locked owner directives
 
@@ -100,13 +100,54 @@ source timestamp. Groq then approved. No NVIDIA vote was needed.
 ## Next implementation contract
 
 1. **SHIPPED:** instrument/attribution foundation merged in PR #667 and deployed on OCI at `6d7947d`.
-2. Add the typed durable kill verdict and make F6 bypass only a verified genuine trading-loss cause.
+2. **SHIPPED:** add the typed durable kill verdict and make F6 bypass only a verified genuine
+   trading-loss cause (PR #681).
 3. Replace the static starter formula with the paired empirical post-close trigger and append-only
-   evidence; run a front-loaded historical replay.
+   evidence; run a front-loaded historical replay. This is the active shipment described below.
 4. Complete bounded entry, trim resync, allocator/emergency-flatten integration, ETF wind-down
    detection, then run the full-path pre-market simulation.
 5. Do not set `FOREVER6_ENABLED=True`. Present a one-page, stock-and-dollar approval package only after
    every prerequisite and simulation passes.
+
+Signed: **OpenAI Codex**
+
+## Empirical starter implementation and replay — 2026-10-17
+
+The retired fixed `max(2%, 0.15 × VIX)` formula has no execution path in this diff. The replacement
+uses only completed, timezone-aware SPY daily bars. It computes the latest close-to-close return and
+the latest volume divided by the strictly-prior expanding median volume. The lower-tail probability
+is derived from the existing monthly event capacity divided by the observed median number of sessions
+per month. The starter arms only when the return reaches the empirical lower tail and the independent
+volume-stress series reaches its mirrored upper tail. The current observation is excluded from both
+cutoffs. Missing columns, duplicate/stale bars, nonfinite or nonpositive values, inverted bars, fewer
+than all 12 calendar months, or an invalid derived probability fail closed.
+
+Every evaluation appends the exact as-of date, observations, cutoffs, current readings, history
+range, and SHA256 of the prior records before an order can be considered. An append/fsync failure
+blocks the starter. An executed starter event embeds the same evidence object. The caller deliberately
+requires the latest bar to equal the current ET date: this prevents a weekend or exchange holiday
+from queuing a stale Friday/previous-session market order for the next open.
+
+The final order boundary does not trust the planner alone. It rereads the last durable evidence row
+and requires byte-equivalent decision fields, a valid SHA256, finite numeric fields, a current ET
+session, a strictly prior history range, an internally consistent armed return/stress pair, and the
+expected schema. A missing, stale, corrupt, hand-built, or non-armed record blocks before allocator
+admission, ownership reservation, or broker submission.
+
+The front-loaded replay in `logs/research/f6_empirical_starter_replay.json` fetched 1,000 adjusted
+Alpaca daily bars ending 2026-10-16, but each historical decision saw at most the same 365-bar daily
+window configured for production. After the required full-calendar warm-up it evaluated 783 sessions.
+The paired tails occurred on 60 dates: 8 in 2023, 11 in 2024, 33 in 2025, and 8 in 2026. Under a
+cash-only $2,500 path using the current 20%-of-cash event budget, $200 floor, whole shares, reviewed
+universe, and monthly event cap, 16 dates produced an affordable plan before cash reached $203.16.
+Examples were EWY/MU/GOOGL on 2023-09-15 ($270.40 reference spend), AMZN/CRWD/EWY on 2023-09-21
+($352.36), and TSLA/EWY/MU on 2023-09-26 ($370.76).
+
+That replay is a frequency and plumbing test, not a return backtest or fill claim. Historical catalyst
+state was unavailable, and adjusted closes are selection references rather than executable after-hours
+prices. It also demonstrates why the allocator/emergency-flatten prerequisite remains blocking: without
+the allocator's tier envelope, the existing starter cash rules alone can deploy almost all cash above
+the $200 reserve. F6 therefore stays disabled and this result does not approve launch.
 
 Signed: **OpenAI Codex**
 

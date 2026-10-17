@@ -949,20 +949,23 @@ def run_cycle(
                     _f6_mgr.evaluate_and_execute_trims()
                 except Exception as _f6_trim_e:
                     logger.warning("F6 trim evaluation failed (non-fatal): %s", _f6_trim_e)
-                _f6_prior = _spy_prior_session_close()
-                _f6_df    = fetch_bars("SPY", config.TF_DAILY, num_bars=2)
-                _f6_close = (float(_f6_df["close"].iloc[-1])
-                             if _f6_df is not None and not _f6_df.empty else None)
-                if _f6_prior and _f6_close and _f6_prior > 0:
-                    _f6_spy_pct = (_f6_close - _f6_prior) / _f6_prior * 100.0
-                    _f6_vix     = float(getattr(_main, "_last_vix", 0.0) or 0.0)
+                _f6_df = fetch_bars(
+                    "SPY",
+                    config.TF_DAILY,
+                    num_bars=config.BARS_TO_FETCH[config.TF_DAILY],
+                )
+                if _f6_df is not None and not _f6_df.empty:
                     # F6 may enter through a genuine-loss trip only when the
                     # current-session typed verdict proves that cause. Trims
                     # already ran above and remain reachable under every cause.
-                    _f6_plan    = ({} if _f6_kill_block_entries
-                                   else _f6_mgr.maybe_start_accumulation(_f6_spy_pct, _f6_vix))
+                    _f6_plan = ({} if _f6_kill_block_entries else
+                                _f6_mgr.maybe_start_accumulation(
+                                    _f6_df, datetime.now(ET).date()))
                     if _f6_plan.get("plan"):
-                        _f6_res = _f6_mgr.execute_starter(_f6_plan["plan"], _f6_plan["budget"])
+                        _f6_res = _f6_mgr.execute_starter(
+                            _f6_plan["plan"], _f6_plan["budget"],
+                            trigger_evidence=_f6_plan.get("trigger_evidence"),
+                        )
                         logger.warning(
                             "[F6] starter executed: placed %s (spent $%.2f)",
                             [p.get("symbol") for p in _f6_res.get("placed", [])],
