@@ -2820,7 +2820,7 @@ class QuarterlyHoldManager:
         def _validated_same_add(
             order: object, expected_order_id: str
         ) -> "tuple[str, str, int] | None":
-            """Validate order facts, then bind a poll to the submitted order ID."""
+            """Validate facts and bind a poll; None is retried only inside bounded loops."""
             proof = _validated_add_order(order)
             if proof is None or proof[0] != expected_order_id:
                 return None

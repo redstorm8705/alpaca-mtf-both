@@ -1085,12 +1085,6 @@ def validate_config():
         errors.append("FOREVER6_UNIVERSE contains ineligible instruments: " + "; ".join(
             f"{symbol} ({reason})" for symbol, reason in sorted(_f6_ineligible.items())
         ))
-    else:
-        log.info(
-            "[change_id=f6-instrument-policy-2026-10-15] F6 instrument policy "
-            "validated %d configured symbols",
-            len(_f6_symbols),
-        )
     if FOREVER6_ENABLED and not OWNERSHIP_GUARD_ENFORCE:
         errors.append(
             "FOREVER6_ENABLED requires OWNERSHIP_GUARD_ENFORCE=True so F6 ownership "
