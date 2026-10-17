@@ -1,0 +1,65 @@
+Nightly Gemini Audit — 2026-10-16
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['auto_ai_audit.py', 'scripts/post_live_eval.py', 'execution/ownership_guard.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+- execution/ownership_guard.py | `sync_ledger` REFUSED due to protected-floor shrink (LLY/qhm) | LLY
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+- **`execution.ownership_guard`**: The `sync_ledger` process is consistently failing with `REFUSED — protected floor shrink(s) {'LLY/qhm': ...}`. This indicates a mismatch between the ledger's protected floor and the actual position state. The bot is currently refusing to sync the ledger, which freezes all sell orders for the affected symbol.
+- **`execution.portfolio_tracker`**: `FIFO orphan: closing fill for AVGO has no prior lot and no tracker record`. This indicates a mismatch between the broker's fill history and the internal tracker, likely due to the AVGO short/long sequence on 2026-10-16.
+- **`execution.quarterly_hold_manager`**: `LLY stop coverage unresolved (ownership proof unavailable)`. This is a recurring critical error preventing the QHM from managing the LLY stop.
+
+### PERFORMANCE AUDIT
+- **Trade Integrity**: The AVGO trade on 2026-10-16 shows a P&L of -36.18 (long) and 6.72 (short). The `portfolio_tracker` reports a FIFO orphan error for this symbol, suggesting the tracker failed to reconcile the two-sided trade correctly.
+- **Stop Rate**: The bot is currently in a "STRESSED" MRI state (score 50). The high frequency of "No daily data — long entry blocked" for the DRAM bucket suggests the confluence scoring system is failing to receive necessary data, leading to a "fail-closed" state.
+- **R:R Analysis**: The bot is currently failing to execute entries due to "BoD-1 CONFIRM GATE" blocks and QHM capacity breaches. The win rate (34.6%) and profit factor (0.83) indicate the system is currently underperforming its target R:R.
+
+### TRADE INTEGRITY
+- **`pnl=0.0` anomalies**: The AAPL exit on 2026-10-09 shows `pnl: 0.0` despite a price of 335.24. This is a recording bug where the realized P&L was not calculated or captured at the time of the exit event.
+
+### MODIFIED FILE FINDINGS
+- **`execution/ownership_guard.py`**: The `sync_ledger` logic is correctly failing closed, but the lack of an automated recovery path for "protected floor shrink" is causing a persistent halt. The `confirm_ledger_heal.py` requirement is a manual bottleneck that is currently blocking the bot's ability to manage the LLY position.
+- **`execution/quarterly_hold_manager.py`**: The `get_quarterly_hold_quantities` function raises an exception when the state file is corrupt. While this is "fail-closed," it prevents the `ownership_guard` from verifying the protected floor, leading to the `sync_ledger` refusal.
+
+### P5 STATUS
+- **P5-C1**: UNTOUCHED
+- **P5-C2**: UNTOUCHED
+- **P5-H1**: N/A (Deleted)
+- **P5-H2**: UNTOUCHED
+- **P5-H3**: UNTOUCHED
+- **P5-H4**: UNTOUCHED
+- **P5-H5**: FIXED
+- **P5-M1**: UNTOUCHED
+- **P5-M2**: UNTOUCHED
+- **P5-M3**: UNTOUCHED
+- **P5-L1**: UNTOUCHED
+- **P5-L2**: UNTOUCHED
+- **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+- **EXECUTION BUG | CRITICAL | `execution/ownership_guard.py`**: The `sync_ledger` mechanism lacks a "force-heal" path for protected floor shrinks, causing a permanent lock on sell orders for LLY. | Failure to reconcile ledger with broker state.
+- **INFRASTRUCTURE | HIGH | `execution/quarterly_hold_manager.py`**: The `get_quarterly_hold_quantities` function raises an exception on file corruption, which propagates to the `ownership_guard` and triggers a system-wide sell freeze. | Unhandled state file corruption.
+
+### FIX VALIDATION
+- **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Immediate**: Run `confirm_ledger_heal.py LLY qhm 0` to resolve the `ownership_guard` sync refusal and unfreeze sell orders.
+2. **High**: Investigate the `FIFO orphan` error for AVGO in `portfolio_tracker` to ensure the tracker is correctly handling multi-leg trades.
+3. **High**: Add a robust recovery path to `get_quarterly_hold_quantities` that logs the corruption but returns the last-known-good state instead of raising an exception.
+4. **Medium**: Investigate the "No daily data" error for the DRAM bucket to restore entry functionality.
+5. **Medium**: Audit the `pnl=0.0` recording logic in the exit path to ensure realized P&L is correctly calculated for all exits.
+================================================================================
+BROKER GROUND TRUTH (2026-10-16, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AVGO   COVERED                  owners=day exposed=109m no-broker-stop=0m [08:26-08:26] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  LLY    COVERED                  owners=qhm exposed=278m no-broker-stop=0m [11:07-11:07] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTD   COVERED                  owners=day exposed=288m no-broker-stop=0m [08:10-08:10, 12:58-12:58] rejected_stop_orders=0
