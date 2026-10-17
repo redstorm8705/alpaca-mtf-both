@@ -448,7 +448,10 @@ class ForeverHoldManager:
             # unreadable or contradictory identity fails closed before either
             # the ownership reservation or broker order exists.
             try:
-                live_asset = self.broker._get_trading_client().get_asset(sym)
+                # Use the broker module's public singleton accessor.  The
+                # production caller injects execution.broker itself, whose
+                # get_trading_client() returns the paper=True Alpaca client.
+                live_asset = self.broker.get_trading_client().get_asset(sym)
             except Exception as asset_exc:
                 skipped.append({**p, "skip": "Alpaca asset classification unavailable"})
                 logger.critical("[F6] BUY BLOCKED %s — live asset lookup failed: %s", sym, asset_exc)

@@ -161,7 +161,7 @@ def test_execute_starter_blocks_live_asset_contradiction_before_reservation(
     client = mock.Mock()
     client.get_asset.return_value = _asset(name="Example Daily 2X Long NVDA ETF")
     broker = mock.Mock()
-    broker._get_trading_client.return_value = client
+    broker.get_trading_client.return_value = client
     manager = f6.ForeverHoldManager(broker)
     monkeypatch.setattr(config, "FOREVER6_UNIVERSE", ["NVDA"])
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
