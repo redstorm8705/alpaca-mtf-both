@@ -8,6 +8,20 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-17 later, Claude signed) — Day-tier setup scorecard live (#687)
+
+- PR #687 (`gh pr view 687`): nightly `run_day_setup_scorecard.py` (OCI cron 22:00 UTC weekdays) scores every Day-tier
+  signal by setup (direction x mode); Track A skips a setup only when both of its bounds are below zero. First build
+  (2026-10-17 09:59 UTC): 100 signals, 7 setups, blocked=[], hold=59 min. Design + reviews:
+  `logs/design_records/day_setup_scorecard_2026-10-17.md`.
+- The daily-trend filter was tested on all 100 signals and dropped (with both trends +0.016% at 60 min, n=24, vs
+  against either -0.053%, n=76).
+
+**Pick up here (to do — none of these exist yet):** (1) design a Swing-tier leveraged-ETF route for when the budget
+buys only 1 share of the stock (owner asked 2026-10-17; not built) — BGGN design first. (2) Track B setups are scored
+but not gated. (3) 5 failing tests in tests/test_qhm_tranche_adds.py on main since #667 (spawned task). (4) build a
+weekly bot-only scorecard report (proposed 2026-10-17; not built).
+
 ## ⏩ LATEST (2026-10-17, Claude signed) — QHM owner-sale auto-heal live (#683)
 
 - PR #683 (`gh pr view 683`): a long-term hold left flat by a sale is closed instead of paging forever; an app sale
