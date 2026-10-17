@@ -127,7 +127,11 @@ class KillVerdict:
         ):
             return None
         expected_pct = verdict.trading_pnl / verdict.daily_start_value
-        if not math.isclose(expected_pct, verdict.loss_pct, rel_tol=1e-9, abs_tol=1e-12):
+        # JSON's float representation round-trips these exact binary values;
+        # the persisted percentage was computed from these same two operands.
+        # Exact equality avoids introducing a new policy tolerance that could
+        # bless internally inconsistent loss evidence.
+        if expected_pct != verdict.loss_pct:
             return None
         return verdict
 
