@@ -110,6 +110,18 @@ source timestamp. Groq then approved. No NVIDIA vote was needed.
 
 Signed: **OpenAI Codex**
 
+## Typed kill-verdict ship record — 2026-10-16
+
+PR #681 merged at `a91fc493a929b6de7f11ceff34d02bb8992dbe4e` and is deployed on OCI. The state is
+schema-versioned, atomic, and current-ET-session dated. It records cause, exact-attribution provenance,
+trading P&L, start-of-day equity, and loss percentage. F6 can bypass only a mathematically consistent
+`GENUINE_TRADING_LOSS` backed by exact fill-and-ownership attribution; legacy, missing, stale, corrupt,
+fallback, or control-fault state blocks. Day, Swing, and QHM behavior is unchanged. F6 remains disabled.
+
+Adversarial review caught and fixed fallback misclassification before merge. Google AI Studio approved
+the exact final diff; Groq was waived by Rafael. Focused tests, statics, preship, GitHub CI, OCI deploy,
+and a read-only live smoke passed. Signed: **OpenAI Codex**.
+
 ## Ship and deployment record — 2026-10-16
 
 PR #667 merged at `6d7947d40a7440bce43bc1c2dfd03f708a89e32f`. GitHub CI passed. The exact final
