@@ -169,6 +169,9 @@ def _tier_for_fill_order(
 ) -> "str | None":
     """Resolve one fill's immutable order owner, cached for the session.
 
+    ``Any`` is imported from ``typing`` at module scope; these annotations are
+    valid on Python 3.10 without postponed-annotation semantics.
+
     Alpaca fill activities carry ``order_id`` but no client-order tag. Exact
     protected-fill exclusion therefore requires the order lookup. ``None`` means
     a broker-confirmed order has no tier tag.  A missing/unreadable order returns

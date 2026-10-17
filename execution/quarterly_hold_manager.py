@@ -2718,8 +2718,6 @@ class QuarterlyHoldManager:
             return 0
         _add_coid = live_order_id(_capital.lease)
 
-        _expected_add_order_id: "str | None" = None
-
         def _validated_add_order(order: object) -> "tuple[str, str, int] | None":
             """Return exact ``(id, status, filled)`` proof for this QHM add."""
             try:
@@ -2771,10 +2769,6 @@ class QuarterlyHoldManager:
                 filled_whole = int(filled_qty)
                 if (
                     not order_id
-                    or (
-                        _expected_add_order_id is not None
-                        and order_id != _expected_add_order_id
-                    )
                     or not isinstance(coid, str)
                     or coid != _add_coid
                     or tier_of_coid(coid) != "qhm"
@@ -2822,6 +2816,15 @@ class QuarterlyHoldManager:
                 return order_id, status, filled_whole
             except (AttributeError, TypeError, ValueError):
                 return None
+
+        def _validated_same_add(
+            order: object, expected_order_id: str
+        ) -> "tuple[str, str, int] | None":
+            """Validate order facts, then bind a poll to the submitted order ID."""
+            proof = _validated_add_order(order)
+            if proof is None or proof[0] != expected_order_id:
+                return None
+            return proof
         # Persist exact recovery identity BEFORE cancelling the protective stop.
         # A failed write leaves the old stop intact and aborts submission.
         _pre_add_state = pos.state
@@ -3031,8 +3034,6 @@ class QuarterlyHoldManager:
         if _add_id is None:
             _hold_ambiguous_add("add-order-proof-invalid")
             return 0
-        _expected_add_order_id = _add_id
-
         # Poll for fill: 2s initial + 1s polls to a 15s monotonic deadline.
         _deadline = _time.monotonic() + 15.0
         _time.sleep(2)
@@ -3041,7 +3042,7 @@ class QuarterlyHoldManager:
         while _time.monotonic() < _deadline:
             try:
                 _o = _get_order(_add_id)
-                _proof = _validated_add_order(_o)
+                _proof = _validated_same_add(_o, _add_id)
                 if _proof is None:
                     _poll_invalid = True
                     break
@@ -3080,7 +3081,9 @@ class QuarterlyHoldManager:
             while _time.monotonic() < _cancel_deadline:
                 try:
                     _terminal_order = _get_order(_add_id)
-                    _terminal_proof = _validated_add_order(_terminal_order)
+                    _terminal_proof = _validated_same_add(
+                        _terminal_order, _add_id
+                    )
                     if _terminal_proof is None:
                         break
                     _, _terminal_status, _filled = _terminal_proof
