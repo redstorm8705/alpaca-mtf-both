@@ -16,8 +16,19 @@
   "window_reason": "Owner sales and stop-coverage problems are not daily; ten sessions covers the recent rate.",
   "reversal": "an auto-heal whose triggering sale was not the owner's; any API order seen with a null source; a long-term hold left holding shares with no protective stop after an owner sale; the same stop-coverage page sent twice in one ET day for one reason",
   "metrics": [
-    {"name": "repeated QHM stop-coverage pages per symbol per day", "source": "logs/mtf_bot.log paged=True lines", "direction": "down", "bound": "at most one per (symbol, reason) per ET day"},
-    {"name": "owner sales healed without a confirm command", "source": "trade_events.jsonl event=owner_sale_autoheal", "direction": "up", "bound": "every proven app sale of a pure long-term hold"}
+    {
+      "name": "repeated QHM stop-coverage pages per symbol per day",
+      "source": "logs/mtf_bot.log paged=True lines",
+      "direction": "down",
+      "bound": "at most one per (symbol, reason) per ET day"
+    },
+    {
+      "name": "owner sales healed without a confirm command",
+      "source": "trade_events.jsonl event=owner_sale_autoheal",
+      "direction": "up",
+      "bound": "every proven app sale of a pure long-term hold"
+    }
   ],
-  "verification": "tests/test_qhm_owner_sale_autoheal.py"
+  "verification": "tests/test_qhm_owner_sale_autoheal.py",
+  "baseline_exempt_reason": "The proof lines are new text emitted only by this change (\"owner-sale check (flat|partial): proven=\", \"broker position is flat - handing to the external-close check\", and the \"paged=\" suffix on the stop-coverage line); none appears in the production log before this ship."
 }
