@@ -980,7 +980,12 @@ def apply_authorized_tier_fill_increase(
     order id). A symbol absent from the ledger is created with every tier at zero. Never raises; True iff the claim
     reflects the fill afterwards."""
     sym = str(symbol).upper()
-    if tier not in _PROTECTED_TIERS:
+    if (
+        tier not in _PROTECTED_TIERS
+        or not isinstance(source, str)
+        or not source
+        or source != source.strip()
+    ):
         return False
     try:
         fill = float(filled_qty)

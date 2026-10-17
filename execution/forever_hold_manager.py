@@ -30,6 +30,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import config
+from execution.instrument_policy import f6_live_asset_eligible, f6_symbol_eligible
 
 logger = logging.getLogger("forever6")
 
@@ -320,6 +321,10 @@ class ForeverHoldManager:
             _cat = None  # type: ignore[assignment]
         candidates: list[tuple[str, float, int]] = []
         for sym in self.universe:
+            eligible, policy_reason = f6_symbol_eligible(sym, config.FOREVER6_UNIVERSE)
+            if not eligible:
+                logger.error("[F6] %s SKIPPED — instrument policy: %s", sym, policy_reason)
+                continue
             px = prices.get(sym)
             if not px or px <= 0:
                 continue
@@ -366,7 +371,18 @@ class ForeverHoldManager:
         if not plan:
             return {"placed": [], "skipped": [], "spent": 0.0, "reason": "empty plan"}
 
-        if config.FOREVER6_ENABLED and not _STARTUP_READY:
+        # The master flag is enforced again at the money-moving boundary.  A
+        # direct or future caller cannot bypass run_cycle's outer DARK gate.
+        # Trims use their separate sell-only method and remain reachable.
+        if not config.FOREVER6_ENABLED:
+            return {
+                "placed": [],
+                "skipped": list(plan),
+                "spent": 0.0,
+                "reason": "F6 disabled",
+            }
+
+        if not _STARTUP_READY:
             logger.critical(
                 "[F6] execute_starter BLOCKED — this process has not passed the exact "
                 "startup ownership preflight."
@@ -381,7 +397,7 @@ class ForeverHoldManager:
         # C-3 (design 2026-07-17): refuse to place if a prior post-buy sync left the ledger
         # degraded (a fresh F6 lot unreflected). Blocks a BUY only — never a sell — the safe
         # direction for a never-sell book. Auto-cleared when a later sync verifies clean (C-2).
-        if (config.FOREVER6_ENABLED and not _STARTUP_READY) or _read_sync_degraded():
+        if _read_sync_degraded():
             logger.critical("[F6] execute_starter BLOCKED — prior F6 sync degraded (a fresh "
                             "lot was left unreflected in the ledger). Not placing; resolve first.")
             _slack_safe(":rotating_light: F6 seed BLOCKED — prior sync degraded; further F6 "
@@ -414,6 +430,44 @@ class ForeverHoldManager:
                 px = 0.0
             if not sym or px <= 0:
                 skipped.append({**p, "skip": "bad symbol/price"})
+                continue
+            # Re-check at the money-moving boundary.  A caller can pass an old,
+            # hand-built, or corrupted plan that never passed maybe_start_accumulation.
+            # No F6 order may rely on the planner as its only product-policy gate.
+            eligible, policy_reason = f6_symbol_eligible(sym, config.FOREVER6_UNIVERSE)
+            if not eligible:
+                skipped.append({**p, "skip": f"instrument policy: {policy_reason}"})
+                logger.critical("[F6] BUY BLOCKED %s — instrument policy: %s", sym, policy_reason)
+                _slack_safe(
+                    f":no_entry: F6 BUY BLOCKED for {sym} — instrument policy: "
+                    f"{policy_reason}. No order was sent."
+                )
+                continue
+            # Direct broker classification at the final money boundary.  The
+            # synchronous response is consumed under the same symbol-order gate;
+            # unreadable or contradictory identity fails closed before either
+            # the ownership reservation or broker order exists.
+            try:
+                # Use the broker module's public singleton accessor.  The
+                # production caller injects execution.broker itself, whose
+                # get_trading_client() returns the paper=True Alpaca client.
+                live_asset = self.broker.get_trading_client().get_asset(sym)
+            except Exception as asset_exc:
+                skipped.append({**p, "skip": "Alpaca asset classification unavailable"})
+                logger.critical("[F6] BUY BLOCKED %s — live asset lookup failed: %s", sym, asset_exc)
+                _slack_safe(
+                    f":no_entry: F6 BUY BLOCKED for {sym} — Alpaca asset "
+                    "classification was unavailable. No order was sent."
+                )
+                continue
+            live_ok, live_reason = f6_live_asset_eligible(sym, live_asset)
+            if not live_ok:
+                skipped.append({**p, "skip": f"live instrument policy: {live_reason}"})
+                logger.critical("[F6] BUY BLOCKED %s — live instrument policy: %s", sym, live_reason)
+                _slack_safe(
+                    f":no_entry: F6 BUY BLOCKED for {sym} — live instrument "
+                    f"policy: {live_reason}. No order was sent."
+                )
                 continue
             # Reserve a slippage-buffered amount; a market fill above the planned price can then NEVER
             # push cumulative spend past `spendable` and breach the cash floor (ruin finding #1).

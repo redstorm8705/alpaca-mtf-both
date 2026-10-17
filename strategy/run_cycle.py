@@ -246,6 +246,12 @@ def run_cycle(
         _control_fault = f"account read failed ({_pv_err!r})"
     try:
         _kill_tripped = bool(risk.check_kill_switch())
+    except RuntimeError as _ks_err:
+        # RiskManager raises RuntimeError when exact protected-tier attribution
+        # cannot be proved.  Convert that expected safety fault into an entries-
+        # only block here; do not return, so stop/exit management below proceeds.
+        _kill_tripped = False
+        _control_fault = _control_fault or f"kill-switch evaluation failed ({_ks_err!r})"
     except Exception as _ks_err:
         _kill_tripped = False
         _control_fault = _control_fault or f"kill-switch evaluation failed ({_ks_err!r})"
@@ -255,6 +261,22 @@ def run_cycle(
     # book was left unmanaged exactly when it was losing. Exits keep running; each entry path
     # (execute_entries, QHM entries, overnight entries, F6 starter) is blocked via this flag.
     _kill_block_entries = _kill_tripped or bool(_control_fault)
+    # F6 is a cash-only accumulation tier intended to buy severe broad-market
+    # down days.  It may bypass ONLY a durable, schema-valid, current-ET-session
+    # GENUINE_TRADING_LOSS verdict.  The ordinary boolean is insufficient:
+    # account-read failures, attribution faults, legacy/stale state, and corrupt
+    # state all remain blocking.  Day, Swing, and QHM continue to use the normal
+    # entries block above.
+    _f6_kill_block_entries = _kill_block_entries
+    if config.FOREVER6_ENABLED and _kill_tripped and not _control_fault:
+        try:
+            _f6_kill_block_entries = not risk.f6_genuine_loss_bypass_allowed()
+        except Exception as _f6_verdict_err:
+            _f6_kill_block_entries = True
+            logger.error(
+                "F6 kill-verdict validation failed (%r) — starter remains blocked.",
+                _f6_verdict_err,
+            )
     global _control_fault_streak
     if not _control_fault:
         _control_fault_streak = 0
@@ -919,6 +941,14 @@ def run_cycle(
             try:
                 from execution.forever_hold_manager import ForeverHoldManager
                 import execution.broker as _f6_bk
+                _f6_mgr = ForeverHoldManager(_f6_bk)
+                # F6 trims are risk-reducing exits. They do not depend on SPY
+                # starter data and must remain reachable during a market-data
+                # outage or after a kill switch trip.
+                try:
+                    _f6_mgr.evaluate_and_execute_trims()
+                except Exception as _f6_trim_e:
+                    logger.warning("F6 trim evaluation failed (non-fatal): %s", _f6_trim_e)
                 _f6_prior = _spy_prior_session_close()
                 _f6_df    = fetch_bars("SPY", config.TF_DAILY, num_bars=2)
                 _f6_close = (float(_f6_df["close"].iloc[-1])
@@ -926,9 +956,10 @@ def run_cycle(
                 if _f6_prior and _f6_close and _f6_prior > 0:
                     _f6_spy_pct = (_f6_close - _f6_prior) / _f6_prior * 100.0
                     _f6_vix     = float(getattr(_main, "_last_vix", 0.0) or 0.0)
-                    _f6_mgr     = ForeverHoldManager(_f6_bk)
-                    # Kill switch blocks the starter (a new buy); the trims below are exits and still run.
-                    _f6_plan    = ({} if _kill_block_entries
+                    # F6 may enter through a genuine-loss trip only when the
+                    # current-session typed verdict proves that cause. Trims
+                    # already ran above and remain reachable under every cause.
+                    _f6_plan    = ({} if _f6_kill_block_entries
                                    else _f6_mgr.maybe_start_accumulation(_f6_spy_pct, _f6_vix))
                     if _f6_plan.get("plan"):
                         _f6_res = _f6_mgr.execute_starter(_f6_plan["plan"], _f6_plan["budget"])
@@ -937,11 +968,6 @@ def run_cycle(
                             [p.get("symbol") for p in _f6_res.get("placed", [])],
                             _f6_res.get("spent", 0.0),
                         )
-                    # F6 EXIT — trims only (10x/20x). Independent of the starter trigger
-                    # above (runs every after-close cycle regardless of whether a starter
-                    # fired today), since a held name's gain multiple is unrelated to
-                    # today's SPY move.
-                    _f6_mgr.evaluate_and_execute_trims()
             except Exception as _f6e:
                 logger.warning(f"F6 starter after-close eval failed (non-fatal): {_f6e}")
         _touch_cycle_ts()
@@ -2268,4 +2294,3 @@ def run_cycle(
 
     # Stamp cycle completion time — watchdog thread reads this to detect hangs
     _touch_cycle_ts()
-

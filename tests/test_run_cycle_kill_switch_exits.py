@@ -17,6 +17,7 @@ from pathlib import Path
 SRC = (Path(__file__).resolve().parent.parent / "strategy" / "run_cycle.py").read_text()
 TREE = ast.parse(SRC)
 FLAG = "_kill_block_entries"
+F6_FLAG = "_f6_kill_block_entries"
 
 
 def _run_cycle_fn() -> ast.FunctionDef:
@@ -201,15 +202,27 @@ class KillSwitchKeepsExits(unittest.TestCase):
             n
             for n in ast.walk(self.fn)
             if isinstance(n, ast.IfExp)
-            and FLAG in _names(n.test)
+            and F6_FLAG in _names(n.test)
             and "maybe_start_accumulation" in ast.unparse(n.orelse)
         ]
-        self.assertEqual(len(ifexp), 1, "F6 starter not gated on the kill flag")
+        self.assertEqual(
+            len(ifexp), 1, "F6 starter not gated on its typed kill verdict"
+        )
+        bypass_calls = _call_lines(self.fn, "f6_genuine_loss_bypass_allowed")
+        self.assertEqual(len(bypass_calls), 1)
+        for n in self._enclosing_ifs(bypass_calls[0]):
+            self.assertIn("_kill_tripped", _names(n.test))
+            self.assertIn("_control_fault", _names(n.test))
         trims = _call_lines(self.fn, "evaluate_and_execute_trims")
         self.assertEqual(len(trims), 1)
         for n in self._enclosing_ifs(trims[0]):
-            self.assertNotIn(
-                FLAG, _names(n.test), "F6 trims (exits) must not be kill-gated"
+            self.assertFalse(
+                {FLAG, F6_FLAG} & _names(n.test),
+                "F6 trims (exits) must not be kill-gated",
+            )
+            self.assertFalse(
+                {"_f6_prior", "_f6_close"} & _names(n.test),
+                "F6 trims must not depend on starter SPY data",
             )
 
 

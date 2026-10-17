@@ -419,7 +419,7 @@ QHM_EARNINGS_STOP_CANCEL_ENABLED = False
 # Ships DARK until the module is wired + live-validated.
 FOREVER6_ENABLED = False                       # master flag — DARK until validated live
 FOREVER6_UNIVERSE = ["TSLA", "GOOGL", "AMZN", "CRWD", "META", "NVDA",
-                     "MU", "SNDK", "DRAM", "EWY"]  # +memory names 2026-09-05 (Rafael); tier is DARK
+                     "MU", "SNDK", "DRAM", "EWY"]  # leveraged ETFs are forbidden by startup + order-path policy
 # KNOWN RISK (Rafael-accepted 2026-09-05; CLOSE before FOREVER6_ENABLED flips): the never-sell exit
 # design is trim-only at 10x/20x gain with NO other exit — it has no handling for an ETF issuer
 # WINDING DOWN the fund (DRAM/EWY). A sponsor closure force-liquidates a "never-sell" holding on the
@@ -1067,6 +1067,29 @@ def validate_config():
 
     errors   = []
     warnings = []
+
+    # F6 is a multi-year accumulation tier. Daily-reset leveraged ETFs are
+    # structurally incompatible with that mandate, so reject them at startup.
+    # The execution boundary independently repeats this check for stale/external
+    # plans. The ownership ledger must also be enforced before F6 can be armed:
+    # only an enforced, reconciled F6 claim may be excluded from the intraday 7%
+    # loss numerator without risking a masked Day/Swing loss.
+    from execution.instrument_policy import f6_symbol_eligible as _f6_symbol_eligible
+    _f6_symbols = [str(s or "").strip().upper() for s in FOREVER6_UNIVERSE]
+    _f6_ineligible = {
+        s: reason for s in _f6_symbols
+        for eligible, reason in [_f6_symbol_eligible(s, FOREVER6_UNIVERSE)]
+        if not eligible
+    }
+    if _f6_ineligible:
+        errors.append("FOREVER6_UNIVERSE contains ineligible instruments: " + "; ".join(
+            f"{symbol} ({reason})" for symbol, reason in sorted(_f6_ineligible.items())
+        ))
+    if FOREVER6_ENABLED and not OWNERSHIP_GUARD_ENFORCE:
+        errors.append(
+            "FOREVER6_ENABLED requires OWNERSHIP_GUARD_ENFORCE=True so F6 ownership "
+            "is exact before its P&L is excluded from the intraday kill switch"
+        )
 
     # (Bucket A/B allocation-sum check removed 2026-07-15 — the buckets were collapsed into a
     #  unified intraday/intraweek tier; aggregate exposure is governed by MAX_GROSS_EXPOSURE_RATIO,

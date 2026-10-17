@@ -1,0 +1,18 @@
+{
+  "change": "alert-false-wording",
+  "tier": 1,
+  "paths": [
+    "alerts.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "Hard stop close_position\\(\\) FAILED|SYSTEMIC FEED LATENCY|RC-4"
+    }
+  ],
+  "expected_rate": "only when a hard-stop close fails, the bar feed runs late, or an exit fill is unverified; zero lines on a normal day",
+  "window_sessions": 5,
+  "window_reason": "These events are rare; five sessions give a fair chance to see one of the three pages.",
+  "reversal": "a stop-breach page that says a stop was placed after a failed close, a stale-feed page naming yfinance, or an RC-4 page reading Position-Mismatch",
+  "verification": "tests/test_alert_false_wording.py"
+}

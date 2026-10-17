@@ -96,7 +96,7 @@ _JARGON = (
     ("PHANTOM ENTRY",   "UNVERIFIED ENTRY"),
     ("phantom entry",   "unverified entry"),
     ("GTC-RACE",        "GTC order conflict"),
-    ("RC-4",            "Position-Mismatch check"),
+    ("RC-4",            "Fill-price check"),   # RC-4 = exit recorded without a verified fill price (not a position mismatch)
 )
 
 
@@ -380,7 +380,7 @@ def send_slack_delivery(message: str) -> bool:
     return ok
 
 
-# ── Public API ───────────────────────────────────────────────────────────────
+# ── Public API ─────────────────────────────────────────────────────────────────────────
 
 def alert_entry(symbol: str, direction: str, shares: int, price: float,
                 score: int, size_mult: float,
@@ -499,17 +499,21 @@ def alert_venue_halt(venue_status: dict, spy_5m_pct: float, qqq_5m_pct: float) -
 
 
 def alert_stop_breach(symbol: str, direction: str, current_price: float,
-                      stop: float, gtc_submitted: bool = True) -> None:
-    """Fire when stop is breached and position cannot be closed immediately:
-    GTC stop placed for next RTH open, or close_position() hard-failed.
-    """
-    title = f"{SEV_CRITICAL} — STOP BREACH BLOCKED — {symbol}"
+                      stop: float, gtc_submitted: bool = False) -> None:
+    """Fire when price crossed the stop and the position could not be closed.
+
+    gtc_submitted=True: a GTC stop was placed instead and fires at the next regular-hours open.
+    gtc_submitted=False (default; the only caller, exit_logic's hard-stop path, calls this after close_position()
+    FAILED): nothing confirmed the close, so the text must not claim a stop was placed (CEO 2026-10-16 Slack review:
+    the old default printed "GTC stop placed" on a failed close)."""
+    title = f"{SEV_CRITICAL} — STOP HIT, CLOSE FAILED — {symbol}"
     if gtc_submitted:
-        action = "GTC stop placed — fires next RTH open."
+        action = "A GTC stop was placed instead; it fires at the next regular-hours open."
     else:
-        action = "⛔ GTC stop FAILED — MANUAL ACTION REQUIRED in Alpaca app."
+        action = (f"The close order failed, so {symbol} may still be open with no protection. "
+                  f"Check {symbol} in the Alpaca app now and close it or place a stop by hand.")
     body  = (
-        f"Price ${current_price:.2f} breached stop ${stop:.2f}\n"
+        f"{symbol} ({direction}) traded at ${current_price:.2f}, past its stop ${stop:.2f}.\n"
         f"{action}"
     )
     _send(title, body, priority=5, tags=["warning", "lock"],
@@ -582,16 +586,83 @@ def alert_stale_bar(symbol: str, age_min: float) -> None:
     logger.info(f"[STALE BAR] {symbol}: last 15m bar is {age_min:.0f} min old — entry skipped.")
 
 
+_GTC_FAIL_PAGES = _STATE_DIR / "gtc_failed_pages.json"
+_ET = ZoneInfo("America/New_York")
+
+
+def _gtc_fail_key(symbol: str, side: str, stop_px: float) -> str:
+    try:
+        px = f"{float(stop_px):.2f}"
+    except (TypeError, ValueError):
+        px = str(stop_px)
+    return f"{str(symbol).upper()}|{str(side).lower()}|{px}"
+
+
+def _gtc_fail_day(today: str) -> dict:
+    """Today's {"<key>|<transport>": "HH:MM PT"} stamps. An unreadable or malformed file reads as empty, so a page is
+    never lost to a bad file (and the next confirmed send rewrites it clean)."""
+    try:
+        if _GTC_FAIL_PAGES.exists():
+            state = json.loads(_GTC_FAIL_PAGES.read_text(encoding="utf-8"))
+            day = state.get(today) if isinstance(state, dict) else None
+            return dict(day) if isinstance(day, dict) else {}
+    except Exception as e:
+        logger.warning(f"alert_gtc_failed: page-state read failed ({e}) — paging")
+    return {}
+
+
+def _gtc_fail_mark(stamps: list, today: str) -> None:
+    """Record delivered sends for today's ET date; earlier dates and a damaged file are replaced."""
+    try:
+        day = _gtc_fail_day(today)
+        for s in stamps:
+            day[s] = datetime.now(PT).strftime("%H:%M PT")
+        _atomic_write(_GTC_FAIL_PAGES, {today: day})
+    except Exception as e:
+        logger.warning(f"alert_gtc_failed: page-state write failed ({e}) — the next failure pages again")
+
+
 def alert_gtc_failed(symbol: str, side: str, stop_px: float, reason: str) -> None:
-    """Fire when an overnight GTC stop order cannot be placed — position is unprotected."""
-    title = f"{SEV_CRITICAL} — GTC STOP FAILED — {symbol}"
-    body  = (
-        f"Could not place {side.upper()} stop @ ${stop_px:.2f}.\n"
-        f"Reason: {reason}\n"
-        f"Position is UNPROTECTED overnight. Manual action required."
-    )
-    _send(title, body, priority=5, tags=["sos", "rotating_light", "stop_sign"],
-          emoji=":rotating_light:")
+    """Fire when a protective stop order cannot be placed (GTC or DAY) — the position has no broker stop.
+
+    CEO 2026-10-16 (Slack review): callers retry every cycle (e.g. orphan_manager pages on every cycle once a stop
+    has been blocked 5 cycles), and each retry paged Slack + the phone at top priority. Now each transport (phone,
+    Slack) sends ONE page per (symbol, side, stop price) per ET day, stamped only after that transport confirms
+    delivery (a failed send is retried on the next failure). A different stop price, side or symbol pages at once;
+    the next ET day pages again while it is still failing. Every attempt is still logged. Never raises."""
+    try:
+        today = datetime.now(_ET).strftime("%Y-%m-%d")
+        key = _gtc_fail_key(symbol, side, stop_px)
+        day = _gtc_fail_day(today)
+        need_ntfy = bool(_NTFY_TOPIC) and f"{key}|ntfy" not in day
+        need_slack = bool(_SLACK_WEBHOOK) and f"{key}|slack" not in day
+        if not (need_ntfy or need_slack):
+            logger.critical(f"[GTC STOP FAILED — no page sent (already paged today or no transport)] "
+                            f"{symbol} {side} stop @ {stop_px}: {reason}")
+            return
+        title = f"{SEV_CRITICAL} — STOP ORDER FAILED — {symbol}"
+        _px = key.rsplit("|", 1)[-1]
+        what = (f"{symbol} has no stop price or share count in the trade log, so the bot cannot place its protective stop."
+                if str(side).lower() == "unknown" else
+                f"The bot could not place the {str(side).upper()} protective stop @ ${_px} for {symbol}.")
+        body = (
+            f"{what}\n"
+            f"Reason: {reason}\n"
+            f"Until this is fixed, {symbol} has no stop at the broker. The bot keeps retrying; check the stop "
+            f"in the Alpaca app. This page is sent once a day per stop; every retry is in the log."
+        )
+        full_body = f"{body}\n— {datetime.now(PT).strftime('%H:%M PT')}"
+        delivered = []
+        if need_ntfy and _ntfy(title, full_body, priority=5, tags=["sos", "rotating_light", "stop_sign"]):
+            delivered.append(f"{key}|ntfy")
+        if need_slack and _slack(title, full_body, emoji=":rotating_light:"):
+            delivered.append(f"{key}|slack")
+        if delivered:
+            _gtc_fail_mark(delivered, today)
+        else:
+            logger.warning(f"[ALERT FAILED] {title}: {body}")
+    except Exception as e:  # never fail the caller's stop path because of an alert
+        logger.critical(f"alert_gtc_failed: could not page for {symbol} ({e}); reason: {reason}")
 
 
 def alert_floor_blind(symbol: str, tier: str, kind: str, detail: str, critical: bool) -> bool:
@@ -634,12 +705,13 @@ def alert_startup_test() -> bool:
 
 
 def alert_systemic_stale_feed(median_age: float, cycles: int) -> None:
-    """Fire when median bar age > 20 min for 3 consecutive cycles — systemic yfinance degradation."""
-    title = f"{SEV_CRITICAL} — SYSTEMIC FEED DEGRADATION"
+    """Fire when the median bar age stays past the caller's limit for several cycles (the caller, entry_logic, sends
+    its own limit in the log line). The bars come from Alpaca Data (T1); the old text blamed yfinance."""
+    title = f"{SEV_CRITICAL} — MARKET DATA RUNNING LATE"
     body  = (
-        f"Median bar age {median_age:.0f} min > 20 min threshold\n"
-        f"for {cycles} consecutive cycles — yfinance feed degraded.\n"
-        f"All stale-bar entries are blocked. Check Alpaca data feed status."
+        f"The price bars the bot trades on are typically {median_age:.0f} minutes old, "
+        f"for {cycles} scans in a row.\n"
+        f"Any stock whose own bars are past the stale limit is skipped; the rest still trade. Check the Alpaca data status page."
     )
     _send(title, body, priority=4, tags=["satellite", "warning", "chart_with_downwards_trend"],
           emoji=":satellite:")
