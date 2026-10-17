@@ -8,7 +8,31 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-16 night, OpenAI Codex signed) — F6 instrument admission and exact protected attribution live (#667)
+## ⏩ LATEST (2026-10-16 late night, OpenAI Codex signed) — typed F6 kill verdict live (#681)
+
+PR #681 merged at `a91fc493a929b6de7f11ceff34d02bb8992dbe4e` and is deployed on OCI at that exact SHA.
+`mtf-bot`, `mtf-writer`, and `mtf-http` are active after restart. **F6 remains OFF**
+(`FOREVER6_ENABLED=False`); this shipment cannot place an F6 trade.
+
+- The durable kill state is now versioned and records the current ET session, cause, exact-attribution flag, trading
+  P&L, start-of-day equity, and computed loss percentage. Day, Swing, and QHM keep the existing 7% entry halt.
+- When F6 is later enabled, its cash-only starter may cross that halt only when the current-session record proves an
+  exact `GENUINE_TRADING_LOSS`. Missing, old-format, stale, corrupt, mathematically inconsistent, account-fault,
+  ownership-fault, or equity-fallback evidence blocks F6. F6 trims remain reachable.
+- The adversarial review found and closed an important edge before merge: an equity fallback could initially have
+  been labeled genuine. The final code requires exact fill-and-ownership attribution. CI also rejected fixed numeric
+  comparison tolerances; the final consistency check is exact and introduces no static policy threshold.
+- Gate: Thorp/Taleb design APPROVE; cold/adversarial PASS; Google AI Studio APPROVE; Groq waived by Rafael; 62 focused
+  tests, Python compile, Ruff E/W/F/B, mypy, local preship, and GitHub CI PASS. OCI read-only smoke proved genuine
+  exact evidence allows and fallback evidence refuses; services are healthy. Status: deployed, unexercised.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** replace the static F6 starter formula with the already approved
+paired completed-bar empirical trigger, append-only evidence, and front-loaded historical replay. Then continue
+bounded entry, trim resync, allocator/emergency-flatten integration, ETF wind-down detection, and the full-path
+pre-market simulation. Do not enable F6; prepare the one-page approval package only after every prerequisite passes.
+Claude's manual-sale/QHM/Slack queue remains separate and unchanged.
+
+## 2026-10-16 night (OpenAI Codex signed) — F6 instrument admission and exact protected attribution live (#667)
 
 PR #667 merged at `6d7947d40a7440bce43bc1c2dfd03f708a89e32f` and is deployed on OCI at that exact SHA.
 `mtf-bot`, `mtf-writer`, and `mtf-http` are active after restart. **F6 remains OFF**
