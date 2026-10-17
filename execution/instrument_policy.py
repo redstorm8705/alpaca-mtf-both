@@ -94,7 +94,7 @@ def _mapped_tactical_product(symbol: str) -> bool:
     """
     try:
         import config
-        from strategy.day_tier_leverage import exposure_sign
+        from strategy import day_tier_leverage
 
         if symbol in {
             *(str(item).strip().upper() for item in config.LEVERAGED_TICKERS),
@@ -108,8 +108,29 @@ def _mapped_tactical_product(symbol: str) -> bool:
             if str(item or "").strip()
         }:
             return True
-        underlying, _sign = exposure_sign(symbol, "long")
-        return str(underlying or "").strip().upper() != symbol
+        # Inspect the active Day product maps directly.  This avoids making F6
+        # admission depend on inference about ``exposure_sign``: an ordinary
+        # stock is absent and returns False; every mapped bull/inverse product,
+        # including a 1x inverse fund, is present and returns True.
+        mapped_products = {
+            *(
+                str(item or "").strip().upper()
+                for item in day_tier_leverage._DEFAULT_BULL_2X.values()
+            ),
+            *(
+                str(item or "").strip().upper()
+                for item in day_tier_leverage._DEFAULT_BULL_2X_ALT.values()
+            ),
+            *(
+                str(item[0] or "").strip().upper()
+                for item in day_tier_leverage._DEFAULT_INVERSE.values()
+            ),
+            *(
+                str(item[0] or "").strip().upper()
+                for item in day_tier_leverage._DEFAULT_INVERSE_ALT.values()
+            ),
+        }
+        return symbol in mapped_products
     except Exception:
         return True
 

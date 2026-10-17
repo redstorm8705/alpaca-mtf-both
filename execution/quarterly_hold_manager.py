@@ -2718,10 +2718,9 @@ class QuarterlyHoldManager:
             return 0
         _add_coid = live_order_id(_capital.lease)
 
-        def _validated_add_order(
-            order: object,
-            expected_order_id: "str | None" = None,
-        ) -> "tuple[str, str, int] | None":
+        _expected_add_order_id: "str | None" = None
+
+        def _validated_add_order(order: object) -> "tuple[str, str, int] | None":
             """Return exact ``(id, status, filled)`` proof for this QHM add."""
             try:
                 raw_order_id = getattr(order, "id", None)
@@ -2745,6 +2744,11 @@ class QuarterlyHoldManager:
                 ).lower()
                 raw_qty = getattr(order, "qty", None)
                 raw_filled = getattr(order, "filled_qty", None)
+                # This proof runs only after an add submission may have reached
+                # Alpaca.  Malformed order evidence is therefore ambiguous, not
+                # a harmless validation miss: treating it as benign could leave
+                # an unknown live/filled buy outside QHM ownership and stop
+                # coverage.  Returning None deliberately enters recovery.
                 if (
                     raw_qty is None
                     or raw_filled is None
@@ -2756,24 +2760,30 @@ class QuarterlyHoldManager:
                 filled_qty = float(raw_filled)
                 from execution.ownership_guard import tier_of_coid
 
-                # QHM orders are deliberately whole-share orders. Alpaca values
+                # QHM submits an integer quantity on a whole-share limit order;
+                # its partial executions are whole shares too. Alpaca values
                 # such as "2.0" parse to an integer-valued float and pass;
                 # fractional evidence must fail closed, so a tolerance here
                 # would incorrectly authorize shares this manager cannot own.
+                if not math.isfinite(order_qty) or not math.isfinite(filled_qty):
+                    return None
+                order_whole = int(order_qty)
+                filled_whole = int(filled_qty)
                 if (
                     not order_id
-                    or (expected_order_id is not None and order_id != expected_order_id)
+                    or (
+                        _expected_add_order_id is not None
+                        and order_id != _expected_add_order_id
+                    )
                     or not isinstance(coid, str)
                     or coid != _add_coid
                     or tier_of_coid(coid) != "qhm"
                     or not coid.startswith(f"QH-{pos.symbol.upper()}-")
                     or symbol != pos.symbol.upper()
                     or side != "buy"
-                    or not math.isfinite(order_qty)
-                    or not order_qty.is_integer()
-                    or int(order_qty) != add_qty
-                    or not math.isfinite(filled_qty)
-                    or not filled_qty.is_integer()
+                    or order_qty != float(order_whole)
+                    or order_whole != add_qty
+                    or filled_qty != float(filled_whole)
                     or filled_qty < 0.0
                     or filled_qty > order_qty
                 ):
@@ -2809,7 +2819,7 @@ class QuarterlyHoldManager:
                     )
                 ):
                     return None
-                return order_id, status, int(filled_qty)
+                return order_id, status, filled_whole
             except (AttributeError, TypeError, ValueError):
                 return None
         # Persist exact recovery identity BEFORE cancelling the protective stop.
@@ -3021,6 +3031,7 @@ class QuarterlyHoldManager:
         if _add_id is None:
             _hold_ambiguous_add("add-order-proof-invalid")
             return 0
+        _expected_add_order_id = _add_id
 
         # Poll for fill: 2s initial + 1s polls to a 15s monotonic deadline.
         _deadline = _time.monotonic() + 15.0
@@ -3030,7 +3041,7 @@ class QuarterlyHoldManager:
         while _time.monotonic() < _deadline:
             try:
                 _o = _get_order(_add_id)
-                _proof = _validated_add_order(_o, _add_id)
+                _proof = _validated_add_order(_o)
                 if _proof is None:
                     _poll_invalid = True
                     break
@@ -3069,9 +3080,7 @@ class QuarterlyHoldManager:
             while _time.monotonic() < _cancel_deadline:
                 try:
                     _terminal_order = _get_order(_add_id)
-                    _terminal_proof = _validated_add_order(
-                        _terminal_order, _add_id
-                    )
+                    _terminal_proof = _validated_add_order(_terminal_order)
                     if _terminal_proof is None:
                         break
                     _, _terminal_status, _filled = _terminal_proof

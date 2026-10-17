@@ -246,6 +246,12 @@ def run_cycle(
         _control_fault = f"account read failed ({_pv_err!r})"
     try:
         _kill_tripped = bool(risk.check_kill_switch())
+    except RuntimeError as _ks_err:
+        # RiskManager raises RuntimeError when exact protected-tier attribution
+        # cannot be proved.  Convert that expected safety fault into an entries-
+        # only block here; do not return, so stop/exit management below proceeds.
+        _kill_tripped = False
+        _control_fault = _control_fault or f"kill-switch evaluation failed ({_ks_err!r})"
     except Exception as _ks_err:
         _kill_tripped = False
         _control_fault = _control_fault or f"kill-switch evaluation failed ({_ks_err!r})"
