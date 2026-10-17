@@ -2756,6 +2756,10 @@ class QuarterlyHoldManager:
                 filled_qty = float(raw_filled)
                 from execution.ownership_guard import tier_of_coid
 
+                # QHM orders are deliberately whole-share orders. Alpaca values
+                # such as "2.0" parse to an integer-valued float and pass;
+                # fractional evidence must fail closed, so a tolerance here
+                # would incorrectly authorize shares this manager cannot own.
                 if (
                     not order_id
                     or (expected_order_id is not None and order_id != expected_order_id)
@@ -3011,10 +3015,12 @@ class QuarterlyHoldManager:
             return 0
 
         _initial_proof = _validated_add_order(_add)
-        if _initial_proof is None:
+        _add_id: "str | None" = (
+            _initial_proof[0] if _initial_proof is not None else None
+        )
+        if _add_id is None:
             _hold_ambiguous_add("add-order-proof-invalid")
             return 0
-        _add_id = _initial_proof[0]
 
         # Poll for fill: 2s initial + 1s polls to a 15s monotonic deadline.
         _deadline = _time.monotonic() + 15.0

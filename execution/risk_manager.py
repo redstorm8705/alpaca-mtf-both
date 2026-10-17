@@ -524,6 +524,10 @@ class RiskManager:
                 qhm = canonical_claims["qhm"]
                 f6 = canonical_claims["forever_6"]
                 qty = qhm + f6
+                # `_whole_qty` has already proved every claim and ledger_net is
+                # an exact whole-share value. A mismatch is ownership drift, so
+                # returning None is the required fail-closed result; the caller
+                # turns it into an entry-blocking control fault while exits run.
                 if (
                     not all(
                         math.isfinite(v)
@@ -863,7 +867,11 @@ class RiskManager:
             # is a CONTROL FAULT, not permission to substitute the old blended-
             # basis estimate.  That estimate can let a cheap protected buy offset
             # an active-tier loss.  Raising is intentional: run_cycle converts it
-            # to its fail-closed entry block while all exit paths continue.
+            # to its fail-closed entry block while all exit paths continue. The
+            # concrete caller is strategy/run_cycle.py: its `try:` around
+            # `risk.check_kill_switch()` has `except Exception as _ks_err:`, sets
+            # `_control_fault`, and reaches exit checks before the entries-only
+            # halt. tests/test_run_cycle_kill_switch_exits.py enforces that shape.
             if getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
                 raise RuntimeError(
                     "kill-switch exact tier attribution is unresolved"
