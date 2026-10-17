@@ -1,0 +1,28 @@
+{
+  "change": "f6-empirical-starter",
+  "tier": 2,
+  "paths": [
+    "config.py",
+    "execution/f6_empirical_trigger.py",
+    "execution/forever_hold_manager.py",
+    "strategy/run_cycle.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change_id=f6-empirical-starter"
+    }
+  ],
+  "expected_rate": "One durable decision row after each completed session when F6 is enabled; no runtime rows while F6 remains disabled.",
+  "window_sessions": 5,
+  "reversal": "Any F6 starter uses the current bar in its own cutoff, accepts a stale/nonfinite/incomplete distribution, lacks independent stress confirmation, or sends an order when exact evidence cannot be appended.",
+  "metrics": [
+    {
+      "name": "Empirical F6 starter evidence integrity",
+      "source": "data/state/forever6_trigger_evidence.jsonl and F6 starter event state",
+      "direction": "none",
+      "bound": "Every decision is current-session, uses strictly prior completed SPY bars, carries both empirical cutoffs and the exact prior-record SHA256, and an executed event embeds the same evidence object."
+    }
+  ],
+  "verification": "tests/test_f6_empirical_trigger.py"
+}

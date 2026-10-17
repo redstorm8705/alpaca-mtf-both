@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501
 """
-execution/forever_hold_manager.py — FOREVER-6 STARTER tier (increment 1a, DARK / LOG-ONLY).
+execution/forever_hold_manager.py — F6 cash-only accumulation tier (disabled pending launch approval).
 
 The BGG-locked STARTER rule (Rafael 2026-07-13, logs/f6_starter_bgg_2026-07-13.md): on a market-wide
 dip (SPY down >= a DYNAMIC threshold on the close), ESTABLISH starter positions in 1-3 Forever-6 anchor
@@ -11,30 +11,31 @@ SCREENED (skip a name with an active negative catalyst — the RIVN lesson, now 
 catalyst_engine gate), and funded from a SEGREGATED budget that can never cannibalize the deep crash
 ladder's dry powder.
 
-INCREMENT 1a = LOG-ONLY: maybe_start_accumulation() evaluates the trigger + budget + screen + selection
-and LOGS the plan it WOULD execute. It places NO live orders (that's the next increment, wired into
-run_cycle behind FOREVER6_ENABLED + a mandatory cold masked-loss seat). This lets the whole decision be
-validated on real dips before a single dollar is committed.
-
-Mirrors QuarterlyHoldManager's shape (broker in __init__, a run_cycle hook, JSON state). Read-only in 1a.
+The planner and bounded order path are wired behind FOREVER6_ENABLED.  The tier remains disabled until
+the remaining launch prerequisites and the owner approval package are complete.  The planner itself
+never places an order; execute_starter is the money-moving boundary.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
+from typing import cast
 from zoneinfo import ZoneInfo
 
 import config
+from execution.f6_empirical_trigger import evaluate_empirical_starter
 from execution.instrument_policy import f6_live_asset_eligible, f6_symbol_eligible
 
 logger = logging.getLogger("forever6")
 
 PT = ZoneInfo("America/Los_Angeles")
+ET = ZoneInfo("America/New_York")
 _ROOT = Path(__file__).resolve().parent.parent
 _STATE = _ROOT / "data" / "state" / "forever6_holds.json"
 # C-3 (design logs/f6_prereq1_syncgap_design_2026-07-17.md): persisted "block further F6
@@ -49,6 +50,7 @@ _SYNC_DEGRADED = _ROOT / "data" / "state" / "forever6_sync_degraded.json"
 # starter-event log) — different shape, different write cadence (once per
 # reserve/confirm transition vs. once per starter event).
 _TRIM_STATE = _ROOT / "data" / "state" / "forever6_trims.json"
+_TRIGGER_EVIDENCE = _ROOT / "data" / "state" / "forever6_trigger_evidence.jsonl"
 _EPS = 1e-6
 # Process-local half of the startup interlock.  Durable state protects restarts;
 # this boolean also fails closed if persisting that state itself fails.
@@ -127,18 +129,8 @@ def _write_sync_degraded(degraded: bool, detail: str = "") -> bool:
 _STARTER_SLIPPAGE_BUFFER = 1.01
 
 
-def starter_trigger_pct(vix: float) -> float:
-    """The DYNAMIC starter threshold as a negative % (SPY close move that arms the starter).
-    −max(FLOOR, SLOPE×VIX)% — a ~2σ event across regimes (VIX 13→−2% floor, 20→−3%, 27→−4%).
-    FLOOR (2.0) and SLOPE (0.15) are both positive config constants, so the max() is a positive
-    magnitude that is then negated. A None VIX defaults to 0.0 → the FLOOR governs."""
-    v = float(vix) if vix is not None else 0.0
-    vix_component = config.FOREVER6_STARTER_TRIGGER_VIX_SLOPE * v
-    return -max(config.FOREVER6_STARTER_TRIGGER_FLOOR_PCT, vix_component)
-
-
 class ForeverHoldManager:
-    """Forever-6 never-sell accumulation. 1a: starter evaluation is LOG-ONLY (no orders)."""
+    """F6 never-sell accumulation, disabled until the launch gate is approved."""
 
     def __init__(self, broker) -> None:
         self.broker = broker
@@ -276,20 +268,29 @@ class ForeverHoldManager:
         ym = datetime.now(PT).strftime("%Y-%m")
         return sum(1 for e in state.get("events", []) if str(e.get("date", "")).startswith(ym))
 
-    # ── the starter evaluation (1a: returns a PLAN dict, logs it, places NO orders) ──
+    # ── starter evaluation (returns a plan; execute_starter owns order placement) ──
     def maybe_start_accumulation(
         self,
-        spy_day_close_pct: float,
-        vix: float,
+        spy_daily_bars,
+        expected_session_date,
         price_by_sym: dict[str, float] | None = None,
         held_qty_by_sym: dict[str, float] | None = None,
         settled_cash: float | None = None,
     ) -> dict:
-        """Evaluate the Forever-6 starter on today's SPY close. LOG-ONLY in 1a.
+        """Evaluate the F6 starter from completed SPY empirical distributions.
         Returns {"triggered": bool, "reason": str, "plan": [{symbol, price, why}], "budget": float}."""
-        thresh = starter_trigger_pct(vix)
-        if spy_day_close_pct > thresh:   # not a big enough dip (both negative; > means shallower)
-            return {"triggered": False, "reason": f"SPY {spy_day_close_pct:+.2f}% > trigger {thresh:+.2f}% (VIX {vix:.1f})", "plan": [], "budget": 0.0}
+        verdict = evaluate_empirical_starter(
+            spy_daily_bars,
+            expected_session_date=expected_session_date,
+            monthly_event_cap=config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH,
+        )
+        evidence = verdict.evidence()
+        if not self._append_trigger_evidence(evidence):
+            return {"triggered": False, "reason": "trigger evidence write failed", "plan": [],
+                    "budget": 0.0, "trigger_evidence": evidence}
+        if not verdict.armed:
+            return {"triggered": False, "reason": verdict.reason, "plan": [],
+                    "budget": 0.0, "trigger_evidence": evidence}
 
         state = self._load_state()
         # Durable per-DAY idempotency: if a starter event was already recorded today, do NOT
@@ -348,18 +349,109 @@ class ForeverHoldManager:
                              "why": ("new base" if held_q == 0 else f"add (held {held_q})")})
                 remaining -= px
 
-        # LOG-ONLY (1a): no orders placed.
+        # Planning is side-effect free with respect to the broker; the caller may
+        # pass the plan to execute_starter only after every outer gate passes.
         if plan:
-            logger.warning("[F6] STARTER would ACCUMULATE (LOG-ONLY, dark) on SPY %+.2f%% (trigger %+.2f%%, VIX %.1f): "
-                           "budget $%.0f → %s",
-                           spy_day_close_pct, thresh, vix, budget,
+            logger.warning("[F6] STARTER would ACCUMULATE on SPY %+.2f%% "
+                           "(cutoff %+.2f%%; volume stress %.2fx >= %.2fx): budget $%.0f → %s",
+                           verdict.current_return_pct, verdict.return_cutoff_pct,
+                           verdict.current_stress_ratio, verdict.stress_cutoff_ratio, budget,
                            ", ".join(f"{p['symbol']}@${p['price']}" for p in plan))
         else:
             logger.info("[F6] STARTER triggered but no fundable name (budget $%.0f) — screen/affordability filtered all.", budget)
-        return {"triggered": True, "reason": "ok", "plan": plan, "budget": round(budget, 2)}
+        return {"triggered": True, "reason": "ok", "plan": plan, "budget": round(budget, 2),
+                "trigger_evidence": evidence}
+
+    def _append_trigger_evidence(self, evidence: dict) -> bool:
+        """Append exact decision evidence; suppress identical repeated polls."""
+        try:
+            prior = None
+            if _TRIGGER_EVIDENCE.exists():
+                with open(_TRIGGER_EVIDENCE, encoding="utf-8") as existing:
+                    for line in existing:
+                        if line.strip():
+                            prior = json.loads(line)
+            row = {"recorded_at": datetime.now(PT).isoformat(), **evidence}
+            keys = ("as_of_date", "prior_record_sha256", "armed", "reason")
+            if prior and all(prior.get(key) == row.get(key) for key in keys):
+                return True
+            _TRIGGER_EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
+            with open(_TRIGGER_EVIDENCE, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            logger.info(
+                "[F6] change_id=f6-empirical-starter as_of=%s armed=%s history=%s",
+                evidence.get("as_of_date"),
+                evidence.get("armed"),
+                evidence.get("history_observations"),
+            )
+            return True
+        except Exception as exc:
+            logger.error("[F6] trigger evidence append failed — starter blocked: %s", exc)
+            return False
+
+    def _trigger_evidence_is_current(self, evidence: dict | None) -> bool:
+        """Require the exact armed decision that was durably appended this ET session."""
+        try:
+            if not isinstance(evidence, dict):
+                return False
+            if type(evidence.get("schema_version")) is not int:  # bool is not a version
+                return False
+            if evidence.get("schema_version") != 1 or evidence.get("armed") is not True:
+                return False
+            as_of = date.fromisoformat(str(evidence.get("as_of_date", "")))
+            if as_of != datetime.now(ET).date():
+                return False
+            history_start = date.fromisoformat(str(evidence.get("history_start", "")))
+            history_end = date.fromisoformat(str(evidence.get("history_end", "")))
+            if history_start > history_end or history_end >= as_of:
+                return False
+            observations = evidence.get("history_observations")
+            if type(observations) is not int or observations <= 0:
+                return False
+            raw_numbers = (
+                evidence.get("tail_probability"),
+                evidence.get("current_return_pct"),
+                evidence.get("return_cutoff_pct"),
+                evidence.get("current_stress_ratio"),
+                evidence.get("stress_cutoff_ratio"),
+            )
+            if any(
+                not isinstance(value, (int, float)) or isinstance(value, bool)
+                for value in raw_numbers
+            ):
+                return False
+            tail, current_return, return_cutoff, current_stress, stress_cutoff = (
+                float(cast(int | float, value)) for value in raw_numbers
+            )
+            if not all(math.isfinite(value) for value in (
+                tail, current_return, return_cutoff, current_stress, stress_cutoff,
+            )):
+                return False
+            if not 0 < tail < 1:
+                return False
+            if current_return > return_cutoff or current_stress < stress_cutoff:
+                return False
+            digest = str(evidence.get("prior_record_sha256", ""))
+            if len(bytes.fromhex(digest)) != hashlib.sha256().digest_size:
+                return False
+            prior = None
+            with open(_TRIGGER_EVIDENCE, encoding="utf-8") as existing:
+                for line in existing:
+                    if line.strip():
+                        prior = json.loads(line)
+            if not isinstance(prior, dict):
+                return False
+            prior.pop("recorded_at", None)
+            return prior == evidence
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return False
 
     # ── the starter EXECUTION (1b: CASH-ONLY orders, fail-closed) ────────────────
-    def execute_starter(self, plan: list[dict], budget: float, settled_cash: float | None = None) -> dict:
+    def execute_starter(self, plan: list[dict], budget: float,
+                        settled_cash: float | None = None,
+                        trigger_evidence: dict | None = None) -> dict:
         """Increment 1b: place CASH-ONLY market BUY orders for a starter PLAN (1 share per planned
         name), tier-tagged "forever6" so the ownership ledger protects them as never-sell shares.
         NEVER sells. FAIL-CLOSED: stops on the FIRST broker failure and never counts an unconfirmed
@@ -467,6 +559,20 @@ class ForeverHoldManager:
                 _slack_safe(
                     f":no_entry: F6 BUY BLOCKED for {sym} — live instrument "
                     f"policy: {live_reason}. No order was sent."
+                )
+                continue
+            # The final order boundary independently requires the exact armed
+            # empirical decision that the planner fsynced this ET session.  A
+            # direct caller or stale hand-built plan cannot bypass the trigger.
+            if not self._trigger_evidence_is_current(trigger_evidence):
+                skipped.append({**p, "skip": "trigger evidence unresolved"})
+                logger.critical(
+                    "[F6] BUY BLOCKED %s — exact current trigger evidence is unresolved",
+                    sym,
+                )
+                _slack_safe(
+                    f":no_entry: F6 BUY BLOCKED for {sym} — exact current trigger "
+                    "evidence is unresolved. No order was sent."
                 )
                 continue
             # Reserve a slippage-buffered amount; a market fill above the planned price can then NEVER
@@ -616,7 +722,7 @@ class ForeverHoldManager:
 
         planned_spent = round(sum(float(p["price"]) for p in placed), 2)
         if placed:
-            self._record_event(placed, planned_spent)
+            self._record_event(placed, planned_spent, trigger_evidence)
             self._verify_ledger_reflects(placed)   # C-2: sync + verify the F6 floor landed
         return {"placed": placed, "skipped": skipped, "spent": planned_spent, "reason": "ok"}
 
@@ -740,7 +846,8 @@ class ForeverHoldManager:
                     f"next restart.")
         _write_sync_degraded(True, f"verify failed for {list(want)}")
 
-    def _record_event(self, placed: list[dict], spent: float) -> None:
+    def _record_event(self, placed: list[dict], spent: float,
+                      trigger_evidence: dict | None = None) -> None:
         """Durably append a starter event — the SOURCE OF TRUTH for the per-month event cap.
         Atomic (RC-5 tmp→fsync→replace). Recorded AFTER confirmed placement so a failed/partial
         placement never phantom-counts against the cap; a persist failure is logged LOUDLY (the cap
@@ -757,6 +864,7 @@ class ForeverHoldManager:
                 "ts":   now_pt.isoformat(),
                 "placed": placed,
                 "spent": round(float(spent), 2),
+                "trigger_evidence": trigger_evidence,
             })
             state["events"] = events
             _STATE.parent.mkdir(parents=True, exist_ok=True)
