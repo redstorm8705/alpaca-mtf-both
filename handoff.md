@@ -8,19 +8,37 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-17 later, Claude signed) — Day-tier setup scorecard live (#687)
+## ⏩ LATEST (2026-10-17, OpenAI Codex signed) — empirical F6 starter live but F6 OFF (#685)
 
-- PR #687 (`gh pr view 687`): nightly `run_day_setup_scorecard.py` (OCI cron 22:00 UTC weekdays) scores every Day-tier
-  signal by setup (direction x mode); Track A skips a setup only when both of its bounds are below zero. First build
-  (2026-10-17 09:59 UTC): 100 signals, 7 setups, blocked=[], hold=59 min. Design + reviews:
-  `logs/design_records/day_setup_scorecard_2026-10-17.md`.
-- The daily-trend filter was tested on all 100 signals and dropped (with both trends +0.016% at 60 min, n=24, vs
-  against either -0.053%, n=76).
+PR #685 merged at `36d04de0aefdb26b202c076294d958f0de8153a3` and is deployed on OCI at that exact
+SHA. `mtf-bot`, `mtf-writer`, and `mtf-http` are active after restart. **F6 remains OFF**
+(`FOREVER6_ENABLED=False`), so this shipment cannot place an F6 order.
 
-**Pick up here (to do — none of these exist yet):** (1) design a Swing-tier leveraged-ETF route for when the budget
-buys only 1 share of the stock (owner asked 2026-10-17; not built) — BGGN design first. (2) Track B setups are scored
-but not gated. (3) 5 failing tests in tests/test_qhm_tranche_adds.py on main since #667 (spawned task). (4) build a
-weekly bot-only scorecard report (proposed 2026-10-17; not built).
+- The old fixed `max(2%, 0.15 × VIX)` starter is gone. F6 now compares the latest completed SPY
+  return and volume stress with their strictly prior empirical distributions. The current bar never
+  enters its own cutoff; stale, malformed, incomplete, duplicate, or nonfinite data blocks.
+- Every decision is appended and fsynced with its cutoffs, current readings, history range, and prior
+  record SHA256. The final order boundary rereads that exact current-session record. Missing, stale,
+  corrupt, inconsistent, hand-built, or non-armed evidence blocks before allocator reservation or a
+  broker request.
+- The front-loaded Alpaca replay evaluated 783 post-warmup sessions through 2026-10-16 and found 60
+  paired-tail dates. On the requested $2,500 cash path, 16 dates produced an affordable whole-share
+  plan before cash reached $203.16. This is frequency/plumbing evidence, not an expectancy or fill
+  backtest. It proves allocator integration is still a launch blocker because the starter cash rules
+  alone can consume nearly everything above the $200 reserve.
+- Gate: Thorp/Taleb APPROVE for dormant shipment; cold/adversarial PASS; Google AI Studio APPROVE;
+  Groq waived by Rafael; 174 focused/mechanical tests plus 3 subtests, Python 3.10 compile, Ruff,
+  mypy, dynamic-threshold scan, local preship, and GitHub CI PASS. OCI emitted
+  `DEPLOY_OK:36d04de0aefdb26b202c076294d958f0de8153a3`.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** complete the bounded F6 entry contract, then trim
+resync, allocator/emergency-flatten integration, ETF wind-down detection, and the full-path pre-market
+simulation. Do not enable F6. Claude's QHM/Day/Swing work remains separate and is preserved.
+
+## 2026-10-17 (Claude signed) — Day-tier setup scorecard reverted (#689)
+
+PR #689 reverted PR #687 at the owner's direction because the scorecard had not been approved. Do not treat the
+scorecard, its nightly job, or its setup gating as live. The earlier research remains historical evidence only.
 
 ## ⏩ LATEST (2026-10-17, Claude signed) — QHM owner-sale auto-heal live (#683)
 

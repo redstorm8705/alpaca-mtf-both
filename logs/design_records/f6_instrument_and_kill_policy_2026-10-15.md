@@ -102,8 +102,8 @@ source timestamp. Groq then approved. No NVIDIA vote was needed.
 1. **SHIPPED:** instrument/attribution foundation merged in PR #667 and deployed on OCI at `6d7947d`.
 2. **SHIPPED:** add the typed durable kill verdict and make F6 bypass only a verified genuine
    trading-loss cause (PR #681).
-3. Replace the static starter formula with the paired empirical post-close trigger and append-only
-   evidence; run a front-loaded historical replay. This is the active shipment described below.
+3. **SHIPPED:** replace the static starter formula with the paired empirical post-close trigger and
+   append-only evidence; run a front-loaded historical replay (PR #685).
 4. Complete bounded entry, trim resync, allocator/emergency-flatten integration, ETF wind-down
    detection, then run the full-path pre-market simulation.
 5. Do not set `FOREVER6_ENABLED=True`. Present a one-page, stock-and-dollar approval package only after
@@ -148,6 +148,15 @@ state was unavailable, and adjusted closes are selection references rather than 
 prices. It also demonstrates why the allocator/emergency-flatten prerequisite remains blocking: without
 the allocator's tier envelope, the existing starter cash rules alone can deploy almost all cash above
 the $200 reserve. F6 therefore stays disabled and this result does not approve launch.
+
+Signed: **OpenAI Codex**
+
+## Empirical starter ship record — 2026-10-17
+
+PR #685 merged at `36d04de0aefdb26b202c076294d958f0de8153a3` and is deployed on OCI. CI and the
+full gate passed; OCI Python 3.10 compile/import passed; `mtf-bot`, `mtf-writer`, and `mtf-http` are
+active. The live configuration readback remains `FOREVER6_ENABLED=False`. This path is deployed and
+unexercised until a later, separately approved F6 launch.
 
 Signed: **OpenAI Codex**
 
