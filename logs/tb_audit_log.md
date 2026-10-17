@@ -2,6 +2,15 @@
 
 ---
 
+## 2026-10-17 — F6 empirical starter SHIPPED dormant (#685, OpenAI Codex)
+
+- **Problem:** F6 still used the fixed `max(2%, 0.15 × VIX)` starter, violating the dynamic-model mandate and leaving no exact historical record behind a future buy.
+- **Fix:** strictly-prior completed SPY return and volume-stress tails now arm the planner. Exact current-session evidence is append/fsync persisted and reread at the order boundary; missing, stale, corrupt, inconsistent, hand-built, or non-armed proof blocks before allocator reservation or broker submission. F6 remains disabled.
+- **Replay:** 1,000 Alpaca daily bars with a production-matched rolling 365-bar decision window; 783 sessions after warm-up, 60 paired-tail dates. A $2,500 cash exercise produced 16 affordable plans before $203.16 remained. This is frequency/plumbing evidence, not an expectancy/fill claim, and confirms allocator integration remains a launch blocker.
+- **Gate/deploy:** Thorp/Taleb APPROVE for the dormant shipment; cold/adversarial PASS; Google AI Studio APPROVE; Groq owner-waived; 174 focused/mechanical tests plus 3 subtests, Python 3.10 compile, Ruff, mypy, dynamic scanner, local preship, and CI PASS. PR #685 merged as `36d04de`; OCI restart emitted `DEPLOY_OK:36d04de0aefdb26b202c076294d958f0de8153a3`; three services active and `FOREVER6_ENABLED=False` verified.
+
+---
+
 ## 2026-10-13 — Swing stop integrity SHIPPED (#622, OpenAI Codex)
 
 - **Defects:** restart reconciliation could replace an operator-tightened stop with a looser tracker stop; one-share T1/T2 locks and overnight ratchets could remain software-only until the next scan; expired DAY IDs caused false duplicate-stop pages.

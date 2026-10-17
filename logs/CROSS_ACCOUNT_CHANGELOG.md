@@ -8,6 +8,8 @@ auto-generated commits (report syncs, etc.). Format:
 
 ---
 
+- `[2026-10-17 02:51 PT]` **OpenAI Codex:** replaced F6's static VIX starter with strictly-prior SPY return/volume tails and an exact fsynced evidence handshake at the final order boundary. The 783-session replay found 60 paired-tail dates and exposed allocator integration as a launch blocker; F6 remains disabled. — PR #685 / `36d04de` — empirical trigger, F6 manager/cycle, replay, tests, design/post-live records
+
 - `[2026-10-16 21:44 PT]` **OpenAI Codex:** deployed a versioned, current-session kill verdict so future F6 buys can cross the 7% Day/Swing brake only for an exact, proven trading loss. Stale, corrupt, old-format, fallback, account-fault, or ownership-fault evidence blocks; Day/Swing/QHM behavior is unchanged and F6 remains disabled. — PR #681 / `a91fc49` — risk manager, cycle routing, tests, design/post-live records
 
 - `[2026-10-16 21:30 PT]` **OpenAI Codex:** deployed F6 fail-closed leveraged/inverse-product admission, exact QHM/F6 loss attribution, and identity-bound QHM add recovery. Adversarial review found and fixed two ways a proven partial fill could have been under-protected. F6 remains disabled; the typed kill exception and empirical starter are still separate gated builds. — PR #667 / `6d7947d` — instrument policy, F6 planner/broker boundary, QHM add recovery, risk attribution, tests, design/post-live records
