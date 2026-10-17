@@ -880,13 +880,16 @@ class ForeverHoldManager:
                     boundary_raw_quote = self.quote_loader(sym)
                     quote_observed_at = self.clock().astimezone(ET)
                     confirmed_quote = _validated_quote(boundary_raw_quote, quote_observed_at)
-                    if (confirmed_quote is None
+                    if (not _f6_entry_session(quote_observed_at)
+                            or confirmed_quote is None
                             or confirmed_quote.timestamp
                             < confirmed_quotes[sym].timestamp):
                         raise RuntimeError(
-                            "boundary quote is invalid, regressed, crossed, future, or outside this ET session"
+                            "boundary session/quote is closed, invalid, regressed, crossed, or future"
                         )
                     hard_limit = _bk.canonical_buy_limit_price(confirmed_quote.ask)
+                    if not math.isfinite(hard_limit) or hard_limit <= 0:
+                        raise RuntimeError("canonical F6 buy limit is invalid")
 
                     current_cash = self._fetch_cash()
                     current_capacity = min(
@@ -962,6 +965,23 @@ class ForeverHoldManager:
                         limit_price=hard_limit, extended_hours=True,
                     )
                     _reservation_written = True
+                    if not _f6_entry_session(self.clock().astimezone(ET)):
+                        if not live_release_proven_no_order(
+                            _capital.lease, "session_closed_before_submit"
+                        ):
+                            raise RuntimeError(
+                                "allocator failed to persist pre-submit session release"
+                            )
+                        _pending_f6.release_definitive_reject(_reservation, _coid)
+                        self._update_event_intent(event_id, _coid, "rejected", None)
+                        skipped.append({
+                            **p, "skip": "F6 entry session closed before broker submit",
+                        })
+                        skipped.extend(
+                            {**q, "skip": "stopped after F6 entry session close"}
+                            for q in admissible_plan[i + 1:]
+                        )
+                        break
                     order = _bk.submit_limit_order(
                         sym, 1, "buy", hard_limit, extended_hours=True,
                         tier="forever6", client_order_id=_coid,

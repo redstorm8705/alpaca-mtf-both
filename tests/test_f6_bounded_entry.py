@@ -284,7 +284,7 @@ def test_second_symbol_pre_intent_error_still_verifies_first_order(monkeypatch):
 
     assert [row["symbol"] for row in result["placed"]] == ["NVDA"]
     assert [row["symbol"] for row in verified] == ["NVDA"]
-    assert "boundary quote" in result["skipped"][-1]["skip"]
+    assert "boundary session/quote" in result["skipped"][-1]["skip"]
 
 
 def test_event_reservation_is_serialized_across_callers(monkeypatch):
@@ -335,6 +335,76 @@ def test_exact_limit_is_reserved_submitted_and_not_reported_spent(monkeypatch):
     assert row["order_type"] == "limit"
     assert row["time_in_force"] == "day"
     assert row["extended_hours"] is True
+
+
+def test_boundary_response_after_session_close_submits_nothing(monkeypatch):
+    before_close = datetime(2026, 10, 16, 19, 59, 59, tzinfo=f6.ET)
+    after_close = datetime(2026, 10, 16, 20, 0, tzinfo=f6.ET)
+    f6._F6_QUOTE_OBSERVATIONS["NVDA"] = before_close - timedelta(seconds=2)
+    quote = {
+        "bid": 100.0, "ask": 100.01,
+        "ts": (before_close - timedelta(seconds=1)).isoformat(),
+    }
+    clock_values = iter([before_close, before_close, before_close, after_close])
+    manager = _manager(now=before_close, quote=quote)
+    manager.clock = lambda: next(clock_values)
+    called = []
+    monkeypatch.setattr(
+        broker, "submit_limit_order", lambda *_args, **_kwargs: called.append(True)
+    )
+
+    result = manager.execute_starter([{"symbol": "NVDA", "price": 100}], 200)
+
+    assert result["placed"] == []
+    assert called == []
+    assert "boundary session/quote" in result["skipped"][-1]["skip"]
+
+
+def test_session_close_after_journals_releases_without_broker_call(monkeypatch):
+    before_close = datetime(2026, 10, 16, 19, 59, 59, tzinfo=f6.ET)
+    after_close = datetime(2026, 10, 16, 20, 0, tzinfo=f6.ET)
+    manager = _manager(now=before_close, quote=_fresh_quotes(before_close))
+    clock_values = iter([
+        before_close, before_close, before_close, before_close, after_close,
+    ])
+    manager.clock = lambda: next(clock_values)
+    exact = _exact_order()
+    _wire_clean_boundary(monkeypatch, exact)
+    released = []
+    monkeypatch.setattr(
+        allocator, "live_release_proven_no_order",
+        lambda lease, reason: released.append((lease.id, reason)) or True,
+    )
+    submitted = []
+    monkeypatch.setattr(
+        broker, "submit_limit_order", lambda *_args, **_kwargs: submitted.append(True)
+    )
+
+    result = manager.execute_starter([{"symbol": "NVDA", "price": 100}], 200)
+
+    assert result["placed"] == []
+    assert submitted == []
+    assert released == [("lease-1", "session_closed_before_submit")]
+    row = ppb.load()["reservations"][exact.client_order_id]
+    assert row["status"] == "released_zero"
+    state = manager._load_state_strict()
+    assert state["events"][0]["status"] == "released_no_order"
+
+
+def test_invalid_canonical_limit_blocks_before_allocator_or_event(monkeypatch):
+    now = datetime(2026, 10, 16, 17, 0, tzinfo=f6.ET)
+    manager = _manager(now=now, quote=_fresh_quotes(now))
+    monkeypatch.setattr(broker, "canonical_buy_limit_price", lambda _ask: float("nan"))
+    admissions = []
+    monkeypatch.setattr(
+        allocator, "live_admit", lambda *_args, **_kwargs: admissions.append(True)
+    )
+
+    result = manager.execute_starter([{"symbol": "NVDA", "price": 100}], 200)
+
+    assert result["placed"] == []
+    assert admissions == []
+    assert not f6._STATE.exists()
 
 
 def test_open_zero_fill_is_pending_not_sync_degraded(monkeypatch):

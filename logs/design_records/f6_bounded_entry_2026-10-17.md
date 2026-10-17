@@ -53,6 +53,13 @@ every required correction:
 11. The protected-buy journal migrates an empty schema-1 file to schema 2. A nonempty
     legacy journal remains fail-closed because the missing price/order contract cannot
     be reconstructed safely.
+12. The session is checked again after the boundary quote response, preventing a request
+    begun before 8:00 PM ET from submitting after the extended-hours window closes. A
+    final adjacent-to-submit check runs after the fsynced journals; if the window closed,
+    the broker is never called and the proven-no-order allocator, protected-buy, and event
+    intents are released durably. The canonical limit is explicitly re-proved finite and
+    positive before cash, allocator, event-intent, or broker mutation, even though the
+    canonicalizer already rejects those values.
 
 ## Quote freshness decision
 
@@ -78,6 +85,20 @@ preserves the no-static-threshold rule.
 | Expired/canceled, zero fill | release only after canonical replay | release only after canonical replay | remains distinguishable as submitted | no |
 | Explicit preaccept rejection | proven-no-order release | explicit-reject release | release if no other submitted/ambiguous intent | no |
 | Timeout/duplicate/unknown | retain | retain | ambiguous | no ownership claim; future entry blocked |
+
+## CI rejection counter-evidence
+
+The first GitHub external-audit run produced two rejections after the static and dynamic
+gates passed. The price rejection assumed `canonical_buy_limit_price` could return zero or
+NaN and that the event journal was written before allocator admission. Source order is the
+opposite: the canonicalizer raises on nonfinite/nonpositive input; the new explicit guard
+re-proves the result; fresh cash and allocator approval precede `_reserve_event_intent`.
+The clock rejection correctly highlighted the request/response boundary at 8:00 PM, which
+is now closed twice: after the quote response and immediately before broker submission.
+If the latter check sees 8:00 PM, it releases the allocator lease and both journals using
+the proven-no-order path. Clock advancement within the open session cannot make an
+exchange timestamp regress, and a pre-intent exception is caught without writing event
+state. Regressions prove both claims.
 
 ## Scope and launch status
 
