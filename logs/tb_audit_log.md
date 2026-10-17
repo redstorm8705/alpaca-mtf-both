@@ -11474,4 +11474,6 @@ F6 after-close caller in `strategy/run_cycle.py`. F6 remains disabled.
 
 **Final-adjacent session correction:** independent counter-review found that cash/order/ledger/fsync work after the response check could itself cross 8:00 PM. A second session check now runs after both durable journals and immediately before the broker call. If closed, no order is sent and the allocator lease, protected-buy reservation, and event intent are all durably retired through the proven-no-order path. The deterministic regression advances the clock only at that final check and proves zero broker calls plus clean releases. (OpenAI Codex)
 
+**Second CI counter-evidence:** two rejects relied on impossible ordering. The invalid canonical-limit branch occurs before allocator/event/PPB work and now visibly `continue`s instead of raising. Event recovery now uses a per-leg `_leg_event_id` assigned from `_reserve_event_intent`; `_event_intent_written` becomes true only on the following statement, and every update requires that per-leg ID. The `flock` context manager always unlocks on fsync error, while kernel process teardown releases it on crash. (OpenAI Codex)
+
 Design record: `logs/design_records/f6_bounded_entry_2026-10-17.md`.

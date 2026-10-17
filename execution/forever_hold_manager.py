@@ -868,6 +868,7 @@ class ForeverHoldManager:
             _capital = None
             _reservation_written = False
             _event_intent_written = False
+            _leg_event_id: str | None = None
             order = None
             hard_limit = 0.0
             try:
@@ -889,7 +890,8 @@ class ForeverHoldManager:
                         )
                     hard_limit = _bk.canonical_buy_limit_price(confirmed_quote.ask)
                     if not math.isfinite(hard_limit) or hard_limit <= 0:
-                        raise RuntimeError("canonical F6 buy limit is invalid")
+                        skipped.append({**p, "skip": "canonical F6 buy limit is invalid"})
+                        continue
 
                     current_cash = self._fetch_cash()
                     current_capacity = min(
@@ -956,9 +958,10 @@ class ForeverHoldManager:
                             or (_entry is not None and abs(float(_entry.get("drift", 0) or 0)) > _EPS)):
                         raise RuntimeError("baseline F6 ownership is unresolved")
 
-                    event_id = self._reserve_event_intent(
+                    _leg_event_id = self._reserve_event_intent(
                         event_id, sym, _coid, hard_limit, trigger_evidence
                     )
+                    event_id = _leg_event_id
                     _event_intent_written = True
                     _reservation = _pending_f6.reserve(
                         sym, 1, _coid, _baseline,
@@ -973,7 +976,9 @@ class ForeverHoldManager:
                                 "allocator failed to persist pre-submit session release"
                             )
                         _pending_f6.release_definitive_reject(_reservation, _coid)
-                        self._update_event_intent(event_id, _coid, "rejected", None)
+                        self._update_event_intent(
+                            _leg_event_id, _coid, "rejected", None
+                        )
                         skipped.append({
                             **p, "skip": "F6 entry session closed before broker submit",
                         })
@@ -993,7 +998,9 @@ class ForeverHoldManager:
                         ):
                             raise RuntimeError("allocator failed to persist definitive-reject release")
                         _pending_f6.release_definitive_reject(_reservation, _coid)
-                        self._update_event_intent(event_id, _coid, "rejected", None)
+                        self._update_event_intent(
+                            _leg_event_id, _coid, "rejected", None
+                        )
                         skipped.append({**p, "skip": "broker definitively rejected order"})
                         skipped.extend({**q, "skip": "stopped after broker rejection"}
                                        for q in admissible_plan[i + 1:])
@@ -1020,8 +1027,10 @@ class ForeverHoldManager:
                             live_bind(_capital.lease, recovered)
                             order = recovered
                 if order is None:
-                    if event_id is not None and _event_intent_written:
-                        self._update_event_intent(event_id, _coid, "ambiguous", None)
+                    if _leg_event_id is not None and _event_intent_written:
+                        self._update_event_intent(
+                            _leg_event_id, _coid, "ambiguous", None
+                        )
                     logger.error("[F6] BUY EXCEPTION %s: %s — STOPPING starter", sym, exc)
                     skipped.append({**p, "skip": f"broker boundary unresolved: {exc}"})
                     skipped.extend({**q, "skip": "stopped after broker exception"}
@@ -1031,8 +1040,10 @@ class ForeverHoldManager:
                                sym, getattr(order, "id", None))
 
             if order is None:
-                if event_id is not None and _event_intent_written:
-                    self._update_event_intent(event_id, _coid, "ambiguous", None)
+                if _leg_event_id is not None and _event_intent_written:
+                    self._update_event_intent(
+                        _leg_event_id, _coid, "ambiguous", None
+                    )
                 logger.error("[F6] BUY UNCONFIRMED %s — stopping starter", sym)
                 skipped.extend({**q, "skip": "stopped after unconfirmed order"}
                                for q in admissible_plan[i + 1:])
@@ -1048,7 +1059,7 @@ class ForeverHoldManager:
             placed.append(submitted)
             reserved += hard_limit
             self._update_event_intent(
-                cast(str, event_id), _coid, "submitted", submitted
+                cast(str, _leg_event_id), _coid, "submitted", submitted
             )
             logger.warning("[F6] STARTER BUY submitted: %s 1sh limit $%.2f (order %s, status %s)",
                            sym, hard_limit, oid, status or "unknown")

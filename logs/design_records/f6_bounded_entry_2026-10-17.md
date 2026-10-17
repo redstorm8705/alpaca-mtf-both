@@ -100,6 +100,14 @@ the proven-no-order path. Clock advancement within the open session cannot make 
 exchange timestamp regress, and a pre-intent exception is caught without writing event
 state. Regressions prove both claims.
 
+The next CI sample incorrectly placed the explicit invalid-limit branch after event
+persistence and treated Python assignment as if `_event_intent_written` could become true
+before `_reserve_event_intent` returned. The limit branch now visibly appends a skip and
+continues before allocator/event work. Each leg also carries a separate `_leg_event_id`;
+the flag is set only after that exact returned string is assigned, and every recovery
+update requires the per-leg ID. `_state_locked` is a `with`-based `flock`, so Python and
+the kernel release it on save error or process exit; no stale lockfile can hold the lock.
+
 ## Scope and launch status
 
 This prerequisite changes dormant F6 entry plumbing only. It does not enable F6, alter
