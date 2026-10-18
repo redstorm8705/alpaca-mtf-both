@@ -1,6 +1,6 @@
 {
-  "version": "RQ-3",
-  "about": "The owner's required questions for every design, build, recommendation and board/Gro/GAI design review (owner_approval_gates_2026-10-17.md, owner 2026-10-17: 'capture the most relevant and critical ones'). One source: bgg_call.py appends them to design prompts, bgg_prompt_bias_gate.py requires them in board prompts, record_design.py and owner_approval_capture.py require a design record to answer every one.",
+  "version": "RQ-4",
+  "about": "The owner's required questions for every design, build, recommendation and board/Gro/GAI design review (owner_approval_gates_2026-10-17.md, owner 2026-10-17: 'capture the most relevant and critical ones'). One source: bgg_call.py appends them to design prompts, bgg_prompt_bias_gate.py requires them in board prompts, record_design.py and owner_approval_capture.py require a design record to answer every one. RQ-4 (owner 2026-10-18, RULES-1018): Q40 outcome check, Q41-Q44 expert depth.",
   "questions": [
     {
       "id": "Q1",
@@ -235,6 +235,36 @@
       "group": "Hedge fund",
       "q": "Sizing follows edge: is the size tied to the measured win rate and payoff (Kelly fraction) rather than a fixed number, and is the P&L that feeds it taken from Alpaca fills?",
       "source": "hedge-fund beta-model review (owner 2026-10-17); memory feedback_pnl_sourcing; project_kelly_config"
+    },
+    {
+      "id": "Q40",
+      "group": "Outcome",
+      "q": "Outcome owned: which result does this protect, and what machine-evaluated check proves the result holds (a result check, not 'the code/block is present'; or 'none' with the reason)?",
+      "source": "article 'How to be more ambitious' (Felix Rieseberg) rules, owner approval RULES-1018 2026-10-18"
+    },
+    {
+      "id": "Q41",
+      "group": "Expert depth",
+      "q": "What would the best expert in this field do beyond what was asked?",
+      "source": "article 'How to be more ambitious' (Felix Rieseberg) rules, owner approval RULES-1018 2026-10-18"
+    },
+    {
+      "id": "Q42",
+      "group": "Expert depth",
+      "q": "What is the rawest data available for this (broker fills, bars, logged decision stacks), and is that what it uses rather than a summary?",
+      "source": "article 'How to be more ambitious' (Felix Rieseberg) rules, owner approval RULES-1018 2026-10-18"
+    },
+    {
+      "id": "Q43",
+      "group": "Expert depth",
+      "q": "What is the professional method for this problem, and does the design use it?",
+      "source": "article 'How to be more ambitious' (Felix Rieseberg) rules, owner approval RULES-1018 2026-10-18"
+    },
+    {
+      "id": "Q44",
+      "group": "Expert depth",
+      "q": "What independent evidence (not the author grading its own work) will prove it works?",
+      "source": "article 'How to be more ambitious' (Felix Rieseberg) rules, owner approval RULES-1018 2026-10-18"
     }
   ]
 }
