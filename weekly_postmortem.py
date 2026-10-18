@@ -1080,7 +1080,7 @@ def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
     msg = (
         _warn
         + f":bar_chart: *Weekly Post-Mortem — {week_str}*\n"
-        f"Realized cash (Alpaca-FIFO): `{_pnl_disp}`  ·  "
+        f"Realized cash (Alpaca-FIFO): `{_pnl_disp}` ({stats.get('pnl_check', 'unchecked')})  ·  "
         f"completed W/L `{stats['winners']}/{stats['losers']}`  ·  "
         f"Fri-positive diagnostics `{stats['positive_friday_diagnostics']}`{_earn_seg}{_unm}\n"
         f"{_tier_line}{_partial}\n"
@@ -1088,6 +1088,190 @@ def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
         f"_Full 16-col table + Gemini analysis: `logs/{report_path.name}`_"
     )
     _slack_raw(msg)
+
+# ── RULES-1018: two-source P&L, tier goals, belief tests ──────────────────────
+# Design record: logs/design_records/article_rules_2026-10-18.md (owner approval RULES-1018, 2026-10-18).
+
+_NON_TRADE_TYPES = ("DIV", "DIVCGL", "DIVCGS", "DIVNRA", "DIVROC", "DIVTXEX", "INT", "FEE", "CFEE", "PTC", "MISC")
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write the report whole or not at all (tmp file + fsync + replace)."""
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+
+
+def _independent_realized(monday: date, friday: date, canonical: float) -> dict:
+    """Rule 2: recount the week's realized P&L with separate code over a fresh fetch of the raw Alpaca FILL activities
+    and compare it with the canonical ledger. status: OK, MISMATCH, or SOURCE MISSING (a partial fetch, or a close whose
+    opening fill predates the lookback) — never a single unverified figure."""
+    fills, complete = _fetch_fills_range(monday - timedelta(days=_FILLS_LOOKBACK_DAYS), friday)
+    if not complete:
+        return {"status": "SOURCE MISSING", "reason": "the raw fills fetch was incomplete", "canonical": canonical}
+    closed = _reconstruct_closed_trades(fills, monday, friday)
+    unmatched = sum(1 for t in closed if t.get("pnl") is None)
+    if unmatched:
+        return {"status": "SOURCE MISSING", "canonical": canonical,
+                "reason": f"{unmatched} close(s) opened before the {_FILLS_LOOKBACK_DAYS}-day fill window"}
+    independent = round(sum(float(t["pnl"]) for t in closed), 2)
+    tolerance = round(0.01 * max(1, len(closed)), 2)          # one cent of rounding per closing leg
+    status = "OK" if abs(independent - canonical) <= tolerance else "MISMATCH"
+    return {"status": status, "canonical": canonical, "independent": independent, "tolerance": tolerance,
+            "legs": len(closed)}
+
+
+def _non_trade_cash(monday: date, friday: date) -> "dict | None":
+    """The week's non-trade cash activity by type (dividends, interest, fees), or None if the fetch failed."""
+    if not ALPACA_KEY or not ALPACA_SECRET:
+        return None
+    params = {"activity_types": ",".join(_NON_TRADE_TYPES), "direction": "asc", "page_size": "100",
+              "after": datetime(monday.year, monday.month, monday.day, tzinfo=ET).isoformat(),
+              "until": datetime(friday.year, friday.month, friday.day, 23, 59, 59, tzinfo=ET).isoformat()}
+    url = f"https://paper-api.alpaca.markets/v2/account/activities?{urllib.parse.urlencode(params)}"
+    try:
+        req = urllib.request.Request(url, headers={"APCA-API-KEY-ID": ALPACA_KEY, "APCA-API-SECRET-KEY": ALPACA_SECRET})
+        with urllib.request.urlopen(req, context=_SSL_CTX, timeout=15) as r:
+            rows = json.loads(r.read().decode())
+    except Exception as e:
+        logger.warning(f"non-trade cash fetch failed: {e}")
+        return None
+    if not isinstance(rows, list):
+        return None
+    out: dict = {}
+    for row in rows:
+        try:
+            out[str(row.get("activity_type"))] = round(out.get(str(row.get("activity_type")), 0.0)
+                                                       + float(row.get("net_amount") or 0.0), 2)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _tier_goals(round_trips: list, monday: date, friday: date, rounds: int = 2000) -> list:
+    """Rule 5: each tier this week vs its own trailing four weeks (completed lifecycles). A miss is flagged only when
+    this week's average P&L per trade falls outside the trailing bootstrap range; too few trades says so."""
+    import random
+    sys.path.insert(0, str(BASE_DIR / "scripts"))
+    from belief_tests import lifecycles
+
+    def pt_day(ts: str) -> "date | None":
+        try:
+            return _parse_alpaca_ts(ts).astimezone(PT).date()
+        except Exception:
+            return None
+
+    trail_start = monday - timedelta(weeks=4)
+    out = []
+    for tier in TIER_IDS:
+        rows = []
+        for c in lifecycles(round_trips):
+            try:
+                if canonical_tier(c.get("tier")) != tier:
+                    continue
+            except ValueError:
+                continue
+            rows.append((pt_day(c["exit_time"]), float(c["pnl"])))
+        week = [p for d, p in rows if d and monday <= d <= friday]
+        trail = [p for d, p in rows if d and trail_start <= d < monday]
+        item: dict = {"tier": tier, "week_n": len(week), "trail_n": len(trail)}
+        if len(week) < 2 or len(trail) < 2:
+            item["status"] = "insufficient trades"
+            out.append(item)
+            continue
+        rng = random.Random(7)
+        means = sorted(sum(rng.choice(trail) for _ in trail) / len(trail) for _ in range(rounds))
+        lo, hi = means[int(0.025 * rounds)], means[int(0.975 * rounds) - 1]
+        avg = sum(week) / len(week)
+        item.update({"week_avg": round(avg, 2), "trail_avg": round(sum(trail) / len(trail), 2),
+                     "lo": round(lo, 2), "hi": round(hi, 2),
+                     "week_wr": round(100 * sum(1 for p in week if p > 0) / len(week), 1),
+                     "trail_wr": round(100 * sum(1 for p in trail if p > 0) / len(trail), 1)})
+        item["status"] = ("beat" if avg > item["trail_avg"] and item["week_wr"] >= item["trail_wr"] else
+                          "below range — data audit first (postmortem, no code change)" if avg < lo else "within range")
+        out.append(item)
+    return out
+
+
+def _belief_results(round_trips: list, friday: date) -> list:
+    """Rule 3: evaluate every live-decision belief on the cumulative history; append to logs/belief_tests.jsonl."""
+    sys.path.insert(0, str(BASE_DIR / "scripts"))
+    import belief_tests as bt
+    entries = []
+    if TRADE_EVENTS.exists():
+        with open(TRADE_EVENTS, encoding="utf-8") as fh:
+            for raw in fh:
+                try:
+                    ev = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                if ev.get("event") == "entry":
+                    entries.append(ev)
+    starts = [t for t in (str(r.get("entry_time") or "") for r in round_trips) if t]
+    spy: dict = {}
+    if starts:
+        first = _parse_alpaca_ts(min(starts)).date() - timedelta(days=7)
+        data = _alpaca_get(f"symbols=SPY&timeframe=1Day&start={first.isoformat()}T00:00:00Z"
+                           f"&end={friday.isoformat()}T23:59:59Z&limit=10000&sort=asc")
+        for b in (data.get("bars") or {}).get("SPY", []):
+            try:
+                spy[_parse_alpaca_ts(b["t"]).astimezone(ET).date()] = float(b["c"])
+            except (KeyError, TypeError, ValueError):
+                continue
+    results = bt.evaluate(round_trips, entries, spy)
+    bt.append_log(results, friday)
+    return results
+
+
+def _rules_sections(figures, monday: date, friday: date, canonical: float) -> "tuple[list, dict]":
+    """Report lines for the three RULES-1018 sections, plus the P&L check. Each part degrades to a visible
+    'unavailable' line on its own error; none can abort the report."""
+    lines: list = ["", "## P&L check — two independent counts"]
+    try:
+        check = _independent_realized(monday, friday, canonical)
+    except Exception as e:
+        check = {"status": "SOURCE MISSING", "reason": f"recount failed: {e}", "canonical": canonical}
+    if check["status"] == "OK":
+        lines.append(f"- **OK:** canonical ledger `{canonical:+.2f}` = independent fills recount "
+                     f"`{check['independent']:+.2f}` (tolerance ±{check['tolerance']:.2f} over {check['legs']} legs)")
+    elif check["status"] == "MISMATCH":
+        lines.append(f"- **MISMATCH:** canonical ledger `{canonical:+.2f}` vs independent fills recount "
+                     f"`{check['independent']:+.2f}` (tolerance ±{check['tolerance']:.2f}) — neither figure is "
+                     "verified until the difference is explained.")
+    else:
+        lines.append(f"- **SOURCE MISSING:** {check.get('reason')}; the canonical figure `{canonical:+.2f}` is "
+                     "not independently verified this week.")
+    try:
+        cash = _non_trade_cash(monday, friday)
+    except Exception:
+        cash = None
+    lines.append("- **Non-trade cash this week:** " + ("unavailable" if cash is None else
+                 (" · ".join(f"{k} `{v:+.2f}`" for k, v in sorted(cash.items())) or "none")))
+    lines += ["", "## Weekly goals by tier (vs each tier's own trailing 4 weeks)"]
+    try:
+        for g in _tier_goals(figures.round_trips, monday, friday):
+            if g["status"] == "insufficient trades":
+                lines.append(f"- **{tier_label(g['tier'])}:** insufficient trades "
+                             f"({g['week_n']} this week, {g['trail_n']} trailing)")
+            else:
+                lines.append(f"- **{tier_label(g['tier'])}:** {g['status']} — avg/trade `{g['week_avg']:+.2f}` vs "
+                             f"trailing `{g['trail_avg']:+.2f}` (range {g['lo']:+.2f} to {g['hi']:+.2f}); win rate "
+                             f"{g['week_wr']}% vs {g['trail_wr']}% ({g['week_n']} vs {g['trail_n']} trades)")
+    except Exception as e:
+        lines.append(f"- unavailable ({e})")
+    lines += ["", "## Belief tests (cumulative, the bot's own trades)"]
+    try:
+        sys.path.insert(0, str(BASE_DIR / "scripts"))
+        import belief_tests as bt
+        lines += bt.report_lines(_belief_results(figures.round_trips, friday))
+    except Exception as e:
+        lines.append(f"- unavailable ({e})")
+    logger.info("change=rules-1018-weekly-checks pnl_check=%s", check["status"])
+    return lines, check
+
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
@@ -1112,10 +1296,10 @@ def main() -> None:
     integrity_errors = _canonical_integrity_errors(figures)
     if integrity_errors:
         reason = "; ".join(integrity_errors)
-        report_path.write_text(
+        _atomic_write(
+            report_path,
             f"# Weekly Trade Post-Mortem — {week_str}\n\n"
             f"> **UNAVAILABLE:** Canonical tier accounting failed closed: {reason}.\n",
-            encoding="utf-8",
         )
         _slack_raw(
             f":rotating_light: *Weekly Post-Mortem unavailable — {week_str}*\n"
@@ -1127,10 +1311,10 @@ def main() -> None:
     try:
         trades, accounting = _week_ledger_view(figures.round_trips, monday, friday)
     except (TypeError, ValueError, KeyError) as exc:
-        report_path.write_text(
+        _atomic_write(
+            report_path,
             f"# Weekly Trade Post-Mortem — {week_str}\n\n"
             f"> **UNAVAILABLE:** Canonical tier/lifecycle accounting failed: {exc}.\n",
-            encoding="utf-8",
         )
         _slack_raw(
             f":rotating_light: *Weekly Post-Mortem unavailable — {week_str}*\n"
@@ -1148,7 +1332,7 @@ def main() -> None:
 
     if not trades and not accounting["partial_open_lifecycles"] and not accounting["weekly_realized"]:
         logger.warning(f"No closed trades found for {week_str}.")
-        report_path.write_text(f"# WTP {week_str}\n\nNo realized closes this week.\n")
+        _atomic_write(report_path, f"# WTP {week_str}\n\nNo realized closes this week.\n")
         return
 
     symbols = sorted({t["symbol"] for t in trades})
@@ -1179,6 +1363,13 @@ def main() -> None:
     pnl_sign = "+" if stats["total_pnl"] >= 0 else ""
     ts_pt    = datetime.now(PT).strftime("%Y-%m-%d %I:%M %p PT")
 
+    logger.info("RULES-1018: two-source P&L check, tier goals, belief tests...")
+    rules_lines, pnl_check = _rules_sections(figures, monday, friday, float(stats["total_pnl"]))
+    stats["pnl_check"] = pnl_check["status"]
+    _pnl_verdict = {"OK": "verified by an independent recount",
+                    "MISMATCH": f"MISMATCH vs independent recount `{pnl_check.get('independent', 0.0):+.2f}`",
+                    }.get(pnl_check["status"], "SOURCE MISSING — not independently verified")
+
     _pnl_label = "canonical Alpaca fills+orders FIFO"
     _sources_ln = (
         "_Sources: **one canonical Alpaca fills+orders FIFO snapshot** "
@@ -1191,7 +1382,7 @@ def main() -> None:
         (f"\n> {fallback_note}\n" if fallback_note else ""),
         "",
         "## Summary",
-        f"- **Weekly realized cash P&L ({_pnl_label}):** `{pnl_sign}${stats['total_pnl']}`",
+        f"- **Weekly realized cash P&L ({_pnl_label}):** `{pnl_sign}${stats['total_pnl']}` — {_pnl_verdict}",
         "- **By entry tier:** " + " · ".join(
             f"{tier_label(tier)} `{stats['weekly_by_tier'].get(tier, 0.0):+.2f}`"
             for tier in TIER_IDS
@@ -1208,6 +1399,7 @@ def main() -> None:
         ("_* Δ/share Exit→Fri is a per-share diagnostic only. It is not quantity-adjusted dollars "
          "left on the table, and a positive value does not by itself prove an exit error._"),
         full_table,
+        *rules_lines,
         "",
         "---",
         "## Gemini Adversarial Analysis",
@@ -1217,7 +1409,7 @@ def main() -> None:
         _sources_ln,
     ])
 
-    report_path.write_text(report, encoding="utf-8")
+    _atomic_write(report_path, report)
     logger.info(f"WTP written → {report_path}")
 
     _post_slack(slack_lines, stats, report_path, week_str, fallback_note)
