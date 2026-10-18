@@ -2096,7 +2096,8 @@ def _cohold_own_cap(symbol: str, tier: str) -> "int | None":
 @serialized_symbol_order(failure_value=False, reducing=True)
 def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
                            *, _bypass_floor: bool = False, _return_order: bool = False,
-                           position_side: "str | None" = None, _cohold_checked: bool = False):
+                           position_side: "str | None" = None, _cohold_checked: bool = False,
+                           _client_order_id: "str | None" = None):
     """
     Close a specific quantity of an open position (partial exit).
     Used for taking first-target profits while letting remainder run.
@@ -2171,12 +2172,32 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
             return False
         side = OrderSide.SELL if pos.side == "long" else OrderSide.BUY  # type: ignore[union-attr]
         _side_str = "sell" if pos.side == "long" else "buy"  # type: ignore[union-attr]
+        if _client_order_id is not None:
+            try:
+                from execution.forever_hold_manager import f6_trim_reservation_matches
+                _expected_prefix = f"F6-{str(symbol).upper()}-s-"
+                if (tier != "forever6" or _side_str != "sell"
+                        or not _client_order_id.startswith(_expected_prefix)
+                        or not f6_trim_reservation_matches(
+                            str(symbol).upper(), _client_order_id, int(qty)
+                        )):
+                    logger.critical(
+                        "[%s] partial close refused: private client ID is not the "
+                        "exact durable F6 trim reservation", symbol,
+                    )
+                    return False
+            except Exception as exc:
+                logger.critical(
+                    "[%s] partial close F6 reservation validation failed: %s",
+                    symbol, exc,
+                )
+                return False
         order_data = MarketOrderRequest(
             symbol=symbol,
             qty=qty,
             side=side,
             time_in_force=TimeInForce.DAY,
-            client_order_id=_make_idem_id(tier, symbol, _side_str),
+            client_order_id=_client_order_id or _make_idem_id(tier, symbol, _side_str),
         )
         _note_reduction_attempted()
         order = client.submit_order(order_data)
@@ -2243,7 +2264,7 @@ def partial_close_position(symbol: str, qty: int, tier: str = "intraday",
 
 
 @serialized_symbol_order(failure_value=False, reducing=True)
-def submit_f6_trim(symbol: str, qty: int) -> bool:
+def submit_f6_trim(symbol: str, qty: int, *, client_order_id: "str | None" = None):
     """THE sole authorized bypass for forever6's never-sell floor (F6 exit increment,
     2026-08-05). This is the ONLY function in this codebase permitted to pass
     is_authorized_f6_trim=True to ownership_guard.check_never_sell_floor — grep the repo
@@ -2261,6 +2282,25 @@ def submit_f6_trim(symbol: str, qty: int) -> bool:
     """
     if qty < 1:
         logger.warning(f"[{symbol}] submit_f6_trim called with qty={qty} < 1 — skipping.")
+        return False
+    try:
+        from execution.ownership_guard import tier_of_coid as _tier_of_coid
+        from execution.forever_hold_manager import f6_trim_reservation_matches
+        _expected_prefix = f"F6-{str(symbol).upper()}-s-"
+        if (not isinstance(client_order_id, str) or not client_order_id
+                or client_order_id != client_order_id.strip()
+                or _tier_of_coid(client_order_id) != "forever6"
+                or not client_order_id.startswith(_expected_prefix)
+                or not f6_trim_reservation_matches(
+                    str(symbol).upper(), client_order_id, int(qty)
+                )):
+            logger.critical(
+                "[%s] submit_f6_trim refused: exact pre-reserved F6 client order ID is required",
+                symbol,
+            )
+            return False
+    except Exception as e:
+        logger.critical("[%s] submit_f6_trim client-order validation failed: %s", symbol, e)
         return False
     # Keep the F6 trim chokepoint independently fail-closed, even though its
     # delegated partial_close_position() path repeats this check.  The outer
@@ -2287,7 +2327,19 @@ def submit_f6_trim(symbol: str, qty: int) -> bool:
     if _pos is None:
         logger.warning(f"[{symbol}] submit_f6_trim: no open Alpaca position — nothing to trim.")
         return False
-    _net = abs(float(_pos.qty))
+    _live_side_raw = getattr(_pos, "side", "")
+    _live_side = str(getattr(_live_side_raw, "value", _live_side_raw) or "").lower()
+    try:
+        _net = float(_pos.qty)
+    except (TypeError, ValueError):
+        _net = float("nan")
+    if _live_side != "long" or not math.isfinite(_net) or _net <= 0:
+        logger.critical(
+            "[%s] submit_f6_trim REFUSED: live position is not a readable long "
+            "position (side=%r qty=%r)",
+            symbol, _live_side, getattr(_pos, "qty", None),
+        )
+        return False
     _res = _og.check_never_sell_floor(symbol, "forever6", int(qty), "sell",
                                        alpaca_net_qty=_net, is_authorized_f6_trim=True)
     if _res.action == "REJECT":
@@ -2297,10 +2349,16 @@ def submit_f6_trim(symbol: str, qty: int) -> bool:
     if _bq < 1:
         logger.error(f"[{symbol}] submit_f6_trim: guard bounded qty to {_bq} — nothing to sell.")
         return False
-    if _bq < int(qty):
-        logger.warning(f"[{symbol}] submit_f6_trim: guard bounded trim qty "
-                       f"{int(qty)}→{_bq} ({_res.reason}).")
-    return partial_close_position(symbol, _bq, tier="forever6", _bypass_floor=True)
+    if _bq != int(qty):
+        logger.critical(
+            f"[{symbol}] submit_f6_trim REFUSED: guard changed the pre-reserved "
+            f"quantity {int(qty)}→{_bq} ({_res.reason}); no order submitted."
+        )
+        return False
+    return partial_close_position(
+        symbol, _bq, tier="forever6", _bypass_floor=True, _return_order=True,
+        position_side="long", _client_order_id=client_order_id,
+    )
 
 
 def _raw_close_position(symbol: str, only_tier: "str | None" = None) -> bool:
