@@ -119,6 +119,48 @@ def _user_text(entry: dict) -> str:
     return ""
 
 
+def _transcript_user_text(entry: dict) -> str:
+    """Return a human user message from Claude or Codex JSONL, else empty.
+
+    Claude records user messages at the top level. Codex records the same human
+    input as a ``response_item`` whose payload is a user ``message``.  Requiring
+    the retained-source role as well as the payload role keeps tool echoes and
+    assistant-authored text out of the approval path.
+    """
+    role = (entry.get("message") or {}).get("role") if isinstance(entry.get("message"), dict) else entry.get("role")
+    if entry.get("type") == "user" and role == "user" and entry.get("isMeta") is not True:
+        return _user_text(entry)
+    payload = entry.get("payload")
+    if entry.get("type") != "response_item" or not isinstance(payload, dict):
+        return ""
+    retained = (entry.get("metadata") or {}).get("retained_source")
+    if not isinstance(retained, dict):
+        return ""
+    retained_id = retained.get("id")
+    passthrough = payload.get("internal_chat_message_metadata_passthrough")
+    if (
+        payload.get("type") != "message"
+        or payload.get("role") != "user"
+        or not isinstance(retained_id, dict)
+        or retained.get("complete") is not True
+        or retained_id.get("role") != "user"
+        or not payload.get("id")
+        or payload.get("id") != retained_id.get("message_id")
+        or not isinstance(passthrough, dict)
+        or not passthrough.get("turn_id")
+        or passthrough.get("turn_id") != retained_id.get("turn_id")
+    ):
+        return ""
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        part.get("text", "")
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "input_text"
+    )
+
+
 def approval_valid(rec: dict, root: "str | None" = None) -> bool:
     """The approval's text is a USER entry in its transcript with the recorded hash AND that text approves THIS id."""
     tp = rec.get("transcript_path")
@@ -137,11 +179,9 @@ def approval_valid(rec: dict, root: "str | None" = None) -> bool:
                     e = json.loads(line)
                 except ValueError:
                     continue
-                role = (e.get("message") or {}).get("role") if isinstance(e.get("message"), dict) else e.get("role")
-                if e.get("type") == "user" and role == "user" and e.get("isMeta") is not True:
-                    text = _user_text(e)
-                    if hashlib.sha256(text.encode("utf-8")).hexdigest() == want and aid in cap.ids_in(text, root)[0]:
-                        return True
+                text = _transcript_user_text(e)
+                if text and hashlib.sha256(text.encode("utf-8")).hexdigest() == want and aid in cap.ids_in(text, root)[0]:
+                    return True
     except OSError:
         return False
     return False
