@@ -365,7 +365,8 @@ class KellySizer:
                 _is_friday = _dt.now(_ZI("America/New_York")).weekday() == 4
                 if not _is_friday:
                     from data.gex import get_gex_regime as _get_gex_kelly
-                    _gex_regime = _get_gex_kelly("SPY").get("label", "UNKNOWN")
+                    _gex_read = _get_gex_kelly("SPY")
+                    _gex_regime = _gex_read.get("label", "UNKNOWN")
                     if _gex_regime == "NEGATIVE":
                         # Strategy-aware mirror (2026-09-03, board 2 cold seats + Gro + GAI): -gamma/
                         # NEGATIVE (dealers amplify → moves TREND, don't revert) is a momentum/trend
@@ -398,9 +399,13 @@ class KellySizer:
                         # INFO (was debug, 2026-07-03): this line is the daily
                         # GEX-audit record of every sizing impact — must be
                         # visible at production log level.
+                        # GEX-1017 provenance: which snapshot and expiries produced this label, so every
+                        # size bump traces back to the data behind it.
                         logger.info(
-                            "Kelly [%s]: GEX=%s edge_mult=%.2fx",
+                            "Kelly [%s]: GEX=%s edge_mult=%.2fx | confirmed_ts=%s admission=%s expiries=%s",
                             key, _gex_regime, _gex_edge_mult,
+                            _gex_read.get("confirmed_ts"), _gex_read.get("admission"),
+                            _gex_read.get("expiries"),
                         )
             except Exception as _gex_kelly_err:
                 logger.debug("Kelly GEX edge mult failed (non-fatal): %s", _gex_kelly_err)

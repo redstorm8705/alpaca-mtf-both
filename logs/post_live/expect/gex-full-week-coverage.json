@@ -1,0 +1,16 @@
+{
+  "change": "gex-full-week-coverage",
+  "tier": 2,
+  "paths": ["data/gex.py", "execution/kelly.py"],
+  "proof": [{"log": "logs/live_writer.log", "pattern": "change=gex-full-week-coverage admission="}],
+  "expected_rate": "every GEX refresh (~every 15 min during RTH, one line per symbol)",
+  "window_sessions": 1,
+  "window_reason": "the proof line is written on every RTH refresh, so one session is enough to see it",
+  "reversal": "Thursday or Friday RTH readings labelled UNKNOWN above 10% (last week: Thu 32/143, Fri 77/143), or SPY labels flipping sign between consecutive refreshes without a spot move",
+  "metrics": [
+    {"name": "Thu/Fri RTH UNKNOWN share of Day-tier GEX readings", "source": "logs/day_tier_shadow.jsonl gex_label", "direction": "down", "bound": "below 10%"},
+    {"name": "Day-tier Track A Thu/Fri stand-downs for GEX", "source": "logs/day_tier_events.jsonl decision gex_action", "direction": "down", "bound": "below last week"},
+    {"name": "Kelly GEX multiplier fires with provenance", "source": "logs/mtf_bot.log 'Kelly [...]: GEX=... | confirmed_ts='", "direction": "none", "bound": "every x1.30 line carries admission + expiries"}
+  ],
+  "verification": "tests/test_gex_full_week.py"
+}

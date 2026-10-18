@@ -25,13 +25,14 @@ Model assumptions are module constants below and logged with every snapshot.
 Accuracy target is the 15-min REGIME LABEL only — not pricing or execution.
 """
 
+import calendar
 import math
 import os
 import json
 import logging
 import requests  # type: ignore[import-untyped]
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -297,8 +298,104 @@ def _signal_window_for(today) -> tuple[str, str]:
     return today.strftime("%Y-%m-%d"), friday.strftime("%Y-%m-%d")
 
 
+def _coming_friday(today) -> "date":
+    """The coming Friday (today if today is Friday) — same arithmetic as _expiry_range, named constants."""
+    return today + timedelta(days=(calendar.FRIDAY - today.weekday()) % len(calendar.day_abbr))
+
+
+def _second_expiry_after(today, listed):
+    """The second listed expiry strictly after `today`, or None when fewer than two are listed."""
+    after = sorted(d for d in set(listed) if d > today)
+    return after[1] if len(after) > 1 else None
+
+
+def _window_end_for(today, listed) -> "date":
+    """GEX-1017 signal-window end (pure; testable without the network): the LATER of the coming Friday (today if
+    Friday) and the second listed expiry AFTER today. Mon-Wed on a chain with two or more expiries left this week this
+    is the coming Friday — byte-identical to the old window; Thursday/Friday (and a chain with one expiry a week) it
+    reaches into the next week, so the reading never collapses onto a dying expiring strip. `listed` = the expiry
+    dates the contracts listing actually returned. With exactly one listed after today (a weekly-only chain, or a
+    holiday-shifted expiry) the window reaches that one; with none, the end is the Friday."""
+    friday = _coming_friday(today)
+    after = sorted(d for d in set(listed) if d > today)
+    if len(after) > 1:
+        reach = after[1]
+    elif after:
+        reach = after[0]           # weekly-only chain (or a holiday-shifted expiry): the one listed after today
+    else:
+        reach = friday
+    return max(friday, reach)
+
+
+def _expiry_of(occ_symbol: str):
+    """Expiry DATE (ET) of an OCC symbol, or None."""
+    p = _parse_occ(occ_symbol)
+    return p[0].date() if p else None
+
+
+def _fetch_window_contracts(symbol: str, today) -> tuple[dict[str, float], dict]:
+    """GEX-1017: contracts {occ: OI} for the signal window, plus fetch provenance.
+
+    1. Fetch [today, coming Friday] exactly as before. If two or more complete expiries AFTER today are in it, the
+       window ends Friday (Mon-Wed unchanged) and nothing more is fetched.
+    2. Otherwise fetch on into the following week and end at the second listed expiry after today (_window_end_for).
+       The second fetch starts the day after Friday, or — when the first fetch hit the page cap — at the expiry the cap
+       cut off, so a capped Thursday/Friday fetch is resumed instead of narrowing the window.
+    A fetch that hit the page cap drops its LAST (possibly half-fetched) expiry, so no label is built from a partial
+    expiry; a capped first fetch that is not resumed ends at its last complete expiry. Contracts inside the existing
+    1-hour floor (_MIN_T_YEARS) are removed before any gate."""
+    friday = _coming_friday(today)
+    oi_a, trunc_a = _fetch_contracts_meta(symbol, today.isoformat(), friday.isoformat())
+    resume_from = None
+    if trunc_a:
+        _cut = [e for e in map(_expiry_of, oi_a) if e is not None]
+        resume_from = max(_cut) if _cut else None     # the expiry the cap may have cut in half
+        oi_a = _drop_last_expiry(oi_a)
+    oi_all = dict(oi_a)
+    listed = {e for e in map(_expiry_of, oi_a) if e is not None}
+    # Extend when fewer than two complete expiries remain after today (Thu/Fri, weekly-only chains, or a capped fetch
+    # that kept fewer than two). A capped fetch that kept two or more is NOT extended (that would skip this week).
+    extended = _second_expiry_after(today, listed) is None
+    trunc_b = False
+    if extended:
+        nxt = friday + timedelta(weeks=1)
+        start = resume_from or (friday + timedelta(days=1))
+        oi_b, trunc_b = _fetch_contracts_meta(symbol, start.isoformat(), nxt.isoformat())
+        if trunc_b:
+            oi_b = _drop_last_expiry(oi_b)
+        oi_all.update(oi_b)
+        listed |= {e for e in map(_expiry_of, oi_b) if e is not None}
+    end = _window_end_for(today, listed)
+    if trunc_a and not extended:
+        end = min(end, max(listed)) if listed else end   # never past the last COMPLETE expiry of a capped fetch
+    now_et = datetime.now(ET)
+    oi_map: dict[str, float] = {}
+    for occ, oi in oi_all.items():
+        p = _parse_occ(occ)
+        if p is None or p[0].date() > end:
+            continue
+        if p[0] - now_et < timedelta(hours=1):
+            continue                       # inside the 1-hour floor (_MIN_T_YEARS): dead strip, never gated or counted
+        oi_map[occ] = oi
+    return oi_map, {"window_end": end.isoformat(), "extended": extended, "truncated": bool(trunc_a or trunc_b)}
+
+
+def _drop_last_expiry(oi_map: dict[str, float]) -> dict[str, float]:
+    """Remove every contract of the latest expiry in `oi_map` (used when a fetch hit the page cap)."""
+    exps = [e for e in map(_expiry_of, oi_map) if e is not None]
+    if not exps:
+        return oi_map
+    last = max(exps)
+    return {s: o for s, o in oi_map.items() if _expiry_of(s) != last}
+
+
 def _fetch_contracts(symbol: str, date_gte: str, date_lte: str) -> dict[str, float]:
-    """Return {occ_symbol: open_interest} within the expiry window.
+    """Return {occ_symbol: open_interest} within the expiry window (see _fetch_contracts_meta)."""
+    return _fetch_contracts_meta(symbol, date_gte, date_lte)[0]
+
+
+def _fetch_contracts_meta(symbol: str, date_gte: str, date_lte: str) -> tuple[dict[str, float], bool]:
+    """Return ({occ_symbol: open_interest} within the expiry window, hit_page_cap).
 
     OI lives on the CONTRACT object (verified live 2026-07-03) — the snapshot
     endpoint never carries it on the indicative feed. Contracts with missing or
@@ -307,6 +404,7 @@ def _fetch_contracts(symbol: str, date_gte: str, date_lte: str) -> dict[str, flo
     """
     oi_map: dict[str, float] = {}
     page_token: str | None = None
+    truncated = False
     try:
         for _page in range(_MAX_CONTRACT_PAGES):
             params: dict = {
@@ -350,9 +448,10 @@ def _fetch_contracts(symbol: str, date_gte: str, date_lte: str) -> dict[str, flo
             logger.warning("GEX contracts [%s]: hit %d-page cap (%d contracts) with more pages "
                            "remaining — near-spot strikes may be truncated on a dense chain",
                            symbol, _MAX_CONTRACT_PAGES, len(oi_map))
+            truncated = True
     except Exception as e:
         logger.warning("GEX contracts [%s] failed: %s", symbol, e)
-    return oi_map
+    return oi_map, truncated
 
 
 # ── Snapshots (quotes — indicative feed carries latestQuote only) ─────────────
@@ -695,6 +794,50 @@ def _compute_gex(snapshots: dict, oi_map: dict, spot: float) -> dict:
     }
 
 
+def _compute_gex_admitted(snapshots: dict, oi_map: dict, spot: float, today) -> dict:
+    """GEX-1017 per-expiry admission (board 2026-10-17: options, Thorp, Taleb seats; Gro; GAI).
+
+    1. Each expiry is gated ON ITS OWN with the existing _compute_gex quality gate (same constants). Only admitted
+       expiries enter the label: a thin or dying strip (e.g. a same-day expiry gone zero-bid) drops out on its data,
+       a liquid one counts — so a censored strip can never set the sign behind a liquid neighbour's passing count.
+    2. If none is admitted, pool every NON-same-day expiry and apply the gate once (coverage never narrower than the
+       old pooled gate, minus the censored same-day strip).
+    3. Otherwise UNKNOWN with an explicit reason. Early return on an empty map — never an exception.
+    The result is _compute_gex's dict plus `expiries_used` (per-expiry pass/fail + counts), `admission` and, when
+    UNKNOWN, `unknown_reason`. The pin (front = nearest expiry in the set used) is therefore the nearest ADMITTED one."""
+    groups: dict = {}
+    for occ, oi in oi_map.items():
+        exp = _expiry_of(occ)
+        if exp is not None:
+            groups.setdefault(exp, {})[occ] = oi
+    per: dict = {}
+    admitted: dict = {}
+    for exp in sorted(groups):
+        sub = groups[exp]
+        r = _compute_gex({s: snapshots[s] for s in sub if s in snapshots}, sub, spot)
+        per[exp.isoformat()] = {"admitted": bool(r["quality_ok"]), "valid": r["contract_count"],
+                                "atm": r["atm_count"], "capture": r["capture_ratio"]}
+        if r["quality_ok"]:
+            admitted.update(sub)
+    if admitted:
+        mode, use = "per_expiry", admitted
+    else:
+        mode = "pool_non_same_day"
+        use = {s: o for exp, sub in groups.items() if exp != today for s, o in sub.items()}
+    if not use:
+        out = _compute_gex({}, {}, spot)
+        out.update({"admission": "none", "unknown_reason": "no_contracts_outside_same_day", "expiries_used": per})
+        return out
+    out = _compute_gex({s: snapshots[s] for s in use if s in snapshots}, use, spot)
+    out["expiries_used"] = per
+    if out["quality_ok"]:
+        out["admission"] = mode
+    else:
+        out["admission"] = "none"
+        out["unknown_reason"] = "no_expiry_admitted_and_pool_failed"
+    return out
+
+
 def compute_call_put_walls(records: list) -> dict:
     """Pure, source-agnostic call/put gamma-wall computation — reusable by the GEX writer
     (Alpaca BS gamma) AND options_scanner.py (Public.com greeks). The caller supplies
@@ -906,7 +1049,12 @@ def refresh_gex() -> None:
                 )
             continue
 
-        oi_map = _fetch_contracts(symbol, date_gte, date_lte)
+        try:
+            oi_map, _fetch_meta = _fetch_window_contracts(symbol, datetime.now(ET).date())
+        except Exception as _fw_e:   # one symbol's fetch must never abort the whole refresh
+            logger.warning("GEX [%s]: window fetch failed — %s", symbol, _fw_e)
+            results[symbol] = {"error": "window_fetch_exception", "detail": str(_fw_e)[:120]}
+            continue
         if not oi_map:
             logger.warning("GEX [%s]: no contracts with open interest in window — skipping", symbol)
             results[symbol] = {"error": "no_contracts"}
@@ -925,9 +1073,10 @@ def refresh_gex() -> None:
         # Per-symbol try/except keeps one bad name from taking the others down; error entry -> UNKNOWN
         # read (fail-safe). Widening the universe to the Mag-7 makes this isolation load-bearing.
         try:
-            gex = _compute_gex(snapshots, oi_map, spot)
+            gex = _compute_gex_admitted(snapshots, oi_map, spot, datetime.now(ET).date())
             gex["spot"]              = round(spot, 2)
             gex["contracts_fetched"] = len(oi_map)
+            gex["fetch"]             = _fetch_meta
             # expiry/dte from the FRONT (pin) expiry, NOT the window's far edge (board 2026-09-08,
             # signal seat): `dte` feeds the day-tier's act_ok, so it must reflect the near expiry the
             # pin actually used. Fall back to the window bound only if the pin has no expiry.
@@ -939,9 +1088,14 @@ def refresh_gex() -> None:
                                   - datetime.now(ET).date()).days
                 except Exception as _fe:
                     logger.debug("GEX [%s]: front-expiry dte calc failed (pin exp=%r): %s", symbol, _pin_exp, _fe)
-            gex["expiry"]            = _pin_exp or date_lte
+            if not _pin_exp:                        # no pin: fall back to the GEX-1017 window end, not the old window
+                try:
+                    _front_dte = (date.fromisoformat(_fetch_meta["window_end"]) - datetime.now(ET).date()).days
+                except Exception as _we_e:
+                    logger.debug("GEX [%s]: window-end dte calc failed: %s", symbol, _we_e)
+            gex["expiry"]            = _pin_exp or _fetch_meta.get("window_end") or date_lte
             gex["dte"]               = _front_dte
-            gex["window"]            = "signal"     # Friday-conditional skip-0DTE signal window
+            gex["window"]            = "gex1017"    # full-week window + per-expiry admission (GEX-1017)
             # confirmed_ts marks this label as computed from a spot that PASSED the consistency
             # guard at ts_str. get_gex_regime ages off this (not the snapshot write time) so a
             # carried-forward label ages from its last-clean time. quote_mid kept for the audit.
@@ -952,11 +1106,16 @@ def refresh_gex() -> None:
             # at production log level or the 30-session clock never accumulates evidence.
             _pin = gex.get("pin", {})
             logger.info(
-                "GEX [%s]: %s $%sM | PIN centroid=%s wall=%s conf=%s (atm=%s) exp=%s | valid=%d/%d | skips=%s",
+                "GEX [%s]: %s $%sM | PIN centroid=%s wall=%s conf=%s (atm=%s) exp=%s | valid=%d/%d | skips=%s"
+                " | change=gex-full-week-coverage admission=%s%s window_end=%s expiries=%s",
                 symbol, gex["label"], gex["raw_gex_m"],
                 _pin.get("centroid"), _pin.get("wall"), _pin.get("confidence"),
                 _pin.get("atm_capture"), _pin.get("expiry"),
                 gex["contract_count"], len(oi_map), gex["skips"],
+                gex.get("admission"),
+                f" ({gex['unknown_reason']})" if gex.get("unknown_reason") else "",
+                _fetch_meta.get("window_end"),
+                {k: ("in" if v.get("admitted") else "out") for k, v in (gex.get("expiries_used") or {}).items()},
             )
         except Exception as _sym_e:
             logger.warning("GEX [%s]: per-symbol compute failed — %s", symbol, _sym_e)
@@ -1030,10 +1189,15 @@ def get_gex_regime(symbol: str = "SPY") -> dict:
             )
             return {"label": "STALE", "raw_gex_m": 0.0, "flip_strike": None, "age_minutes": age_minutes}
         return {
-            "label":       label,
-            "raw_gex_m":   sym_data.get("raw_gex_m", 0.0),
-            "flip_strike": sym_data.get("flip_strike"),
-            "age_minutes": age_minutes,
+            "label":        label,
+            "raw_gex_m":    sym_data.get("raw_gex_m", 0.0),
+            "flip_strike":  sym_data.get("flip_strike"),
+            "age_minutes":  age_minutes,
+            # provenance (GEX-1017): which data produced this label — read by kelly's sizing log line
+            "confirmed_ts": sym_data.get("confirmed_ts"),
+            "expiries":     sorted(k for k, v in (sym_data.get("expiries_used") or {}).items()
+                                   if isinstance(v, dict) and v.get("admitted")),
+            "admission":    sym_data.get("admission"),
         }
     except Exception as e:
         logger.warning("GEX get_gex_regime failed: %s", e)
