@@ -54,6 +54,7 @@ _SYNC_DEGRADED = _ROOT / "data" / "state" / "forever6_sync_degraded.json"
 # starter-event log) — different shape, different write cadence (once per
 # reserve/confirm transition vs. once per starter event).
 _TRIM_STATE = _ROOT / "data" / "state" / "forever6_trims.json"
+_TRIM_STATE_LOCK = _ROOT / "data" / "state" / ".forever6_trims.lock"
 _TRIGGER_EVIDENCE = _ROOT / "data" / "state" / "forever6_trigger_evidence.jsonl"
 _STATE_LOCK = _ROOT / "data" / "state" / ".forever6_holds.lock"
 _EPS = 1e-6
@@ -64,6 +65,8 @@ _F6_ENTRY_START = time.fromisoformat("16:05")
 _F6_ENTRY_END = time.fromisoformat("20:00")
 _F6_QUOTE_OBSERVATIONS: dict[str, datetime] = {}
 _F6_QUOTE_OBSERVATIONS_LOCK = threading.Lock()
+_TRIM_LOCAL_LOCK = threading.RLock()
+_TRIM_LOCK_DEPTH = threading.local()
 
 
 @contextlib.contextmanager
@@ -76,6 +79,29 @@ def _state_locked():
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _trim_state_locked():
+    """Serialize one trim rung's reserve→submit→identity bind across processes."""
+    with _TRIM_LOCAL_LOCK:
+        depth = int(getattr(_TRIM_LOCK_DEPTH, "value", 0))
+        if depth:
+            _TRIM_LOCK_DEPTH.value = depth + 1
+            try:
+                yield
+            finally:
+                _TRIM_LOCK_DEPTH.value -= 1
+            return
+        _TRIM_STATE_LOCK.parent.mkdir(parents=True, exist_ok=True)
+        with open(_TRIM_STATE_LOCK, "a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _TRIM_LOCK_DEPTH.value = 1
+            try:
+                yield
+            finally:
+                _TRIM_LOCK_DEPTH.value = 0
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 @dataclass(frozen=True)
@@ -246,6 +272,46 @@ def _observe_advancing_basket(
         for symbol, quote in confirmed.items():
             _F6_QUOTE_OBSERVATIONS[symbol] = quote.timestamp
         return confirmed, set()
+
+
+def f6_trim_reservation_matches(symbol: str, client_order_id: str, qty: int) -> bool:
+    """True only for the exact durable, unresolved F6 trim reservation.
+
+    This is the broker boundary's independent proof that a private client-ID
+    override came from the F6 trim state machine rather than an arbitrary caller.
+    """
+    if (
+        not isinstance(symbol, str)
+        or not symbol
+        or not isinstance(client_order_id, str)
+        or not client_order_id
+        or isinstance(qty, bool)
+        or not isinstance(qty, int)
+        or qty < 1
+    ):
+        return False
+    try:
+        with _trim_state_locked():
+            if not _TRIM_STATE.exists():
+                return False
+            state = json.loads(_TRIM_STATE.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                return False
+            sym_state = state.get(symbol.upper())
+            if not isinstance(sym_state, dict):
+                return False
+            for rung in ("trim1", "trim2"):
+                meta = sym_state.get(f"{rung}_order")
+                if (
+                    sym_state.get(rung) == "reserved"
+                    and isinstance(meta, dict)
+                    and meta.get("client_order_id") == client_order_id
+                    and meta.get("qty") == qty
+                ):
+                    return True
+    except Exception:
+        return False
+    return False
 
 
 class ForeverHoldManager:
@@ -1370,12 +1436,12 @@ class ForeverHoldManager:
         RESERVE-THEN-CONFIRM per rung (GAI preship catch, 2026-08-05): each rung's state is
         "none" → "reserved" → "done". The "reserved" write is durable-confirmed BEFORE the
         sell is even attempted — so a crash/restart between reservation and sell always
-        finds "reserved" and refuses to re-fire (fail closed), never "none" again. A sell
-        that fails after reservation ALSO stays "reserved" forever (never reverts to
-        "none") — this makes a lost/failed _save_trim_state or a failed sell both degrade
-        to "block and alert," never to "silently retry and over-trim." Clearing a stuck
-        "reserved" back to firing requires a human to edit forever6_trims.json after
-        verifying against Alpaca's own order history — there is no auto-retry path.
+        finds "reserved" and refuses to re-fire (fail closed), never "none" again. The
+        exact pre-persisted client ID recovers a lost response. Active or ambiguous orders
+        remain reserved; a broker-terminal positive fill becomes done only after ownership
+        replay, and a broker-terminal zero-fill returns to none only after the same clean
+        replay proves that no shares moved. An identity-free or contradictory legacy row
+        still requires manual repair rather than guessing and risking a duplicate sell.
 
         A trim that rounds to 0 shares (25% of a 1-2 share position) is SKIPPED, not
         forced up to a full-position sell — trimming a fraction must never become
@@ -1385,20 +1451,60 @@ class ForeverHoldManager:
         blocks evaluation of the others. Returns {symbol: {"gain_mult": float, "fired":
         [(label, qty), ...]}} for symbols where a trim executed this pass.
 
-        KNOWN PRE-LIVE-FLIP GATE (cold-2nd fresh-review, 2026-08-05, fails safe — not
-        blocking this ship since FOREVER6_ENABLED stays False): a same-pass 10x-then-20x
-        double trim calls the guard twice in quick succession, and the guard's drift-freeze
-        check (ownership_guard.check_never_sell_floor) compares the ownership ledger's
-        tier-sum (refreshed only by the standalone run_ledger_sync cron, not resynced
-        mid-pass here) against Alpaca's live net qty. If trim1's fill reaches Alpaca before
-        the ledger resyncs, trim2's guard call can see a transient mismatch and REJECT —
-        which this code correctly treats as a sell failure (rung stuck 'reserved',
-        alerting, blocking) rather than an over-trim, but means a same-pass double trim may
-        not reliably fire both rungs in practice. Fix before flipping FOREVER6_ENABLED:
-        force a ledger resync between the two rungs, mirroring the buy-side's
-        _verify_ledger_reflects pattern.
+        An acknowledged sell is never treated as an executed trim.  Each reserved rung
+        binds the exact F6 order identity, waits across cycles for coherent terminal
+        quantity evidence, applies that exact fill to F6's ownership claim, and requires
+        a clean canonical replay before the rung becomes done.  The next rung therefore
+        sizes from the post-fill ledger rather than the pre-trim quantity.  Active or
+        ambiguous orders stay reserved and block another attempt.
         """
         results: dict[str, dict] = {}
+        # A restart can correctly fail the startup preflight because an F6 trim
+        # order is still open.  That interlock must block NEW actions without
+        # blocking reconciliation of the already-reserved reducer that caused
+        # it.  Resolve exact terminal trim evidence first; if ownership heals,
+        # rerun the full startup preflight to clear the interlock.
+        recovered_any = False
+        if config.FOREVER6_ENABLED:
+            try:
+                trim_state = self._load_trim_state()
+                for sym in self.universe:
+                    sym_state = trim_state.get(sym, {})
+                    if not isinstance(sym_state, dict):
+                        continue
+                    for rung, label in (("trim1", "10x"), ("trim2", "20x")):
+                        if sym_state.get(rung) != "reserved":
+                            continue
+                        reconciled, sold = self._reconcile_reserved_rung(sym, rung)
+                        after_state = self._load_trim_state()
+                        after_status = (
+                            after_state.get(sym, {}).get(rung, "none")
+                            if isinstance(after_state.get(sym, {}), dict)
+                            else "unknown"
+                        )
+                        # A terminal zero-fill resolves reserved→none but
+                        # correctly returns reconciled=False because no sale
+                        # occurred.  It still removed the reducer that blocked
+                        # startup, so the full preflight must rerun.
+                        if after_status != "reserved":
+                            recovered_any = True
+                        if reconciled:
+                            row = results.setdefault(
+                                sym, {"gain_mult": None, "fired": []}
+                            )
+                            row["fired"].append((label, sold))
+                            _slack_safe(
+                                f":moneybag: F6 TRIM {sym}: reconciled terminal "
+                                f"{label} fill — sold {sold} share(s)."
+                            )
+                if recovered_any and (not _STARTUP_READY or _read_sync_degraded()):
+                    self.reconcile_on_startup()
+            except _TrimStateUnreadable as exc:
+                self._alert_corrupt_trim_state("startup-recovery", exc)
+                return results
+            except Exception as exc:
+                logger.critical("[F6] reserved trim recovery failed closed: %s", exc)
+                return results
         if (config.FOREVER6_ENABLED and not _STARTUP_READY) or _read_sync_degraded():
             logger.critical(
                 "[F6] trim evaluation BLOCKED — ownership sync is degraded; "
@@ -1408,14 +1514,20 @@ class ForeverHoldManager:
         try:
             from execution import ownership_guard as _og
         except Exception as e:
-            logger.error("[F6] evaluate_and_execute_trims: ownership_guard import failed "
-                        "— skipping this cycle: %s", e)
+            logger.error(
+                "[F6] evaluate_and_execute_trims: ownership_guard import failed "
+                "— skipping this cycle: %s",
+                e,
+            )
             return results
         try:
             ledger = _og.load_ledger()
         except Exception as e:
-            logger.warning("[F6] evaluate_and_execute_trims: ledger unreadable — "
-                           "skipping this cycle: %s", e)
+            logger.warning(
+                "[F6] evaluate_and_execute_trims: ledger unreadable — "
+                "skipping this cycle: %s",
+                e,
+            )
             return results
 
         # Fail the WHOLE pass closed on a corrupt (not merely absent) trim-state file —
@@ -1424,39 +1536,67 @@ class ForeverHoldManager:
         try:
             self._load_trim_state()
         except _TrimStateUnreadable as e:
-            logger.critical("[F6] evaluate_and_execute_trims: trim state file is "
-                            "corrupt/unreadable — refusing ALL trim evaluation this "
-                            "cycle (fail closed) until it's manually repaired: %s", e)
-            _slack_safe(f":rotating_light: F6 forever6_trims.json is corrupt/unreadable "
-                        f"— ALL trims blocked until manually repaired: {e}")
+            logger.critical(
+                "[F6] evaluate_and_execute_trims: trim state file is "
+                "corrupt/unreadable — refusing ALL trim evaluation this "
+                "cycle (fail closed) until it's manually repaired: %s",
+                e,
+            )
+            _slack_safe(
+                f":rotating_light: F6 forever6_trims.json is corrupt/unreadable "
+                f"— ALL trims blocked until manually repaired: {e}"
+            )
             return results
 
         prices = self._fetch_prices()
 
         for sym in self.universe:
             try:
+                # Finish any previously acknowledged trim before reading this
+                # symbol's quantity.  This may commit an exact terminal fill and
+                # run the canonical replay, so reload the ledger afterwards.
+                reconciled_fired: list[tuple[str, int]] = list(
+                    results.get(sym, {}).get("fired", [])
+                )
+                for rung, label in (("trim1", "10x"), ("trim2", "20x")):
+                    reconciled, sold = self._reconcile_reserved_rung(sym, rung)
+                    if reconciled:
+                        reconciled_fired.append((label, sold))
+                ledger = _og.load_ledger()
                 own = _og.tier_qty(ledger, sym, "forever6")
                 if own <= _EPS:
                     continue
                 entry = ledger.get("positions", {}).get(sym, {})
                 avg_cost = float(
-                    entry.get("tiers", {}).get("forever6", {}).get("avg_cost", 0.0) or 0.0
+                    entry.get("tiers", {}).get("forever6", {}).get("avg_cost", 0.0)
+                    or 0.0
                 )
                 if avg_cost <= 0:
-                    logger.debug("[F6] %s: forever6 qty=%s but avg_cost<=0 — skipping trim "
-                                "eval this cycle.", sym, own)
+                    logger.debug(
+                        "[F6] %s: forever6 qty=%s but avg_cost<=0 — skipping trim "
+                        "eval this cycle.",
+                        sym,
+                        own,
+                    )
                     continue
                 px = prices.get(sym)
                 if not px or px <= 0:
                     continue
                 gain_mult = px / avg_cost
                 current_qty = own
-                fired: list[tuple[str, int]] = []
+                fired: list[tuple[str, int]] = list(reconciled_fired)
 
                 if gain_mult >= config.FOREVER6_TRIM_1_MULT:
                     qty1 = int(current_qty * config.FOREVER6_TRIM_1_FRAC)
                     try:
-                        ok1, sold1 = self._try_rung(sym, "trim1", qty1, "10x", gain_mult)
+                        ok1, sold1 = self._try_rung(
+                            sym,
+                            "trim1",
+                            qty1,
+                            "10x",
+                            gain_mult,
+                            current_qty,
+                        )
                     except _TrimStateUnreadable as e:
                         # Handled immediately, right at this call site (not via an
                         # outer except clause several lines away) — corruption
@@ -1467,7 +1607,8 @@ class ForeverHoldManager:
                         self._alert_corrupt_trim_state(sym, e)
                         return results
                     if ok1:
-                        current_qty -= sold1
+                        ledger = _og.load_ledger()
+                        current_qty = _og.tier_qty(ledger, sym, "forever6")
                         fired.append(("10x", sold1))
 
                 if gain_mult >= config.FOREVER6_TRIM_2_MULT:
@@ -1486,11 +1627,21 @@ class ForeverHoldManager:
                         logger.debug(
                             "[F6] %s: 20x trim trigger met (gain %.1fx) but trim1 status "
                             "is %r, not 'done' — skipping 20x until trim1 completes.",
-                            sym, gain_mult, _trim1_status)
+                            sym,
+                            gain_mult,
+                            _trim1_status,
+                        )
                     else:
                         qty2 = int(current_qty * config.FOREVER6_TRIM_2_FRAC)
                         try:
-                            ok2, sold2 = self._try_rung(sym, "trim2", qty2, "20x", gain_mult)
+                            ok2, sold2 = self._try_rung(
+                                sym,
+                                "trim2",
+                                qty2,
+                                "20x",
+                                gain_mult,
+                                current_qty,
+                            )
                         except _TrimStateUnreadable as e:
                             self._alert_corrupt_trim_state(sym, e)
                             return results
@@ -1499,10 +1650,21 @@ class ForeverHoldManager:
 
                 if fired:
                     results[sym] = {"gain_mult": round(gain_mult, 2), "fired": fired}
-                    _slack_safe(f":moneybag: F6 TRIM {sym}: gain {gain_mult:.1f}x — {fired}")
+                    newly_fired = [
+                        item for item in fired if item not in reconciled_fired
+                    ]
+                    if newly_fired:
+                        _slack_safe(
+                            f":moneybag: F6 TRIM {sym}: gain {gain_mult:.1f}x — "
+                            f"{newly_fired}"
+                        )
+            except _TrimStateUnreadable as e:
+                self._alert_corrupt_trim_state(sym, e)
+                return results
             except Exception as e:
-                logger.warning("[F6] evaluate_and_execute_trims: %s failed, skipping: %s",
-                               sym, e)
+                logger.warning(
+                    "[F6] evaluate_and_execute_trims: %s failed, skipping: %s", sym, e
+                )
                 continue
 
         return results
@@ -1516,19 +1678,301 @@ class ForeverHoldManager:
             "[F6] evaluate_and_execute_trims: trim state file became corrupt/unreadable "
             "mid-cycle (detected while evaluating %s) — refusing further trim "
             "evaluation this cycle (fail closed) until it's manually repaired: %s",
-            sym, e)
+            sym,
+            e,
+        )
         _slack_safe(
             f":rotating_light: F6 forever6_trims.json became corrupt/unreadable "
             f"mid-cycle — remaining trims this cycle BLOCKED until manually repaired: "
-            f"{e}")
+            f"{e}"
+        )
 
-    def _try_rung(self, symbol: str, rung: str, qty: int, label: str,
-                  gain_mult: float) -> tuple[bool, int]:
+    @staticmethod
+    def _trim_order_identity(
+        order: object, symbol: str, requested_qty: int
+    ) -> dict | None:
+        """Return exact F6 sell-order evidence or None on any contradiction."""
+        try:
+            from execution.ownership_guard import tier_of_coid
+
+            oid_raw = getattr(order, "id", None)
+            oid = str(oid_raw) if isinstance(oid_raw, (str, uuid.UUID)) else ""
+            coid = getattr(order, "client_order_id", None)
+            osym = str(getattr(order, "symbol", "") or "").upper()
+            side_raw = getattr(order, "side", "")
+            side = str(getattr(side_raw, "value", side_raw) or "").lower()
+            status_raw = getattr(order, "status", "")
+            status = str(getattr(status_raw, "value", status_raw) or "").lower()
+            raw_qty = getattr(order, "qty", None)
+            raw_filled = getattr(order, "filled_qty", None)
+            if (
+                not oid
+                or not isinstance(coid, str)
+                or not coid
+                or oid != oid.strip()
+                or coid != coid.strip()
+                or osym != symbol.upper()
+                or side != "sell"
+                or tier_of_coid(coid) != "forever6"
+                or raw_qty is None
+                or raw_filled is None
+                or isinstance(raw_qty, bool)
+                or isinstance(raw_filled, bool)
+            ):
+                return None
+            qty = float(raw_qty)
+            filled = float(raw_filled)
+            if (
+                not math.isfinite(qty)
+                or qty != float(requested_qty)
+                or qty != float(int(qty))
+                or not math.isfinite(filled)
+                or filled != float(int(filled))
+                or not 0 <= filled <= qty
+            ):
+                return None
+            terminal = {"filled", "canceled", "cancelled", "expired", "rejected"}
+            active = {
+                "accepted",
+                "accepted_for_bidding",
+                "new",
+                "pending_new",
+                "partially_filled",
+                "pending_cancel",
+                "pending_replace",
+                # Alpaca can continue these later.  In particular, ``stopped``
+                # means the trade is guaranteed but has not happened yet, and
+                # ``done_for_day`` may resume the next trading day.
+                "stopped",
+                "done_for_day",
+            }
+            if status not in terminal | active:
+                return None
+            if status == "filled" and filled != qty:
+                return None
+            if status == "rejected" and filled != 0:
+                return None
+            return {
+                "order_id": oid,
+                "client_order_id": coid,
+                "status": status,
+                "qty": int(qty),
+                "filled_qty": int(filled),
+                "terminal": status in terminal,
+            }
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+    def _reconcile_reserved_rung(self, symbol: str, rung: str) -> tuple[bool, int]:
+        with _trim_state_locked():
+            return self._reconcile_reserved_rung_locked(symbol, rung)
+
+    def _reconcile_reserved_rung_locked(
+        self,
+        symbol: str,
+        rung: str,
+    ) -> tuple[bool, int]:
+        """Resolve one reserved trim only from exact terminal broker evidence.
+
+        Positive fills are committed to the protected ownership ledger and then
+        verified by the canonical full replay.  Exact terminal zero-fills reopen
+        the rung only after that replay is clean.  Missing, active, regressive, or
+        contradictory evidence remains reserved and cannot submit again.
+        """
+        state = self._load_trim_state()
+        sym_state = dict(state.get(symbol, {}))
+        if sym_state.get(rung, "none") != "reserved":
+            return False, 0
+        meta = sym_state.get(f"{rung}_order")
+        if not isinstance(meta, dict):
+            return False, 0
+        oid = meta.get("order_id")
+        coid = meta.get("client_order_id")
+        qty = meta.get("qty")
+        baseline = meta.get("baseline_qty")
+        if oid is not None and (not isinstance(oid, str) or not oid):
+            return False, 0
+        if (
+            not isinstance(coid, str)
+            or not coid
+            or isinstance(qty, bool)
+            or not isinstance(qty, int)
+            or qty < 1
+            or isinstance(baseline, bool)
+            or not isinstance(baseline, (int, float))
+            or not math.isfinite(float(baseline))
+        ):
+            return False, 0
+        from execution import broker as _bk
+
+        order = (
+            _bk.get_order(oid)
+            if isinstance(oid, str) and oid
+            else _bk.get_order_by_client_order_id(coid)
+        )
+        proof = (
+            self._trim_order_identity(order, symbol, qty) if order is not None else None
+        )
+        if proof is None or proof["client_order_id"] != coid:
+            return False, 0
+        if oid is not None and proof["order_id"] != oid:
+            return False, 0
+        if oid is None:
+            # Close the submit-response crash gap by binding the exact order
+            # recovered from the pre-persisted deterministic client ID.
+            fresh = self._load_trim_state()
+            fresh_sym = dict(fresh.get(symbol, {}))
+            fresh_meta = fresh_sym.get(f"{rung}_order")
+            if (
+                fresh_sym.get(rung) != "reserved"
+                or not isinstance(fresh_meta, dict)
+                or fresh_meta.get("client_order_id") != coid
+                or fresh_meta.get("order_id") is not None
+            ):
+                return False, 0
+            fresh_meta["order_id"] = proof["order_id"]
+            fresh_sym[f"{rung}_order"] = fresh_meta
+            fresh[symbol] = fresh_sym
+            if not self._save_trim_state(fresh):
+                return False, 0
+            oid = proof["order_id"]
+        if not proof["terminal"]:
+            return False, 0
+        filled = int(proof["filled_qty"])
+        try:
+            import run_ledger_sync as _rls
+
+            if filled:
+                pos = _bk.get_open_position(symbol)
+                expected = float(baseline) - filled
+                if pos is None:
+                    if abs(expected) > _EPS:
+                        return False, 0
+                    net = 0.0
+                else:
+                    side_raw = getattr(pos, "side", "")
+                    position_side = str(
+                        getattr(side_raw, "value", side_raw) or ""
+                    ).lower()
+                    raw_net = getattr(pos, "qty", None)
+                    if isinstance(raw_net, bool) or raw_net is None:
+                        return False, 0
+                    net = float(raw_net)
+                    if (
+                        position_side != "long"
+                        or not math.isfinite(net)
+                        or net < 0
+                        or (expected <= _EPS and net > _EPS)
+                    ):
+                        return False, 0
+                from execution import ownership_guard as _og
+
+                before = _og.load_ledger()
+                before_own = _og.tier_qty(before, symbol, "forever6")
+                before_entry = (before.get("positions") or {}).get(symbol, {})
+                before_drift = (
+                    float(before_entry.get("drift", 0.0) or 0.0)
+                    if before_entry
+                    else 0.0
+                )
+                already_applied = (
+                    math.isfinite(before_own)
+                    and abs(before_own - expected) <= _EPS
+                    and math.isfinite(before_drift)
+                    and abs(before_drift) <= _EPS
+                )
+                if not already_applied and not _og.apply_authorized_tier_fill_reduction(
+                    symbol,
+                    "forever6",
+                    filled,
+                    net,
+                    f"f6_trim:{oid}",
+                ):
+                    return False, 0
+            replay = _rls.sync_once()
+            if replay.get("ok") is not True or replay.get("healed") is not True:
+                return False, 0
+            from execution import ownership_guard as _og
+
+            ledger = _og.load_ledger()
+            own = _og.tier_qty(ledger, symbol, "forever6")
+            expected = float(baseline) - filled
+            entry = (ledger.get("positions") or {}).get(symbol, {})
+            drift = float(entry.get("drift", 0.0) or 0.0) if entry else 0.0
+            if (
+                not math.isfinite(own)
+                or abs(own - expected) > _EPS
+                or not math.isfinite(drift)
+                or abs(drift) > _EPS
+            ):
+                return False, 0
+        except Exception as exc:
+            logger.critical(
+                "[F6] %s %s terminal trim could not reconcile: %s",
+                symbol,
+                rung,
+                exc,
+            )
+            return False, 0
+
+        fresh = self._load_trim_state()
+        fresh_sym = dict(fresh.get(symbol, {}))
+        fresh_meta = fresh_sym.get(f"{rung}_order")
+        if (
+            fresh_sym.get(rung) != "reserved"
+            or not isinstance(fresh_meta, dict)
+            or fresh_meta.get("order_id") != oid
+        ):
+            return False, 0
+        if filled:
+            fresh_sym[rung] = "done"
+            fresh_meta["filled_qty"] = filled
+            fresh_meta["terminal_status"] = proof["status"]
+            fresh_meta["reconciled_at"] = datetime.now(PT).isoformat()
+            fresh_sym[f"{rung}_order"] = fresh_meta
+        else:
+            # Exact terminal zero-fill plus a clean replay proves no ownership
+            # moved, so the rung may safely try again on a later cycle.
+            fresh_sym[rung] = "none"
+            fresh_sym.pop(f"{rung}_order", None)
+        fresh[symbol] = fresh_sym
+        if not self._save_trim_state(fresh):
+            return False, 0
+        return bool(filled), filled
+
+    def _try_rung(
+        self,
+        symbol: str,
+        rung: str,
+        qty: int,
+        label: str,
+        gain_mult: float,
+        baseline_qty: float,
+    ) -> tuple[bool, int]:
         """Attempt ONE trim rung ("trim1" or "trim2") with reserve-then-confirm state.
         Returns (fired: bool, qty_sold: int). Never re-fires a rung whose state is
         anything other than "none" — "reserved" (whether from a persist race or an actual
         sell failure) and "done" both permanently block further auto-attempts for this
         rung on this symbol until a human clears the state file."""
+        with _trim_state_locked():
+            return self._try_rung_locked(
+                symbol,
+                rung,
+                qty,
+                label,
+                gain_mult,
+                baseline_qty,
+            )
+
+    def _try_rung_locked(
+        self,
+        symbol: str,
+        rung: str,
+        qty: int,
+        label: str,
+        gain_mult: float,
+        baseline_qty: float,
+    ) -> tuple[bool, int]:
         state = self._load_trim_state()
         sym_state = dict(state.get(symbol, {}))
         status = sym_state.get(rung, "none")
@@ -1540,88 +1984,165 @@ class ForeverHoldManager:
             logger.critical(
                 "[F6] %s %s rung has an UNRECOGNIZED state %r — treating as blocked, "
                 "NOT as 'none'. Manually correct forever6_trims.json to one of "
-                "none/reserved/done.", symbol, label, status)
-            _slack_safe(f":rotating_light: F6 {symbol} {label} trim state is "
-                        f"unrecognized ({status!r}) — blocked until manually corrected.")
+                "none/reserved/done.",
+                symbol,
+                label,
+                status,
+            )
+            _slack_safe(
+                f":rotating_light: F6 {symbol} {label} trim state is "
+                f"unrecognized ({status!r}) — blocked until manually corrected."
+            )
             return False, 0
         if status == "done":
             return False, 0
         if status == "reserved":
+            reconciled, sold = self._reconcile_reserved_rung(symbol, rung)
+            if reconciled:
+                return True, sold
+            if isinstance(sym_state.get(f"{rung}_order"), dict):
+                logger.info(
+                    "[F6] %s %s trim remains reserved while its exact order awaits "
+                    "terminal fill + ownership replay.",
+                    symbol,
+                    label,
+                )
+                return False, 0
             logger.critical(
                 "[F6] %s %s rung is STUCK at 'reserved' (gain %.1fx) — a prior attempt "
                 "either failed to persist or the sell itself failed. NOT auto-retrying. "
                 "Verify against Alpaca's order history, then manually clear "
-                "forever6_trims.json before this rung can fire.", symbol, label, gain_mult)
-            _slack_safe(f":rotating_light: F6 {symbol} {label} trim STUCK at 'reserved' "
-                        f"— manual verification required before it can fire.")
+                "forever6_trims.json before this rung can fire.",
+                symbol,
+                label,
+                gain_mult,
+            )
+            _slack_safe(
+                f":rotating_light: F6 {symbol} {label} trim STUCK at 'reserved' "
+                f"— manual verification required before it can fire."
+            )
             return False, 0
         if qty < 1:
             logger.info(
                 "[F6] %s: %s trim trigger met (gain %.1fx) but the computed qty rounds "
                 "to 0 — skipping (position too small to fractionally trim).",
-                symbol, label, gain_mult)
+                symbol,
+                label,
+                gain_mult,
+            )
             return False, 0
 
+        # Generate and persist the deterministic F6 order identity before the
+        # first broker mutation.  A lost response or process death can then
+        # recover exactly this order by client ID instead of leaving an
+        # identity-free reservation forever.
+        from execution import broker as _bk
+
+        coid = _bk._make_idem_id("forever6", symbol, "sell")
         # Reserve FIRST, durably, before any sell is attempted. A write failure here
         # means we never sell this cycle — fail closed, never sell without a prior
         # confirmed reservation.
         sym_state[rung] = "reserved"
+        sym_state[f"{rung}_order"] = {
+            "order_id": None,
+            "client_order_id": coid,
+            "qty": qty,
+            "baseline_qty": float(baseline_qty),
+            "reserved_at": datetime.now(PT).isoformat(),
+        }
         state[symbol] = sym_state
         if not self._save_trim_state(state):
             logger.error(
                 "[F6] %s: %s trim reservation FAILED to persist — refusing to sell this "
-                "cycle (fail closed). Will retry reservation next cycle.", symbol, label)
+                "cycle (fail closed). Will retry reservation next cycle.",
+                symbol,
+                label,
+            )
             return False, 0
 
-        ok = self._submit_trim(symbol, qty, label)
+        order = self._submit_trim(symbol, qty, label, coid)
 
         # Whether the sell succeeded or failed, the rung stays "reserved" — success will
         # be upgraded to "done" below; failure deliberately does NOT revert to "none"
         # (never assume a failed-looking order didn't partially execute).
-        if ok:
-            # Re-load fresh rather than reuse the pre-sell snapshot (cold-2nd fresh-review
-            # catch, 2026-08-05): _submit_trim is a blocking network call, and writing back
-            # a stale in-memory `state` here could silently clobber a concurrent manual
-            # edit to a DIFFERENT symbol/rung made during that window — exactly the kind of
-            # edit this design's own alerts tell an operator to make.
+        if order:
+            proof = self._trim_order_identity(order, symbol, qty)
+            if proof is None or proof["client_order_id"] != coid:
+                logger.critical(
+                    "[F6] %s %s trim acknowledgement is contradictory — rung remains "
+                    "reserved for manual verification.",
+                    symbol,
+                    label,
+                )
+                return False, 0
             state = self._load_trim_state()
             sym_state = dict(state.get(symbol, {}))
-            sym_state[rung] = "done"
+            metadata = sym_state.get(f"{rung}_order")
+            if (
+                not isinstance(metadata, dict)
+                or metadata.get("client_order_id") != coid
+                or metadata.get("order_id") is not None
+            ):
+                return False, 0
+            metadata["order_id"] = proof["order_id"]
+            metadata["submitted_at"] = datetime.now(PT).isoformat()
+            sym_state[f"{rung}_order"] = metadata
             state[symbol] = sym_state
             if not self._save_trim_state(state):
                 logger.critical(
-                    "[F6] %s: %s trim EXECUTED (sold %s share(s)) but the 'done' state "
-                    "write FAILED — rung stays 'reserved', so it will correctly block "
-                    "(not re-fire) next cycle, but needs manual confirmation it "
-                    "actually completed: %s", symbol, label, qty, symbol)
-                _slack_safe(f":rotating_light: F6 {symbol} {label} trim executed but "
-                            f"state write failed — verify and clear manually.")
-            return True, qty
+                    "[F6] %s: %s trim acknowledged but its exact order identity did "
+                    "not persist — rung stays reserved for manual recovery.",
+                    symbol,
+                    label,
+                )
+                _slack_safe(
+                    f":rotating_light: F6 {symbol} {label} trim was acknowledged but "
+                    "its order identity did not persist — verify in Alpaca."
+                )
+                return False, 0
+            # A market order can occasionally arrive already terminal.  Reconcile
+            # it now; otherwise the durable reservation resolves next cycle.
+            return self._reconcile_reserved_rung(symbol, rung)
 
         logger.error(
             "[F6] %s: %s trim sell FAILED after reservation — rung stays 'reserved' "
             "(blocks future auto-attempts; verify against Alpaca before manual clear).",
-            symbol, label)
-        _slack_safe(f":rotating_light: F6 {symbol} {label} trim sell FAILED after "
-                    f"reservation — verify against Alpaca's order history, then "
-                    f"manually clear forever6_trims.json before retrying.")
+            symbol,
+            label,
+        )
+        _slack_safe(
+            f":rotating_light: F6 {symbol} {label} trim sell FAILED after "
+            f"reservation — verify against Alpaca's order history, then "
+            f"manually clear forever6_trims.json before retrying."
+        )
         return False, 0
 
-    def _submit_trim(self, symbol: str, qty: int, label: str) -> bool:
-        """Execute one trim leg via the sole authorized broker path. Never raises."""
+    def _submit_trim(self, symbol: str, qty: int, label: str, coid: str):
+        """Submit one trim leg; return its acknowledgement, never a fill claim."""
         try:
             from execution import broker as _bk
-            ok = _bk.submit_f6_trim(symbol, qty)
+
+            order = _bk.submit_f6_trim(symbol, qty, client_order_id=coid)
         except Exception as e:
             logger.error("[F6] TRIM EXCEPTION %s (%s trigger): %s", symbol, label, e)
             return False
-        if ok:
-            logger.warning("[F6] TRIM EXECUTED %s: sold %s share(s) (%s trigger)",
-                           symbol, qty, label)
+        if order:
+            logger.warning(
+                "[F6] TRIM SUBMITTED %s: requested %s share(s) (%s trigger); "
+                "awaiting exact terminal fill + ownership replay",
+                symbol,
+                qty,
+                label,
+            )
         else:
-            logger.error("[F6] TRIM FAILED %s: broker rejected/failed the %s trim "
-                        "sell of %s share(s)", symbol, label, qty)
-        return ok
+            logger.error(
+                "[F6] TRIM FAILED %s: broker rejected/failed the %s trim "
+                "sell of %s share(s)",
+                symbol,
+                label,
+                qty,
+            )
+        return order
 
     def _load_trim_state(self) -> dict:
         """Returns {} ONLY when the file is genuinely absent (a legitimate fresh state —

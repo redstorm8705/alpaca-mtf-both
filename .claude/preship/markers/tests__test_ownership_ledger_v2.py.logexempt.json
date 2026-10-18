@@ -1,6 +1,6 @@
 {
  "file": "tests/test_ownership_ledger_v2.py",
- "sha256": "ade3fdb22b13070be13a852d9cea3ab8ca50be7f5cf558a6bd630d8695488e4f",
- "reason": "OpenAI Codex canonical ownership-ledger schema architecture; no claim that this fixes a logged production defect.",
- "recorded_at": "2026-10-09T07:33:58.424398+02:00"
+ "sha256": "3b15be4a42be8b9dbbb9e9ce786ad7940224092d890f062868e8aec4665d82f1",
+ "reason": "This closes a pre-launch F6 architecture prerequisite while F6 is disabled; it does not claim to fix an observed live F6 trade.",
+ "recorded_at": "2026-10-17T18:57:44.099157-07:00"
 }

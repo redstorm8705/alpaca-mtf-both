@@ -199,6 +199,20 @@ class GuardBoundaryTests(unittest.TestCase):
             1,
         )
 
+    def test_exact_f6_trim_reduction_preserves_coheld_tiers(self):
+        row = ledger_v1()  # F6=4, QHM=3, Swing=2, Day=1, total/net=10
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        source = "f6_trim:order-456"
+        self.assertTrue(guard.apply_authorized_tier_fill_reduction(
+            "NVDA", "forever6", 2, 8, source
+        ))
+        entry = guard.load_canonical_ledger()["positions"]["NVDA"]
+        self.assertEqual(entry["tiers"]["forever_6"]["qty"], 2)
+        self.assertEqual(entry["tiers"]["qhm"]["qty"], 3)
+        self.assertEqual(entry["tiers"]["swing"]["qty"], 2)
+        self.assertEqual(entry["tiers"]["day"]["qty"], 1)
+        self.assertEqual((entry["alpaca_net_qty"], entry["drift"]), (8, 0))
+
     def test_exact_qhm_fill_reduction_rejects_unexplained_net_delta(self):
         guard._LEDGER_PATH.write_bytes(dumps(ledger_v1(), target=2))
         self.assertFalse(guard.apply_authorized_tier_fill_reduction(

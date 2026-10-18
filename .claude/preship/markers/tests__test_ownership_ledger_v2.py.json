@@ -1,8 +1,7 @@
 {
-  "sha256": "dede8ec73f9bcd0d3ead8ab8e73da34a69ec3e6ef0fb32c5e4c1d85ea0b20054",
-  "gro": "APPROVE",
+  "sha256": "3b15be4a42be8b9dbbb9e9ce786ad7940224092d890f062868e8aec4665d82f1",
+  "gro": "WAIVED",
   "gai": "APPROVE",
-  "ts": 1791527945,
-  "file": "tests/test_ownership_ledger_v2.py",
-  "gro_substituted": "NVIDIA_meta/llama-3.2-90b-vision-instruct"
+  "ts": 1792288649,
+  "file": "tests/test_ownership_ledger_v2.py"
 }
