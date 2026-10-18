@@ -74,8 +74,8 @@ we don't believe in the conviction level."
 Claude's response (pending the owner's answer, then replay + board/Gro/GAI on stops/scale-out, then owner approval):
 - "High conviction" = the band with the proven record (recalibrated weekly; today 0.47-0.60) because the raw top
   scores went 0 for 8; entries only in that band; size follows conviction with no per-trade cap.
-- OPEN QUESTION TO OWNER: is 6% a TOTAL open-risk budget (recommended: one top trade can use all 6%, several share it,
-  the 7% kill holds) or PER TRADE (three full positions could lose ~18% in a day, beyond the kill)?
+- OWNER ANSWER 2026-10-18: "6% total" — total open Day-tier risk (stop + gap allowance) <= 6% of equity; one top
+  trade may use all of it, several share it; the 7% kill holds.
 - Bigger size -> tighter stop (never inside noise/spread) + closer targets with scale-out partials.
 NOT APPROVED YET — no code written.
 
