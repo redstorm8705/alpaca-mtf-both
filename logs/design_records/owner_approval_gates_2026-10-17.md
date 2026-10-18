@@ -251,3 +251,11 @@ REMOVED: the Slack notice on every recorded approval, and the settings watch (ha
 every tool call and paging on change). KEPT: natural approval wording incl. PR numbers (correction 4), and the silent
 Edit/Write block on user-level and main-checkout Claude Code settings by resolved path. The undo page in
 behaviour_integrity (pre-existing) now reads the webhook from .env so it actually reaches Slack. 46 tests.
+
+## Owner correction 6 (2026-10-17): Codex approvals
+The owner approved the F6 trim design from Codex, but the validator only understood Claude Code's JSONL shape, so the
+shared pre-push hook rejected an authentic owner approval. `approval_valid` now accepts Codex `response_item` records
+only when the payload is a user message, the retained source is complete and identifies the user, the retained message
+and turn IDs exactly match the payload, and the exact text hash approves the same declared ID. Assistant messages, tool
+echoes, incomplete records, identity mismatches, and user-shaped records without a retained user source remain invalid.
+This changes no trading behavior; it lets the existing owner-only control work from both development clients.
