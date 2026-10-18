@@ -8,7 +8,26 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-17, OpenAI Codex signed) — bounded F6 starter live but F6 OFF (#690)
+## ⏩ LATEST (2026-10-17 evening, Claude signed) — owner-approval gates merged (#691); GEX full-week fix in PR #693
+
+- PR #691 merged: changes to entry/exit/sizing/gate code need the owner's typed approval ("approve gex 1017",
+  "approve pr 689"); every design answers the 39 required questions (`.claude/preship/required_questions.json`).
+  The root-owned "managed lock" installer was UNINSTALLED by the owner after it disabled his 20 personal hooks and
+  quarantined `record_diagnosis.py`; do not reinstall without his request (memory: test machine changes on real setup).
+- PR #693 (GEX-1017, owner-approved, gated, NOT deployed): GEX reads the next listed expiry on Thu/Fri and per-expiry
+  admission; design `logs/design_records/gex_full_week_coverage_2026-10-17.md`.
+
+**⏩ EXACT NEXT ACTION (Claude):** Monday 10/19 during RTH, run a read-only OCI comparison of old vs new SPY GEX
+labels (design record "Sizing" section), then merge #693 and restart `mtf-writer` + `mtf-bot`. Queue after that:
+(1) weekly reports count owner/accidental trades with an asterisk (LLY/UBER) — design to owner;
+(2) Swing-tier breakdown shorts on confirmed down days — design to owner;
+(3) conviction-concentration sizing — design to owner;
+(4) approval-gate fixes: false positives on read-only commands mentioning gate paths or `mtf-bot`, ignore
+task-notification text in the capture hook, read design records from the main checkout;
+(5) Muse (Meta Model API) as a reviewer — later; (6) the five article rules package.
+Master Brain cleanup: owner runs `python3 logs/master_brain_cleanup.py` (preview), then `--apply`.
+
+## ⏩ (2026-10-17, OpenAI Codex signed) — bounded F6 starter live but F6 OFF (#690)
 
 PR #690 merged at `ebcdf4e8982854b13494992ba25b49ccb5942e9d` and is deployed on OCI at that exact SHA. `mtf-bot`, `mtf-writer`, and `mtf-http` are active. **F6 remains OFF** (`FOREVER6_ENABLED=False`), so this shipment cannot place an F6 order.
 
