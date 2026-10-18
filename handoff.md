@@ -8,20 +8,27 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-18, Claude signed) — one owner-approval system for Claude, Codex and every worktree
+## ⏩ LATEST (2026-10-18, Claude signed) — shared owner approvals (#701) + RULES-1018 report checks (#702) live
 
-- GEX-1017 (PR #693) is merged and deployed: GEX reads next week's expiries on Thu/Fri. The old-vs-new SPY label
-  comparison is a POST-ship check during Monday 10/19 RTH, then record the post-live audit.
-- This branch (`claude/approvals-shared`): one approval parser and one store at `<git common dir>/owner-approvals`,
-  shared by Claude, Codex and all worktrees; natural wording ('approve oci reset 1017', 'Approve 1017' when unique,
-  'approved' after an ask); Codex approvals captured automatically at git commit/push. Existing approvals migrate.
-  Codex instructions: design record `owner_approval_gates_2026-10-17.md`, "For Codex". Reviews in progress.
+- #701 (merged, synced): one owner-approval parser and store (inside the git common dir) for Claude, Codex and all
+  worktrees; only human-typed text approves; Codex approvals captured at git commit/push. Codex instructions:
+  `logs/design_records/owner_approval_gates_2026-10-17.md`, "For Codex" (register with
+  `python3 .claude/preship/owner_approval_capture.py --register`, ask with the ID named).
+- #702 (merged, synced; deployed, unexercised — first run Sat 10/24): weekly report two-source P&L check, belief
+  tests (logs/belief_tests.jsonl), per-tier goals; required questions RQ-4 (Q40-Q44). Design
+  `logs/design_records/article_rules_2026-10-18.md`.
+- GEX-1017 (#693) deployed; Monday 10/19 RTH: post-ship old-vs-new SPY label comparison + post-live audit.
+- Pending owner designs: OCI-RESET-1017, F6-FLAT-1018 (Codex). Both must answer Q40-Q44 (RQ-4) before an approval
+  records.
+- Known: this week's and 9/28's weekly reports fail closed on owner manual sales tagged 'unattributed' (LLY, GEV) —
+  fixed by queue item (3) below.
 
-**⏩ EXACT NEXT ACTION (Claude):** finish the approvals PR through the gate, then the owner's queue in his order:
-(1) five article rules package, (2) conviction-concentration sizing design, (3) Swing-tier breakdown shorts design,
-(4) weekly reports count owner/accidental trades with an asterisk, (5) approval-gate false positives (commands that
-only read gate paths, `2>/dev/null` read as a write, `mtf-bot` in local paths). Muse later. Every approval package
-includes a "Required questions" section.
+**⏩ EXACT NEXT ACTION (Claude):** owner's queue in order: (1) conviction-concentration sizing design (risk-path:
+board incl. masked-loss seat + Gro + GAI, then owner package), (2) Swing-tier breakdown shorts design, (3) weekly
+reports count owner/accidental trades with an asterisk, (4) gate false positives: `2>/dev/null` and `->` read as
+writes, reads of gate paths, `mtf-bot` in local paths, text that merely mentions the approval folders, and the new
+launch check flagging a `claude-code` URL in PR bodies (strip heredocs before message args; ignore URL tokens).
+Muse later. Every approval package includes a "Required questions" section.
 
 ## ⏩ (2026-10-18, OpenAI Codex signed) — scoped F6 capital allocator live, F6 OFF (#699)
 
