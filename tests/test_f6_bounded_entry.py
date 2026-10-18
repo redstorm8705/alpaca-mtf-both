@@ -118,6 +118,7 @@ def test_allocator_exact_reserve_requires_full_f6_limit_contract():
     base = dict(
         owner_tier="forever6", symbol="NVDA", side="buy", qty=1,
         price_bound=100.01, stop_price=1.0, exact_cash_reserve=True,
+        overnight=True,
     )
     wrong_tier = allocator.EntryRequest(tier="swing", **base)
     assert "F6-only" in allocator.TierCapitalAllocator._validate_request(wrong_tier)
@@ -132,6 +133,21 @@ def test_allocator_exact_reserve_requires_full_f6_limit_contract():
         extended_hours=True, **base,
     )
     assert allocator.TierCapitalAllocator._validate_request(exact) == ""
+
+    missing_overnight = allocator.EntryRequest(
+        tier="forever6", order_type="limit", time_in_force="day",
+        extended_hours=True, **{**base, "overnight": False},
+    )
+    assert "overnight" in allocator.TierCapitalAllocator._validate_request(
+        missing_overnight
+    )
+
+
+def test_f6_money_boundary_declares_overnight_allocator_exposure():
+    source = f6.Path(f6.__file__).read_text()
+    call = source[source.index("_capital = live_admit("):]
+    call = call[:call.index(")\n", call.index("client_order_id=_coid"))]
+    assert "overnight=True" in call
 
 
 def test_starter_refuses_outside_extended_session(monkeypatch):

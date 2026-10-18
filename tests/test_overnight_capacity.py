@@ -64,6 +64,20 @@ class Reader(unittest.TestCase):
     def test_tighter_value_is_used_fresh_or_stale(self):
         self._put(k_dyn=1.48, session=f"{datetime.now(oc.ET):%Y-%m-%d}")
         self.assertAlmostEqual(oc.overnight_k(), 1.48)
+
+    def test_f6_strict_reader_requires_current_valid_persisted_state(self):
+        with self.assertRaises(ValueError):
+            oc.overnight_k_strict_current()
+        self._put(k_dyn=1.48, session="2020-01-02")
+        with self.assertRaises(ValueError):
+            oc.overnight_k_strict_current()
+        for value in ("abc", None, float("nan"), float("inf"), 0, -1, 2.0):
+            with self.subTest(value=value):
+                self._put(k_dyn=value, session=f"{datetime.now(oc.ET):%Y-%m-%d}")
+                with self.assertRaises(ValueError):
+                    oc.overnight_k_strict_current()
+        self._put(k_dyn=1.48, session=f"{datetime.now(oc.ET):%Y-%m-%d}")
+        self.assertAlmostEqual(oc.overnight_k_strict_current(), 1.48)
         self._put(k_dyn=1.48, session="2020-01-02")          # stale -> last good, never looser
         self.assertAlmostEqual(oc.overnight_k(), 1.48)
 

@@ -1008,6 +1008,7 @@ class ForeverHoldManager:
                     _capital = live_admit(
                         "forever6", "forever6", sym, "buy", 1, hard_limit,
                         stop_price=math.nextafter(0.0, 1.0), exact_cash_reserve=True,
+                        overnight=True,
                         order_type="limit", time_in_force="day", extended_hours=True,
                         client_order_id=_coid,
                     )
