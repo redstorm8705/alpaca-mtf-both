@@ -23,12 +23,14 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - Known: this week's and 9/28's weekly reports fail closed on owner manual sales tagged 'unattributed' (LLY, GEV) —
   fixed by queue item (3) below.
 
-**⏩ EXACT NEXT ACTION (Claude):** owner's queue in order: (1) conviction-concentration sizing design (risk-path:
-board incl. masked-loss seat + Gro + GAI, then owner package), (2) Swing-tier breakdown shorts design, (3) weekly
-reports count owner/accidental trades with an asterisk, (4) gate false positives: `2>/dev/null` and `->` read as
-writes, reads of gate paths, `mtf-bot` in local paths, text that merely mentions the approval folders, and the new
-launch check flagging a `claude-code` URL in PR bodies (strip heredocs before message args; ignore URL tokens).
-Muse later. Every approval package includes a "Required questions" section.
+**⏩ EXACT NEXT ACTION (Claude):** CONV-1018 conviction sizing (design `logs/design_records/earned_concentration_sizing_2026-10-18.md`,
+NOT approved, no code): get the owner's answer — is "6% of the daily loss limit" a TOTAL open-risk budget (recommended)
+or per trade? Then replay, quick board/Gro/GAI on tight stops + scale-out targets, owner package. Key fact: the raw top
+conviction scores went 0 for 8; the proven band (recalibrated weekly) is 0.47-0.60. Replay scripts:
+scratch `conviction_replay.py` / `conv_changes_replay.py` (copies in /tmp/rt on OCI). Then the queue: (2) Swing-tier
+breakdown shorts, (3) weekly reports count owner/accidental trades with an asterisk (also unblocks the weekly report),
+(4) gate false positives (incl. the launch check flagging a `claude-code` URL in PR bodies). Monday 10/19: GEX-1017
+post-ship SPY comparison + post-live audit. Master Brain login expired (owner runs `notebooklm login`).
 
 ## ⏩ (2026-10-18, OpenAI Codex signed) — scoped F6 capital allocator live, F6 OFF (#699)
 
