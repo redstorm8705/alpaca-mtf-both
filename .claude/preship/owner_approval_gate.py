@@ -7,7 +7,8 @@ Gro, GAI). Blocks (exit 2):
   1. any write-capable tool (Write, Edit, MultiEdit, NotebookEdit, MCP edit/refactor tools, or a Bash command that writes)
      touching a BEHAVIOUR path, unless an owner approval record covers that path and its approval text is a USER entry in
      the conversation transcript (written only by owner_approval_capture.py from the owner's typed message);
-  2. any agent write to .claude/approvals/ (only the capture hook writes there);
+  2. any agent write to the shared approval store (<git common dir>/owner-approvals), the legacy .claude/approvals/,
+     or a Claude/Codex transcript (only the owner_approval_capture code writes approvals);
   3. git hook-skipping and git-config/GIT_* override commands, always;
   4. a Groq/Gemini call that does not go through the allowlisted, bias-scanned wrappers;
   5. an `ssh mtf-bot` command that changes the crontab or writes into the bot directory, unless "server-ops" is approved.
@@ -15,7 +16,6 @@ Behaviour paths reuse preship_gate's own scope (_in_risk_scope + its accounting 
 settings.local.json. FAIL-CLOSED for behaviour paths: an internal error on a write-capable call blocks.
 """
 import glob
-import hashlib
 import json
 import os
 import re
@@ -44,6 +44,84 @@ _SERVER_WRITE = re.compile(
     r"\bcrontab\s+(-[er]|-\s|[^-l\s|]\S*)|\|\s*crontab\b|\bsed\s+-i|\btee\b|\bgit\s+(checkout|reset|commit|apply|stash|restore|revert|cherry-pick)\b"
     r"|\bsystemctl\s+(stop|disable|edit|mask)\b|(?<![<>0-9&])>>?\s*(?!/tmp/|/dev/null|&)\S|\b(rm|mv|cp)\s+[^|;&]*mtf-bot/", re.I)
 _SERVER_OK_PULL = re.compile(r"\bgit\s+pull\b")
+# Tools and commands that start a new session with agent-written text as its USER message (scheduled tasks, headless
+# claude/codex, session-management messages, remote triggers; in-session SendMessage text arrives wrapped and is
+# never read as owner text): that text would be recorded as the owner's own words.
+_INJECT_TOOL = re.compile(r"(?i)scheduled|send_?message|remote_?trigger|cron(create|update)|run_task|spawn_task"
+                          r"|run_in_terminal|open_terminal|session_mgmt|move_to_cloud"
+                          r"|computer|app_type|type_text|clipboard|browser|chrome|form_input|teach")   # GUI typing too
+# a claude/codex launch given a prompt (headless, exec, piped/redirected stdin, or a quoted first prompt)
+# Where a shell runs a program: line start, after ; & | ( { ` $( then/do/else, after a wrapper (env, nohup, time, exec,
+# sudo, nice, timeout N, xargs, npx, ...), inside `sh -c '...'`, or an osascript `do script "..."`.
+_LAUNCH_POS = re.compile(
+    r"(?m)(?=(?:\bscript(?:\s+-\S+)*\s+\S+\s|do\s+script\s+\\?['\"]|-exec(?:dir)?\s|\bunbuffer\s|-\w*c\s+['\"]"
+    r"|\b(?:then|do|else)\s|[;&|){}`]|(?<![\w$])\(|\$\(|^)"
+    r"\s*(?:[{(!]\s*)*"
+    r"(?:(?:\S*/)?(?:env|command|builtin|nohup|time|exec|eval|sudo|nice|timeout|caffeinate|xargs|npx|bunx|pnpx"
+    r"|stdbuf|watch|parallel|screen|unbuffer|tmux\s+new(?:-session)?|tmux\s+new-window)"
+    r"(?:\s+-[angust]\s+(?![-'\"])\S+|\s+-\S+|\s+\d\S*)*\s+['\"]?|\w+=\S*\s+)*(\S+)(.*))")   # zero-width: every position
+_LAUNCHERS = ("claude", "claude-code", "codex")
+_NON_PROMPT = re.compile(r"^\s+(?:mcp|config|update|doctor|install|login|logout|--version|--help|-v|-h)\b")
+
+
+def _ansi_c(body: str) -> str:
+    try:
+        return body.encode("latin-1", "backslashreplace").decode("unicode_escape")
+    except (UnicodeDecodeError, ValueError):
+        return body
+
+
+def _launches_agent(cmd: str) -> bool:
+    """True if the command starts a claude/codex session (any form that can take a prompt). Message text and heredoc
+    bodies are ignored; quote/backslash splicing ('cla""ude', 'cl\\aude') and globs ('claud?') are normalised."""
+    import fnmatch
+    c = _strip_data(cmd)
+    c = re.sub(r"\$'((?:[^'\\]|\\.)*)'", lambda m: _ansi_c(m.group(1)), c)     # $'\x63laude'
+    c = re.sub(r"\{([^{}\s]*,[^{}\s]*)\}", lambda m: " ".join(x for x in m.group(1).split(",") if x) or " ", c)
+    c = re.sub(r"\\(?=\w)", "", c)
+    c = re.sub(r"(?<=\w)(['\"])\1?(?=\w)", "", c)
+    for m in _LAUNCH_POS.finditer(c):
+        word = m.group(1).strip("'\"()`")
+        base = word.rsplit("/", 1)[-1].lower()
+        hit = any(fnmatch.fnmatchcase(name, base) for name in _LAUNCHERS) if re.search(r"[*?\[]", base) \
+            else base in _LAUNCHERS
+        if hit and not _NON_PROMPT.match(m.group(2)):
+            return True
+    return False
+
+
+_INJECT_PATH = re.compile(r"/\.claude/scheduled-tasks/|/\.codex/")
+_APPROVAL_TEXT = re.compile(r"(?im)\b(approved?|reject(?:ed)?)\b[^\n]{0,80}?\d{3,}"
+                            r"|\b(?:approved?|reject)\s+[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+"
+                            r"|^[\s>*_-]*(?:(?:yes|ok|okay)[\s,.!]+)?(approved?|proceed|go\s+ahead|ship\s+it|continue)\W*$")
+_MSG_ARGS = re.compile(r"(-m|--message|--body|--title|-t|--notes)(=|\s+)(\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)")
+
+
+def _strip_data(cmd: str) -> str:
+    """The command minus commit/PR message values and heredoc bodies (text, not commands)."""
+    out = _MSG_ARGS.sub(" ", cmd)
+    return re.sub(r"<<-?\s*['\"]?(\w+)['\"]?.*?\n\1", " ", out, flags=re.S)
+
+
+def _strings(obj) -> list:
+    if isinstance(obj, str):
+        return [obj]
+    if isinstance(obj, dict):
+        return [x for v in obj.values() for x in _strings(v)]
+    if isinstance(obj, list):
+        return [x for v in obj for x in _strings(v)]
+    return []
+
+
+def _injects_approval(tool: str, ti: dict) -> bool:
+    """True if this call would put approval-shaped text into a new session's user message."""
+    texts = _strings(ti)
+    if tool == "Bash":   # any prompt-carrying claude/codex launch: its text cannot be checked when read from a file
+        return _launches_agent(ti.get("command") or "")
+    if (_INJECT_TOOL.search(tool) and tool != "SendMessage") \
+            or any(_INJECT_PATH.search(os.path.expanduser(p)) for p in _paths_in(ti)):
+        return any(_APPROVAL_TEXT.search(t) for t in texts)
+    return False
 
 
 def _root() -> str:
@@ -108,102 +186,71 @@ def is_behaviour(rel: str) -> bool:
                                                                               "data/market_breadth.py"))
 
 
-def _user_text(entry: dict) -> str:
-    raw = entry.get("message")
-    msg: dict = raw if isinstance(raw, dict) else entry
-    c = msg.get("content")
-    if isinstance(c, str):
-        return c
-    if isinstance(c, list):
-        return "".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
-    return ""
-
-
 def _transcript_user_text(entry: dict) -> str:
-    """Return a human user message from Claude or Codex JSONL, else empty.
-
-    Claude records user messages at the top level. Codex records the same human
-    input as a ``response_item`` whose payload is a user ``message``.  Requiring
-    the retained-source role as well as the payload role keeps tool echoes and
-    assistant-authored text out of the approval path.
-    """
-    role = (entry.get("message") or {}).get("role") if isinstance(entry.get("message"), dict) else entry.get("role")
-    if entry.get("type") == "user" and role == "user" and entry.get("isMeta") is not True:
-        return _user_text(entry)
-    payload = entry.get("payload")
-    if entry.get("type") != "response_item" or not isinstance(payload, dict):
-        return ""
-    retained = (entry.get("metadata") or {}).get("retained_source")
-    if not isinstance(retained, dict):
-        return ""
-    retained_id = retained.get("id")
-    passthrough = payload.get("internal_chat_message_metadata_passthrough")
-    if (
-        payload.get("type") != "message"
-        or payload.get("role") != "user"
-        or not isinstance(retained_id, dict)
-        or retained.get("complete") is not True
-        or retained_id.get("role") != "user"
-        or not payload.get("id")
-        or payload.get("id") != retained_id.get("message_id")
-        or not isinstance(passthrough, dict)
-        or not passthrough.get("turn_id")
-        or passthrough.get("turn_id") != retained_id.get("turn_id")
-    ):
-        return ""
-    content = payload.get("content")
-    if not isinstance(content, list):
-        return ""
-    return "".join(
-        part.get("text", "")
-        for part in content
-        if isinstance(part, dict) and part.get("type") == "input_text"
-    )
+    """A complete, authentic human user message from Claude or Codex JSONL, else '' (the shared parser's rule)."""
+    import owner_approval_capture as cap
+    return cap.transcript_user_text(entry)
 
 
 def approval_valid(rec: dict, root: "str | None" = None) -> bool:
-    """The approval's text is a USER entry in its transcript with the recorded hash AND that text approves THIS id."""
-    tp = rec.get("transcript_path")
-    want = rec.get("prompt_sha256")
-    aid = rec.get("id") or ""
-    if not tp or not want or not aid or not os.path.exists(tp):
-        return False
+    """The approval's text is an authentic USER entry in its transcript (hash + message identity) that approves THIS
+    id (the shared parser's rule)."""
     try:
         import owner_approval_capture as cap
+        return cap.approval_valid(rec, root or _root())
     except Exception:
         return False
-    try:
-        with open(tp, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                text = _transcript_user_text(e)
-                if text and hashlib.sha256(text.encode("utf-8")).hexdigest() == want and aid in cap.ids_in(text, root)[0]:
-                    return True
-    except OSError:
-        return False
-    return False
 
 
 def approvals(root: str) -> list:
+    """Valid owner approvals from the SHARED store (<git common dir>/owner-approvals), shared by every agent and
+    worktree; legacy per-worktree .claude/approvals records are migrated in first."""
+    try:
+        import owner_approval_capture as cap
+        cap.migrate_legacy(root)
+        cap.register_designs(root)
+        adir = cap.approvals_dir(root)
+    except Exception:
+        return []
     out = []
-    for p in glob.glob(os.path.join(root, ".claude", "approvals", "*.json")):
+    for p in glob.glob(os.path.join(adir, "*.json")):
         try:
             rec = json.load(open(p))
         except Exception:
             continue
-        if rec.get("status") == "APPROVED" and os.path.basename(p) == f"{rec.get('id')}.json" and approval_valid(rec, root):
-            try:   # covers come from the design record on disk, not from the (writable) approval file
-                import owner_approval_capture as cap
-                found = cap.find_design(root, rec["id"])
-                if found and cap.covers_sha(found[1]) == rec.get("covers_sha256"):
-                    rec = dict(rec, covers=found[1])
-                    out.append(rec)
-            except Exception:
-                continue
+        if rec.get("status") == "APPROVED" and os.path.basename(p) == f"{rec.get('id')}.json" \
+                and cap.approval_valid_cached(rec, root):
+            # covers come from the design record on disk, not from the (writable) approval file
+            found = cap.find_design(root, rec["id"])
+            if found and cap.covers_sha(found[1]) == rec.get("covers_sha256"):
+                out.append(dict(rec, covers=found[1]))
     return out
+
+
+def _transcript_path(p: str, root: str) -> bool:
+    """True if `p` is a Codex session file or a Claude transcript (.jsonl) — the source of every owner approval.
+    Claude's memory files under ~/.claude/projects/*/memory/ stay writable."""
+    try:
+        import owner_approval_capture as cap
+        codex, claude = [os.path.realpath(d) for d in cap.transcript_dirs()]
+    except Exception:
+        return False
+    q = os.path.realpath(os.path.expanduser(p if os.path.isabs(os.path.expanduser(p)) else os.path.join(root, p)))
+    if q == codex or q.startswith(codex + os.sep):
+        return True
+    return q.startswith(claude + os.sep) and q.endswith(".jsonl")
+
+
+def _store_path(p: str, root: str) -> bool:
+    """True if `p` is inside the shared approval store (or a legacy approvals dir)."""
+    try:
+        import owner_approval_capture as cap
+        store = os.path.realpath(cap.approvals_dir(root))
+    except Exception:
+        store = ""
+    q = os.path.realpath(os.path.expanduser(p if os.path.isabs(os.path.expanduser(p)) else os.path.join(root, p)))
+    legacy = os.sep + os.path.join(".claude", "approvals") + os.sep      # any checkout's legacy folder, not just ours
+    return (bool(store) and (q == store or q.startswith(store + os.sep))) or legacy in q + os.sep
 
 
 def covered(rel: str, recs: list) -> bool:
@@ -255,6 +302,15 @@ def check(payload: dict) -> None:
     root = _root()
     tool = payload.get("tool_name") or ""
     ti = payload.get("tool_input") or {}
+    try:   # note every design (and its Covers) the moment it exists, so an owner approval typed later can count
+        import owner_approval_capture as cap
+        cap.register_designs(root)
+    except Exception:
+        pass
+    if _injects_approval(tool, ti):
+        _block("this would start a session whose user message is written by an agent (a headless or launched "
+               "claude/codex run, or approval wording in a scheduled task / session message); only the owner types "
+               "approvals.")
     if tool == "Bash":
         cmd = ti.get("command") or ""
         cmd_nomsg = re.sub(r"(-m|--message)(=|\s+)(\"[^\"]*\"|'[^']*'|\S+)", " ", cmd)
@@ -279,13 +335,15 @@ def check(payload: dict) -> None:
                 _block("this server command changes the crontab or writes into the bot directory; it needs the owner's "
                        "approval of an ID whose Covers includes 'server-ops'.")
             return
-        if ".claude/projects" in cmd and _WRITE_HINT.search(cmd):
-            _block("the conversation transcripts under ~/.claude/projects/ are not writable by the agent.")
+        if (".claude/projects" in cmd or ".codex/sessions" in cmd) and _WRITE_HINT.search(cmd):
+            _block("the conversation transcripts (~/.claude/projects/, ~/.codex/sessions/) are not writable by the agent.")
         if _USER_SETTINGS.search(cmd) and (_WRITE_HINT.search(cmd) or _REDIRECT.search(cmd)):
             _block("Claude Code settings files (~/.claude/settings*.json) set hook behaviour and environment; only the "
                    "owner edits them.")
-        if (".claude/approvals" in cmd or ".claude/quarantine" in cmd) and _WRITE_HINT.search(cmd):
-            _block("only the owner-approval and integrity hooks write .claude/approvals/ and .claude/quarantine/.")
+        if (".claude/approvals" in cmd or ".claude/quarantine" in cmd or "owner-approvals" in cmd) \
+                and _WRITE_HINT.search(cmd):
+            _block("only the owner-approval and integrity hooks write the approval store (.git/owner-approvals), "
+                   ".claude/approvals/ and .claude/quarantine/.")
         if _WRITE_HINT.search(cmd):
             no_redirects = _REDIRECT.sub(" ", cmd)
             if _WRITE_HINT.search(no_redirects):
@@ -306,8 +364,11 @@ def check(payload: dict) -> None:
     if any(_USER_SETTINGS.search(str(p)) or _is_user_settings(str(p), root) for p in _paths_in(ti)):
         _block("Claude Code settings files (~/.claude/settings*.json) set hook behaviour and environment; only the owner "
                "edits them.")
+    if any(_transcript_path(str(p), root) for p in _paths_in(ti)):
+        _block("the conversation transcripts (~/.claude/projects/, ~/.codex/sessions/) are not writable by the agent.")
     rels = [_rel(p, root) for p in _paths_in(ti)]
-    if any(r.startswith((".claude/approvals/", ".claude/quarantine/")) for r in rels):
+    if any(r.startswith((".claude/approvals/", ".claude/quarantine/")) for r in rels) \
+            or any(_store_path(str(p), root) for p in _paths_in(ti)):
         _block("only the owner-approval hook writes .claude/approvals/.")
     hits = [r for r in rels if is_behaviour(r)]
     if not hits:

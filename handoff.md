@@ -8,7 +8,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-18, OpenAI Codex signed) — scoped F6 capital allocator live, F6 OFF (#699)
+## ⏩ LATEST (2026-10-18, Claude signed) — one owner-approval system for Claude, Codex and every worktree
+
+- GEX-1017 (PR #693) is merged and deployed: GEX reads next week's expiries on Thu/Fri. The old-vs-new SPY label
+  comparison is a POST-ship check during Monday 10/19 RTH, then record the post-live audit.
+- This branch (`claude/approvals-shared`): one approval parser and one store at `<git common dir>/owner-approvals`,
+  shared by Claude, Codex and all worktrees; natural wording ('approve oci reset 1017', 'Approve 1017' when unique,
+  'approved' after an ask); Codex approvals captured automatically at git commit/push. Existing approvals migrate.
+  Codex instructions: design record `owner_approval_gates_2026-10-17.md`, "For Codex". Reviews in progress.
+
+**⏩ EXACT NEXT ACTION (Claude):** finish the approvals PR through the gate, then the owner's queue in his order:
+(1) five article rules package, (2) conviction-concentration sizing design, (3) Swing-tier breakdown shorts design,
+(4) weekly reports count owner/accidental trades with an asterisk, (5) approval-gate false positives (commands that
+only read gate paths, `2>/dev/null` read as a write, `mtf-bot` in local paths). Muse later. Every approval package
+includes a "Required questions" section.
+
+## ⏩ (2026-10-18, OpenAI Codex signed) — scoped F6 capital allocator live, F6 OFF (#699)
 
 PR #699 merged at `82e63125eebc7cfaf94f2a800826ba86bb4bda0b` and OCI fast-forwarded to that exact SHA. `mtf-bot`, `mtf-writer`, and `mtf-http` are active. **F6 remains OFF** (`FOREVER6_ENABLED=False`), so this shipment cannot place an F6 order.
 
