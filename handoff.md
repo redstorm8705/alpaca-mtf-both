@@ -8,6 +8,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-18, OpenAI Codex signed) — scoped F6 capital allocator live, F6 OFF (#699)
+
+PR #699 merged at `82e63125eebc7cfaf94f2a800826ba86bb4bda0b` and OCI fast-forwarded to that exact SHA. `mtf-bot`, `mtf-writer`, and `mtf-http` are active. **F6 remains OFF** (`FOREVER6_ENABLED=False`), so this shipment cannot place an F6 order.
+
+- The shared allocator's global switch remains false. `live_admit` overrides that false value only when `tier == "forever6"` and the separate F6 allocator switch is true; Day, Swing, and QHM therefore retain their existing disabled behavior. F6 now has a real durable allocator path before any future enablement.
+- F6 requests must declare overnight exposure and provide regime evidence and the persisted dynamic overnight-capacity value from the current ET session. Missing, stale, malformed, nonfinite, zero, or negative capacity refuses the request.
+- The existing dynamic envelopes remain 10% of equity in normal, risk-on, and stressed regimes and 30% only in a verified crash. Settled cash, maintenance, ownership, pending reservations, and the dynamic whole-book limit still bind.
+- Gate: owner approval `F6-ALLOC-1018`; Thorp/Taleb board APPROVE; cold/adversarial PASS; Groq and Google AI Studio APPROVE on the exact final diff after counter-evidence resolved Groq's unreachable-configuration premise; 113 tests + 11 subtests, Python 3.10 compile, Ruff E/W/F/B, mypy, dynamic-threshold gate, and GitHub CI PASS. OCI emitted `DEPLOY_OK:82e63125eebc7cfaf94f2a800826ba86bb4bda0b`. Status: deployed, unexercised. The rerunnable local test command is `../test-venv/bin/python -m pytest -q tests/test_f6_bounded_entry.py tests/test_overnight_capacity.py tests/tests_tier_capital_allocator.py`; the CI artifact is `gh run view 39119996089 --log`.
+
+Evidence/verify: `gh pr view 699 --json state,mergeCommit,statusCheckRollup` returned `MERGED`, merge `82e6312`, and `preship: SUCCESS`; `ssh mtf-bot 'cd ~/mtf-bot && git rev-parse HEAD && systemctl is-active mtf-bot mtf-writer mtf-http && python3 -c "import config; print(config.FOREVER6_ENABLED, config.TIER_CAPITAL_ALLOCATOR_ENABLED, config.TIER_CAPITAL_FOREVER6_ENABLED)"'` returned the full merge SHA, three `active` lines, and `False False True`; `git show 82e6312:execution/tier_capital_allocator.py | rg 'tier == "forever6"|overnight_k_strict_current|TIER_CAPITAL_FOREVER6_ENABLED'` exposes the F6-only override and strict-current call. Exact design and gate evidence is recorded in `logs/design_records/f6_scoped_allocator_2026-10-18.md` and `logs/tb_audit_log.md`.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** build emergency-flatten ownership attribution, then ETF wind-down detection and the full-path pre-market simulation. Do not enable F6. Claude's Day/Swing/QHM work remains separate and preserved.
+
 ## ⏩ LATEST (2026-10-17, OpenAI Codex signed) — bounded F6 starter live but F6 OFF (#690)
 
 PR #690 merged at `ebcdf4e8982854b13494992ba25b49ccb5942e9d` and is deployed on OCI at that exact SHA. `mtf-bot`, `mtf-writer`, and `mtf-http` are active. **F6 remains OFF** (`FOREVER6_ENABLED=False`), so this shipment cannot place an F6 order.
