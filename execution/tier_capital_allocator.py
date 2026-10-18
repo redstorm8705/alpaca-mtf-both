@@ -488,7 +488,10 @@ class TierCapitalAllocator:
         # older intraday gross multiplier.  Day/Swing/QHM behavior stays exactly
         # as it was while the shared allocator remains globally disabled.
         account_cap = equity * float(self.policy.gross_multipliers[regime])
-        if req.tier != "forever6" and projected_gross > account_cap + 1e-9:
+        if (
+            req.tier != "forever6"
+            and projected_gross > math.nextafter(account_cap, math.inf)
+        ):
             return self._decision(False, "account gross cap", req)
         if req.tier not in _CASH_TIERS and bp < notional:
             return self._decision(False, "buying power unavailable", req)
@@ -515,7 +518,7 @@ class TierCapitalAllocator:
                 overnight_cap = equity * k_value
             except Exception:
                 return self._decision(False, "overnight capacity unreadable", req)
-            if projected_gross > overnight_cap + 1e-9:
+            if projected_gross > math.nextafter(overnight_cap, math.inf):
                 return self._decision(False, "overnight exposure cap", req)
         if equity - maint - reserve_maint - maintenance_reserve < maintenance_floor:
             return self._decision(False, "maintenance cushion", req)
