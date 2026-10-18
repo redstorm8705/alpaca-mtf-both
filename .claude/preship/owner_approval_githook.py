@@ -5,7 +5,8 @@
 Design record: logs/design_records/owner_approval_gates_2026-10-17.md (Approval-ID GATES-1017). Git runs this at the
 moment of the commit or push, so an edit + commit + push inside one shell command is still checked (the PreToolUse gate
 ran before anything was staged). Refuses (exit 1) when a trading-behaviour or gate path in the commit / pushed range has
-no owner approval recorded from the owner's own 'APPROVE <ID>' message.
+no owner approval recorded from the owner's own message. Before checking, it replays recent Claude and Codex
+transcripts (owner_approval_capture.capture_from_transcripts) so a Codex session's approvals are captured automatically.
 """
 import os
 import subprocess
@@ -27,6 +28,12 @@ def uncovered(range_args: list) -> list:
     if not ok:
         return ["(could not list changed files — refusing)"]
     root = oag._root()
+    try:   # Codex (and any agent without the Claude prompt hook): record the owner's approvals from the transcripts
+        import owner_approval_capture as cap
+        for note in cap.capture_from_transcripts(root):
+            sys.stderr.write(f"[owner approval] {note}\n")
+    except Exception as exc:   # capture never widens access; a failure only means nothing new was recorded
+        sys.stderr.write(f"[owner approval] transcript capture failed: {exc}\n")
     recs = oag.approvals(root)
     return [p for p in (ln.strip() for ln in out.splitlines() if ln.strip())
             if not p.startswith(".claude/preship/markers/") and oag.is_behaviour(p) and not oag.covered(p, recs)]

@@ -259,3 +259,142 @@ only when the payload is a user message, the retained source is complete and ide
 and turn IDs exactly match the payload, and the exact text hash approves the same declared ID. Assistant messages, tool
 echoes, incomplete records, identity mismatches, and user-shaped records without a retained user source remain invalid.
 This changes no trading behavior; it lets the existing owner-only control work from both development clients.
+
+## Owner correction 7 (2026-10-17): one approval system for Claude, Codex and every worktree (Claude)
+The owner: approvals must work the same in Claude, Codex and every git worktree, and a clear approval must authorize
+the uniquely identified pending design without machine-specific wording. Built (requirements 1-9 of the owner's
+message):
+- ONE parser + ONE store. `owner_approval_capture.py` is the only parser; the gate, the git hook and preship_gate all
+  call it. Approvals live in `<git common dir>/owner-approvals/<ID>.json` (here `.git/owner-approvals/`), shared by the
+  main checkout, every Claude worktree and every Codex worktree. Design records are found in `logs/design_records/` of
+  ANY worktree; the same ID in two different files, or with two different Covers lists, is ambiguous and never
+  approvable.
+- Authentic owner text only. Claude: a `type=user` entry with a uuid, not meta, not a tool result, not a harness
+  notification. Codex: a user `response_item` whose `retained_source` is complete, user-authored, and whose message
+  and turn IDs equal the payload's. Each record stores that message identity; the gate re-checks hash + identity.
+- Wording. Case, spaces, punctuation, underscores and any hyphen character are ignored, and a run-together part of the
+  ID counts ('OCIRESET 1017'): 'APPROVE OCI-RESET-1017', 'Approved OCI reset-1017', 'approve oci reset 1017' all mean
+  OCI-RESET-1017. 'Approve 1017' counts only when exactly one PENDING design ends in 1017; otherwise nothing is
+  recorded and the pending IDs are listed.
+- Affirmatives. 'approved', 'approve', 'proceed', 'go ahead', 'ship it', 'continue' (optionally 'yes'/'ok', 'please')
+  approve a design only when the immediately preceding agent message asked for approval and named exactly one pending
+  ID. An ask is a sentence mentioning approval that is a question or an explicit request ('YOUR DECISION', 'please',
+  'reply', 'needs your approval'), with the ID in that sentence or the one before ('Ready to ship OCI-RESET-1017.
+  Approve?'); a mention such as 'F6 was approved' is not an ask. Two or more asked, or none, records nothing and lists
+  the pending IDs. The record keeps a hash of that agent message.
+- Still excluded: quotes, '>' lines, lines after 'X:' or 'e.g.', questions, negations, conditionals, third-party
+  verdicts, assistant text, tool output, task notifications, sub-agent copies, incomplete or mismatched records.
+- Codex is automatic. The git pre-commit / pre-push hook reads the Claude and Codex transcript lines added since its
+  last run (a cursor kept in the store) and applies the owner's decisions in time order, so a Codex approval is
+  recorded without any manual step. Each message is judged ONCE, against the designs pending when it is read: an old
+  message is never re-applied to a design created later, and ambiguity is judged as of the message ('Approve 1017'
+  typed while two were pending never resolves later). An approval counts only if the owner named the design with a
+  word ('gex', 'oci reset') or an agent had presented its ID earlier in that conversation; a bare number therefore
+  works whenever the agent has shown the ID, which every approval package does. A 'reject <ID>' leaves a dated
+  tombstone, so no replay can bring a rejected approval back, and rejects apply even when nothing is pending.
+- Where owner text may come from: only files inside `~/.claude/projects/` and `~/.codex/sessions/` under the account's
+  real home (password database, not $HOME). Claude sub-agent prompts, compaction summaries, transcript-only entries
+  and task notifications are not owner text. The gate blocks agent writes to both transcript trees, the store and any
+  checkout's `.claude/approvals/` folder.
+- Migration. Existing `.claude/approvals/*.json` records in any worktree are copied into the store on first read only
+  if they validate (never overwritten, never deleted; `migrated_from` notes the source).
+- Speed. A record proven valid is remembered (in the store) while its transcript only grows, so a tool call does not
+  re-read a 100 MB transcript per approval. The first replay reads every transcript once (about 8 s here); later runs
+  read only new lines.
+Review round 1 (cold + adversarial, both FAIL) — fixed: a planted legacy record pointing at a forged transcript outside
+the transcript trees was migrated and honoured; a backdated design file let an old bare number approve it; a repeated
+'approved' bound to the owner's older message; a rejection could be resurrected; 'APPROVE <ID>' lines skipped the
+quote/question/conditional exclusions; 'If ...; approve 1017' counted; agent messages that merely mentioned approval
+let 'continue' approve; ambiguity was judged at replay time; rejects were skipped when nothing was pending;
+compaction summaries and sub-agent prompts counted as owner text; every gate call re-read whole transcripts.
+Review round 2 (cold + adversarial, both FAIL) — fixed: a scheduled task, a headless `claude -p` / `codex exec` run or
+a session-management message could start a session whose USER message is agent-written approval text (the gate now
+blocks those calls when they carry approval wording, and scheduled-task / cross-session wrappers are not owner text);
+an old bare number or an affirmative to an ask about a not-yet-existing ID could approve a design written later (a
+first-seen registry in the store — every hook notes each design the first time it sees it — and a replayed message
+counts only for designs already seen when it was typed; a bare number needs the ID in the IMMEDIATELY preceding agent
+message); 'continue' after status lines, third-party approval, deferred readiness, either/or offers or contractions
+(the ask list is now a fixed set addressed to the owner: 'Approve X?', 'do you approve', 'YOUR DECISION', 'ready for
+your approval', 'needs your approval', 'please approve', 'reply approve'; the standard package with the ID at the top
+and 'YOUR DECISION' at the end counts); a conditional or a lead-in ('Gro returned') on the line before, `~~~` fences
+and indented code now exclude; migration never revives a rejected ID; a record without a message id is pinned to its
+turn by the hash of the agent message before it. Courtesy is accepted ('Approve gex 1017, thanks').
+Review round 3 (cold + adversarial, both FAIL) — fixed: a headless or launched claude/codex run fed from a file, a
+terminal tab or a spawned task could still carry agent text as a session's first user message (the gate now blocks
+every prompt-carrying `claude`/`codex` launch from Bash — `-p`, `--print`, `exec`, stdin, a quoted prompt — and
+spawn-task / terminal / session-management tools carrying approval wording); the package fallback let an ask about
+something else approve an ID merely mentioned (an ask now points back only when bare — 'Approve?', 'Approve before the
+open?' — or, for the standard package ending in YOUR DECISION, to the message's first line); Covers could be widened
+between the owner's Codex message and the commit (first-seen is now per ID AND Covers fingerprint — a Covers change
+makes it a new design seen now); registration depended on the agent (the gate now registers on every tool call, and
+a refused replay says so); a condition or rider in the decision's paragraph ('Approved X. But hold the push
+until Monday.') or a heading lead-in ('=== GRO AUDIT ===') now excludes.
+Review round 4 (cold + adversarial, both FAIL) — fixed: keyword riders refused genuine approvals with side notes and
+missed retractions in the next paragraph. Now a decision stands unless a condition comes BEFORE it in its paragraph
+('If the replay passes,\nAPPROVE X') or the owner RETRACTS it anywhere after it ('never mind', 'scratch that', 'actually
+no', 'on second thought', 'hold off' / 'hold the push', 'not yet', 'unless', 'I'll decide later', "don't ship", a
+lone 'no'). Side notes count as side notes: 'Approve gex 1017. If anything breaks, page me.', "Don't forget the
+replay.", 'but keep the Slack noise down', '...and let me know once it's live' all approve. A bare ask points back
+only when it is exactly 'Approve?' / 'Approve before the open?' and the sentence before is not a bad status ('fails',
+'blocked', 'still'); the package counts only through its own PROPOSAL / Approval-ID line. The headless-launch block
+now matches claude / claude-code / codex anywhere a command runs (newline, env/nohup/(...)/sh -c/xargs/npx/osascript),
+outside commit/PR message text, sparing paths and non-prompt subcommands (mcp, config, --version). Registration
+rescans design files only when one changed. The hook's 'Owner approval recorded: <ID>' line is the confirmation the
+agent relays; 'reject <ID>' undoes it.
+Review round 5 (cold + adversarial, both FAIL) — the keyword approach kept trading one error for the other, so the
+FINAL rules are structural:
+- The decision sentence holds only the design's words and number (any hyphen or dash) plus 'please'/'thanks';
+  anything else in that sentence ('... so long as ...', '— NOT', '... and let me know ...') records nothing and the
+  hook says so.
+- Before it: excluded only if the sentence just before opens with a condition ('If', 'Unless', 'Assuming', 'Only if',
+  'As long as', 'Provided') or a clause trails into it with a comma.
+- After it: excluded only by a phrase that refers back to the decision ('never mind', 'scratch that', 'cancel that',
+  'forget it', 'kidding', 'nope', 'wait, no', 'actually no/hold/reject', 'hold off', 'reject that', 'undo that',
+  'I'll decide later', "don't approve", a sentence opening 'Stop' / 'Unless' / 'Provided' / 'Assuming' / 'As long as'
+  / 'Only if/after', or a lone 'no'). Side instructions ("don't push until CI is green", 'hold on to the QHM lots',
+  'use the waiver unless Gro is back') do not cancel.
+- Every recorded approval returns 'Owner approval recorded: <ID> ... Tell the owner in one line; reject <ID> undoes
+  it' — the agent relays it, so a misread is visible at once (the real backstop, not a perfect parser).
+- A bare 'approved'/'continue' counts only after an ask whose sentence names the ID ('Approve OCI-RESET-1017?') or a
+  package with 'PROPOSAL (<ID>):' / 'Approval-ID: <ID>' and YOUR DECISION; no pointing back to earlier sentences.
+- Launches are judged by where claude/codex runs in the command (line start, after ; & | ( { $( then/do/else, a
+  wrapper such as env/nohup/timeout/xargs/npx, inside sh -c '...' or osascript 'do script'), after undoing quote and
+  backslash splicing and matching globs; grep/rg/which/ls/git log/brew/npm ls/echo mentions are not launches. GUI
+  typing and clipboard tools (computer-use, browser) carrying approval wording are blocked. The design-file signature
+  includes inode and change time, which a user cannot set.
+Review round 6 (both narrow FAIL) — fixed: Claude text counts as the owner's ONLY when the transcript entry carries
+origin.kind == "human", which the app sets solely for text a person typed (verified on this account: every recent
+owner message has it; headless `claude -p` prompts, compaction summaries, hook feedback and notifications do not;
+owner messages from before the app added the field lack it and no longer count — fail-closed; every existing
+approval record still validates) — this
+closes the whole headless-launch class at the source, independent of command matching; more withdrawals and
+deferrals cancel ('Pending ...', 'On hold', 'Disregard that', 'Cancel.', 'Withdrawn', 'Ignore my last line', 'Not
+really', 'jk', 'lol no', 'Hmm, maybe later', a sentence opening 'Actually'), and a terse 1-3-word follow-up that is not
+courtesy cancels; launch detection adds /usr/bin/env, eval, exec -a, find -exec, tmux/screen, watch, parallel, script,
+$'..' quoting and {a,b} expansion (still enforced for `codex exec`, which the origin rule does not cover).
+Round 7 (final, scoped to forgery routes per the owner: "If I type approved, then it should be approved… This is
+really simple"): cold-2nd PASS, adversarial PASS. The cold reviewer's one-line note (an 'APPROVE <ID>' with no digits
+in a scheduled/spawned-session prompt) is fixed.
+Accepted, documented: GUI keystroke automation into the owner's own app window (osascript System Events keystroke,
+clipboard paste) would produce a genuine human-origin entry; it needs macOS Accessibility / computer-use access the
+owner grants, and approval-shaped text in computer-use / browser tool calls is blocked. Inline interpreter launches
+(`python -c "os.execvp('codex', ...)"`) are the documented script limit.
+Accepted, documented: an approval authorizes the Covers paths, not the prose of the design record (the cold-2nd,
+adversarial and Gro/GAI reviews check the code against the design); the validation cache trusts transcript size
+because transcripts are agent-unwritable through the gate; Codex sessions from other repositories are read too (an
+approval there counts only for an ID declared here, shown in that conversation or named with a word); rewinding a
+Claude conversation does not revoke an approval (type 'reject <ID>').
+Known limits (same-user files, documented, not fixable by a hook): a command that builds a store or transcript path
+indirectly (cd + glob, a script) is not caught by the command scan, and a Codex agent has no tool gate at all — any
+process running as the owner's user can write files he can write. A wording that is excluded fails closed: nothing is
+recorded and the hook says so. Indirect launches (a shell variable or script that runs claude/codex) are the same same-user limit. Tests: 96.
+
+### For Codex (and any other agent)
+1. Write the design record (`Approval-ID:`, `Covers:`, the required questions), then register it:
+   `python3 .claude/preship/owner_approval_capture.py --register` (any git commit/push does this too). An approval
+   typed before the design was registered does not count.
+2. Present it with the Approval-ID written out and end with an ask that NAMES it ('Approve OCI-RESET-1017?'), or use
+   the package format with 'PROPOSAL (OCI-RESET-1017):' and 'YOUR DECISION: APPROVE / REJECT / DEFER'. If two designs
+   are pending, ask about one. When the hook reports 'Owner approval recorded', tell the owner in one line.
+3. Do not ask him to type a fixed format and do not write approval files yourself: the git hook records his reply on
+   your next commit or push. Never start a scheduled task, headless run or session message carrying approval wording.
