@@ -53,7 +53,8 @@ _NEGATED_ASK = re.compile(r"(?i)\b(not|yet|later|rejected|failed|fail|instead|or
 # and 'ready for approval after the replay' are not asks).
 _ASK_TEMPLATE = re.compile(r"(?i)\bdo\s+you\s+approve\b|(?:^|:)\W*approve\b[^.!?\n]*\?|\byour\s+decision\b"
                            r"|\bready\s+for\s+your\s+approval\b|\bneeds?\s+your\s+approval\b|\bplease\s+approve\b"
-                           r"|\breply\s+\W?approve")
+                           r"|\breply\s+\W?approve|^\s*(?:<heartbeat>\s*)?(?:<message>\s*)?"
+                           r"please\s+say\s+\W?approve")
 _COURTESY = r"(?:,?\s*(?:please|thanks|thank\s+you))?"
 _LEAD_IN = re.compile(r"(?i)\b(returned|said|says|wrote|verdict|output)\b|^\s*(#|={3,}|-{3,})")
 # A decision stands unless the owner RETRACTS it later in the same message. Side notes ('If anything breaks, page me',

@@ -308,6 +308,36 @@ class SharedApprovalTests(Base):
             self.assertEqual(self.gate("Edit", {"file_path": "execution/thing.py"}), 0, word)
             self.owner_says("reject OCI-RESET-1017")
 
+    def test_affirmative_after_please_say_approve_request(self):
+        self.design("f6_flat.md", "F6-FLAT-1018")
+        self.agent_says(
+            '<heartbeat><message>Please say “Approve F6-FLAT-1018.” After that I will build it.</message></heartbeat>'
+        )
+        self.owner_says("Continue")
+        self.assertTrue(self.approved("F6-FLAT-1018"))
+
+    def test_affirmative_after_reported_or_conditional_say_is_refused(self):
+        self.design("f6_flat.md", "F6-FLAT-1018")
+        reports = (
+            'The prior agent wrote: “Please say Approve F6-FLAT-1018.”',
+            'The instructions are: please say “Approve F6-FLAT-1018.”',
+            'If the tests pass, please say “Approve F6-FLAT-1018.”',
+            'After Gro gives a verdict, ' + 'please say “Approve F6-FLAT-1018.”',
+            'Never, please say “Approve F6-FLAT-1018.”',
+        )
+        for report in reports:
+            self.agent_says(report)
+            self.owner_says("Continue")
+            self.assertFalse(self.approved("F6-FLAT-1018"), report)
+
+    def test_affirmative_after_please_say_two_designs_is_ambiguous(self):
+        self.design("f6_flat.md", "F6-FLAT-1018")
+        self.agent_says('Please say “Approve OCI-RESET-1017 and F6-FLAT-1018.”')
+        out = self.owner_says("Continue")[1]
+        self.assertFalse(self.approved())
+        self.assertFalse(self.approved("F6-FLAT-1018"))
+        self.assertIn("ambiguous", out)
+
     def test_affirmative_is_refused_when_ambiguous_or_untargeted(self):
         self.design("f6.md", "F6-TRIM-1017")
         self.agent_says("Two designs need approval: OCI-RESET-1017 and F6-TRIM-1017.")
