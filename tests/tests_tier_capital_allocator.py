@@ -12,6 +12,7 @@ from tempfile import TemporaryDirectory
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
 
+import config
 from execution import tier_capital_allocator as capital_module
 from execution.quarterly_hold_manager import (
     HoldPosition,
@@ -123,6 +124,13 @@ class AllocatorTests(unittest.TestCase):
             stop_price=95.0,
             regime_evidence={"regime": "normal", "verified": True},
         )
+        if tier == "forever6":
+            defaults["overnight"] = True
+            defaults["regime_evidence"] = {
+                "regime": "normal",
+                "verified": True,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
         defaults.update(kw)
         return EntryRequest(**defaults)
 
@@ -281,10 +289,129 @@ class AllocatorTests(unittest.TestCase):
         )
 
     def test_f6_uses_slippage_buffer_for_cash_reserve(self):
-        decision = self.alloc.admit_entry(self.req("forever6", qty=1, price_bound=100))
+        with patch(
+            "execution.overnight_capacity.overnight_k_strict_current",
+            return_value=1.9,
+        ):
+            decision = self.alloc.admit_entry(
+                self.req("forever6", qty=1, price_bound=100)
+            )
         self.assertTrue(decision.approved)
         assert decision.lease
         self.assertEqual(decision.lease.cash_reserve, 101.0)
+
+    def test_f6_normal_regime_enforces_ten_percent_equity_envelope(self):
+        self.broker.positions = [
+            SimpleNamespace(
+                symbol="NVDA", qty=2, side="long", current_price=100, market_value=200
+            )
+        ]
+        self.ledger = _ledger(NVDA={"forever6": 2})
+        denied = self.alloc.admit_entry(
+            self.req("forever6", qty=1, price_bound=100, overnight=True)
+        )
+        self.assertFalse(denied.approved)
+        self.assertEqual(denied.reason, "tier capital cap")
+
+    def test_f6_crash_regime_expands_to_thirty_percent_equity_envelope(self):
+        self.broker.positions = [
+            SimpleNamespace(
+                symbol="NVDA", qty=6, side="long", current_price=100, market_value=600
+            )
+        ]
+        self.ledger = _ledger(NVDA={"forever6": 6})
+        with patch(
+            "execution.overnight_capacity.overnight_k_strict_current",
+            return_value=1.9,
+        ):
+            approved = self.alloc.admit_entry(
+                self.req(
+                    "forever6",
+                    qty=1,
+                    price_bound=100,
+                    overnight=True,
+                    regime_evidence={
+                        "regime": "crash",
+                        "verified": True,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            )
+        self.assertTrue(approved.approved)
+
+    def test_f6_overnight_request_uses_dynamic_total_book_ceiling(self):
+        self.alloc.policy.targets["normal"]["forever6"] = 1.0
+        self.broker.positions = [
+            SimpleNamespace(
+                symbol="MSFT", qty=45, side="long", current_price=100, market_value=4500
+            )
+        ]
+        self.ledger = _ledger(MSFT={"qhm": 45})
+        with patch(
+            "execution.overnight_capacity.overnight_k_strict_current",
+            return_value=1.8,
+        ):
+            denied = self.alloc.admit_entry(
+                self.req("forever6", qty=1, price_bound=100, overnight=True)
+            )
+        self.assertFalse(denied.approved)
+        self.assertEqual(denied.reason, "overnight exposure cap")
+
+    def test_f6_rejects_invalid_dynamic_overnight_values_at_boundary(self):
+        self.alloc.policy.targets["normal"]["forever6"] = 1.0
+        for value in (float("nan"), float("inf"), 0.0, -1.0):
+            with self.subTest(value=value), patch(
+                "execution.overnight_capacity.overnight_k_strict_current",
+                return_value=value,
+            ):
+                denied = self.alloc.admit_entry(
+                    self.req("forever6", qty=1, price_bound=100)
+                )
+                self.assertFalse(denied.approved)
+                self.assertEqual(denied.reason, "overnight capacity unreadable")
+
+    def test_f6_rejects_prior_session_regime_evidence(self):
+        denied = self.alloc.admit_entry(
+            self.req(
+                "forever6",
+                qty=1,
+                price_bound=100,
+                regime_evidence={
+                    "regime": "crash",
+                    "verified": True,
+                    "ts": "2020-01-03T21:00:00+00:00",
+                },
+            )
+        )
+        self.assertFalse(denied.approved)
+        self.assertEqual(denied.reason, "F6 regime evidence is not current-session")
+
+    def test_f6_scoped_allocator_does_not_enable_other_tiers(self):
+        fake = Mock()
+        fake.admit_entry.return_value = capital_module.Decision(False, "scoped")
+        previous = capital_module._LIVE_ALLOCATOR
+        capital_module._LIVE_ALLOCATOR = fake
+        try:
+            with patch.object(
+                config, "TIER_CAPITAL_ALLOCATOR_ENABLED", False
+            ), patch.object(
+                config, "TIER_CAPITAL_FOREVER6_ENABLED", True, create=True
+            ):
+                day = capital_module.live_admit(
+                    "daytrade", "daytrade", "NVDA", "buy", 1, 100,
+                    stop_price=95,
+                )
+                f6 = capital_module.live_admit(
+                    "forever6", "forever6", "NVDA", "buy", 1, 100,
+                    stop_price=1, overnight=True,
+                )
+        finally:
+            capital_module._LIVE_ALLOCATOR = previous
+        self.assertTrue(day.approved)
+        self.assertEqual(day.reason, "allocator disabled")
+        self.assertFalse(f6.approved)
+        self.assertEqual(f6.reason, "scoped")
+        fake.admit_entry.assert_called_once()
 
     def test_account_gross_includes_pending_reversal_excess(self):
         # Existing long 5 shares; sell order 15 only adds 10 shares to gross.

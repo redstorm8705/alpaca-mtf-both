@@ -394,6 +394,22 @@ class TierCapitalAllocator:
             "verified"
         ):
             return self._decision(False, "unverified regime evidence", req)
+        if req.tier == "forever6":
+            try:
+                from datetime import datetime, timezone
+                from zoneinfo import ZoneInfo
+
+                evidence_ts = datetime.fromisoformat(
+                    str(req.regime_evidence["ts"]).replace("Z", "+00:00")
+                )
+                if evidence_ts.tzinfo is None:
+                    evidence_ts = evidence_ts.replace(tzinfo=timezone.utc)
+                if evidence_ts.astimezone(ZoneInfo("America/New_York")).date() != (
+                    datetime.now(ZoneInfo("America/New_York")).date()
+                ):
+                    raise ValueError("stale session")
+            except (KeyError, TypeError, ValueError):
+                return self._decision(False, "F6 regime evidence is not current-session", req)
         cash_reserve = (
             notional
             * (
@@ -461,12 +477,18 @@ class TierCapitalAllocator:
         tier_cap = tier_base * float(targets[req.tier])
         if tier_existing + tier_reserved + notional > tier_cap + 1e-9:
             return self._decision(False, "tier capital cap", req)
-        account_cap = equity * float(self.policy.gross_multipliers[regime])
-        if (
+        projected_gross = (
             max(snap["gross"] - exempt_existing, 0.0)
-            + snap["pending_gross"] + reserve_gross + notional
-            > account_cap + 1e-9
-        ):
+            + snap["pending_gross"]
+            + reserve_gross
+            + notional
+        )
+        # F6 is a cash-only overnight tier.  Its account-wide boundary is the
+        # bot's current data-derived Invariant #11 ceiling below, rather than the
+        # older intraday gross multiplier.  Day/Swing/QHM behavior stays exactly
+        # as it was while the shared allocator remains globally disabled.
+        account_cap = equity * float(self.policy.gross_multipliers[regime])
+        if req.tier != "forever6" and projected_gross > account_cap + 1e-9:
             return self._decision(False, "account gross cap", req)
         if req.tier not in _CASH_TIERS and bp < notional:
             return self._decision(False, "buying power unavailable", req)
@@ -475,12 +497,26 @@ class TierCapitalAllocator:
             equity * self.policy.maintenance_floor_equity_pct,
         )
         maintenance_reserve = notional
-        if (
-            req.overnight
-            and (snap["gross"] + snap["pending_gross"] + reserve_gross + notional)
-            > equity * 0.40
-        ):
-            return self._decision(False, "overnight exposure cap", req)
+        if req.overnight:
+            try:
+                from execution.overnight_capacity import (
+                    overnight_k,
+                    overnight_k_strict_current,
+                )
+
+                raw_k = (
+                    overnight_k_strict_current()
+                    if req.tier == "forever6"
+                    else overnight_k()
+                )
+                k_value = float(raw_k)
+                if not math.isfinite(k_value) or k_value <= 0:
+                    raise ValueError("invalid overnight K")
+                overnight_cap = equity * k_value
+            except Exception:
+                return self._decision(False, "overnight capacity unreadable", req)
+            if projected_gross > overnight_cap + 1e-9:
+                return self._decision(False, "overnight exposure cap", req)
         if equity - maint - reserve_maint - maintenance_reserve < maintenance_floor:
             return self._decision(False, "maintenance cushion", req)
         now = self.clock()
@@ -724,6 +760,8 @@ class TierCapitalAllocator:
             return "invalid risk price bound"
         if req.exact_cash_reserve and req.tier != "forever6":
             return "exact cash reserve is F6-only"
+        if req.tier == "forever6" and req.overnight is not True:
+            return "F6 capital requests must declare overnight exposure"
         if req.exact_cash_reserve and (
             req.order_type != "limit"
             or req.time_in_force != "day"
@@ -898,7 +936,17 @@ def live_admit(
     """Live caller bridge. Disabled only for backwards-compatible unit imports; enabled config fails closed."""
     import config
 
-    if not bool(getattr(config, "TIER_CAPITAL_ALLOCATOR_ENABLED", False)):
+    # The shared allocator cannot be re-enabled for the active Day/Swing/QHM
+    # paths until its separate stale-ledger redesign is complete.  F6 is still
+    # dark, but its launch must never inherit the old automatic approval.  Its
+    # dedicated switch activates the same durable allocator only for F6, leaving
+    # every currently-live tier on its existing admission controls.
+    enabled = bool(getattr(config, "TIER_CAPITAL_ALLOCATOR_ENABLED", False))
+    if tier == "forever6":
+        enabled = enabled or bool(
+            getattr(config, "TIER_CAPITAL_FOREVER6_ENABLED", False)
+        )
+    if not enabled:
         return Decision(True, "allocator disabled")
     global _LIVE_ALLOCATOR
     if _LIVE_ALLOCATOR is None:

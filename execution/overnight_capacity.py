@@ -95,6 +95,31 @@ def overnight_k() -> float:
         return cap
 
 
+def overnight_k_strict_current() -> float:
+    """Return today's persisted dynamic K or raise.
+
+    F6 uses this strict reader at its money boundary because its activation is
+    specifically allowed to expand capital during a crash.  Existing callers
+    retain ``overnight_k()`` and its approved last-good/ceiling fallback.  A
+    missing, malformed, stale, nonpositive, nonfinite, or above-ceiling record
+    is not current dynamic evidence and cannot authorize a new F6 buy.
+    """
+    cap = ceiling()
+    st = _load()
+    if not isinstance(st, dict):
+        raise ValueError("dynamic overnight K state is unavailable")
+    today = f"{datetime.now(ET):%Y-%m-%d}"
+    if st.get("session") != today:
+        raise ValueError("dynamic overnight K state is not current-session")
+    try:
+        value = float(st["k_dyn"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("dynamic overnight K is malformed") from exc
+    if not math.isfinite(value) or value <= 0 or value > cap:
+        raise ValueError("dynamic overnight K is outside its approved bounds")
+    return value
+
+
 def compute_k_raw(weights: dict, closes, maint_ratio: float, vix=None, vix_scale_fallback=None) -> "dict | None":
     """Pure computation (no I/O). weights: {symbol: signed position value / equity}; closes: DataFrame of split-
     adjusted daily closes (columns = symbols); maint_ratio: m; vix: Series of daily VIX closes or None;

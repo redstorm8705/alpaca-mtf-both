@@ -1013,6 +1013,10 @@ DAYTRADE_TRACK_M_OFF_CONSEC_LOSSES = 4      # PROV:daytier-track-m-2026-10-05 â€
 # ('positionside.long') as malformed and denied every entry from every tier since 2026-09-29.
 # Re-enable only after the enum fix + ledger crossed-row fix ship and an OCI probe shows admissions.
 TIER_CAPITAL_ALLOCATOR_ENABLED = False
+# F6-only activation is safe while the shared allocator stays off: F6 itself is
+# still dark, and the scoped switch prevents its eventual starter from receiving
+# the allocator's legacy automatic approval.  Day/Swing/QHM behavior is unchanged.
+TIER_CAPITAL_FOREVER6_ENABLED = True
 TIER_CAPITAL_CASH_FLOOR_USD = 200.0  # PROV:live-tier-capital-allocator-2026-09-27
 TIER_CAPITAL_MAINT_FLOOR_USD = 650.0  # PROV:live-tier-capital-allocator-2026-09-27
 TIER_CAPITAL_DAYTRADE_TARGET_PCT = 0.40  # PROV:live-tier-capital-allocator-2026-09-27
@@ -1295,6 +1299,13 @@ def validate_config():
         TIER_CAPITAL_DAYTRADE_TARGET_PCT, TIER_CAPITAL_SWING_TARGET_PCT,
         TIER_CAPITAL_QHM_TARGET_PCT, TIER_CAPITAL_FOREVER6_TARGET_PCT,
     )
+    if not isinstance(TIER_CAPITAL_FOREVER6_ENABLED, bool):
+        errors.append("TIER_CAPITAL_FOREVER6_ENABLED must be a bool (True/False)")
+    if FOREVER6_ENABLED and not TIER_CAPITAL_FOREVER6_ENABLED:
+        errors.append(
+            "FOREVER6_ENABLED requires TIER_CAPITAL_FOREVER6_ENABLED=True so every "
+            "F6 buy has a durable dynamic capital lease"
+        )
     if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
                and 0 <= v <= 1 for v in _capital_targets):
         errors.append("tier-capital targets must be finite fractions in [0, 1]")
