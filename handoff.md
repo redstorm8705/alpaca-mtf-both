@@ -23,10 +23,10 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - Known: this week's and 9/28's weekly reports fail closed on owner manual sales tagged 'unattributed' (LLY, GEV) —
   fixed by queue item (3) below.
 
-**⏩ EXACT NEXT ACTION (Claude):** CONV-1018 conviction sizing (design `logs/design_records/earned_concentration_sizing_2026-10-18.md`,
-NOT approved, no code): 6% replay done and stop/scale-out/gap mechanics aligned 4/4 (Thorp, Taleb, Gro, GAI) on
-2026-10-19 — exact formulas in the design's "6% replay + mechanics review" section; replay
-`logs/replays/conv1018_6pct_replay.py`. Next: owner package -> on approval build per the mandatory patch sequence.
+**⏩ EXACT NEXT ACTION (Claude):** CONV-1018 sizing diff is merged (PR #709) and deployed, unexercised; verify with
+`gh pr view 709 --json state` (captured: MERGED). Next: (a) post-live audit of PR #709 after Monday 10/19's session
+(grep `change=conv-1018-sizing` in the Day runner log); (b) build the half-at-2R scale-out as the second CONV-1018
+diff (design section "Gate-compliant revision", item 7). Details in logs/tb_audit_log.md.
 Then the queue: (2) Swing-tier
 breakdown shorts, (3) weekly reports count owner/accidental trades with an asterisk (also unblocks the weekly report),
 (4) gate false positives (incl. the launch check flagging a `claude-code` URL in PR bodies). Monday 10/19: GEX-1017
