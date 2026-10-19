@@ -1275,7 +1275,7 @@ def _cancel_daytrade_exit_legs(symbol: str) -> None:
     for k, v in st.items():
         if not (k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol):
             continue
-        for _f in ("oco_order_id", "stop_order_id", "tp_order_id"):
+        for _f in ("oco_order_id", "stop_order_id", "tp_order_id", "stop2_order_id"):
             _id = str(v.get(_f) or "")
             if _id:
                 ids.add(_id)
@@ -1301,7 +1301,7 @@ def _cancel_recorded_exit_legs_confirmed(symbol: str) -> "bool | None":
     for k, v in state.items():
         if not (k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol):
             continue
-        for field in ("oco_order_id", "stop_order_id", "tp_order_id"):
+        for field in ("oco_order_id", "stop_order_id", "tp_order_id", "stop2_order_id"):
             order_id = str(v.get(field) or "")
             if order_id:
                 ids.add(order_id)
@@ -1498,6 +1498,7 @@ def _flatten_targets() -> dict:
                                     "stop_order_id": str(v.get("stop_order_id") or ""),
                                     "tp_order_id": str(v.get("tp_order_id") or ""),
                                     "oco_order_id": str(v.get("oco_order_id") or ""),
+                                    "stop2_order_id": str(v.get("stop2_order_id") or ""),
                                     "geometry_error": str(v.get("geometry_error") or "")}
                 elif sym and sym in targets:
                     # Enrich the log-sourced target with the state's recorded exit-leg ids so the
@@ -1509,6 +1510,8 @@ def _flatten_targets() -> dict:
                         targets[sym]["tp_order_id"] = str(v.get("tp_order_id") or "")
                     if not targets[sym].get("oco_order_id"):
                         targets[sym]["oco_order_id"] = str(v.get("oco_order_id") or "")
+                    if not targets[sym].get("stop2_order_id"):
+                        targets[sym]["stop2_order_id"] = str(v.get("stop2_order_id") or "")
                     if not targets[sym].get("geometry_error"):
                         targets[sym]["geometry_error"] = str(v.get("geometry_error") or "")
     except Exception as e:  # noqa: BLE001
@@ -3121,9 +3124,22 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         # _compute_stop_price which aborts a loss-side fade). RIDE → target is None, so use an
         # R-multiple of the actual entry→stop distance on the profit side (DAYTRADE_RIDE_TARGET_R).
         oco = None
+        _prot_qty = filled_qty_i   # shares the plain-stop fallback below protects
+        # CONV-1018 SCALE-OUT (owner approval; design record earned_concentration_sizing_2026-10-18.md, "Gate-compliant
+        # revision" item 7): a CONV-sized lot exits 1/(number of targets + 1) of its shares in the OCO at the take-profit;
+        # the rest rides under a plain stop at the same price to the normal exits (stop, EOD). Every other lot keeps one
+        # OCO for the whole fill. Kill flag DAYTRADE_CONV_SCALE_OUT_ENABLED (only an explicit False disables it).
+        _tp_targets = (tp_px,) if tp_px is not None else ()
+        _oco_qty = filled_qty_i
+        if (_conv_sized is not None and _tp_targets and _stop_dist > 0
+                and _cfg("DAYTRADE_CONV_SCALE_OUT_ENABLED", True) is not False):
+            _part = filled_qty_i // (len(_tp_targets) + 1)
+            if _part >= 1:
+                _oco_qty = _part
+        _rest_qty = filled_qty_i - _oco_qty
         if tp_px is not None and _stop_dist > 0:
             try:
-                oco = broker.submit_oco_exit(symbol, filled_qty_i, direction, tp_px, stop_px, tier="daytrade")
+                oco = broker.submit_oco_exit(symbol, _oco_qty, direction, tp_px, stop_px, tier="daytrade")
             except Exception as e:  # noqa: BLE001 — a transient raise falls through to the plain-stop fallback
                 logger.warning("[%s] day-tier OCO exit raised: %s — falling back to a plain stop", symbol, e)
                 oco = None
@@ -3147,7 +3163,54 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             except Exception:  # noqa: BLE001 — target logging is best-effort; protection gates safety
                 pass
             logger.info("[%s] day-tier PROTECTED (OCO): %d sh @ fill %.2f, stop %.2f, target %.2f",
-                        symbol, filled_qty_i, fill_px, stop_px, _tp_num)
+                        symbol, _oco_qty, fill_px, stop_px, _tp_num)
+            if _rest_qty >= 1:
+                # The rest of a split lot: a plain stop at the same price. Never cancels other orders (the OCO holds
+                # the other part). On failure the split is undone: the OCO is cancelled and the whole lot falls to the
+                # plain-stop path below (whose broker call clears any leg still holding shares), never left naked.
+                _rest_obj = None
+                for _ra in range(int(config.DAYTRADE_STOP_RETRIES) + 1):
+                    try:
+                        _rest_obj = broker.submit_day_stop_order(symbol, _rest_qty, stop_side, stop_px, tier="daytrade",
+                                                                 allow_cancel_blocking=False)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("[%s] scale-out rest stop raised (attempt %d): %s", symbol, _ra + 1, e)
+                        _rest_obj = None
+                    if _stop_is_live(_rest_obj):
+                        break
+                    _rest_obj = None
+                    time.sleep(float(config.DAYTRADE_STOP_RETRY_WAIT_S))
+                if _rest_obj is not None:
+                    _stop2_id = str(getattr(_rest_obj, "id", "") or "")
+                    state[key]["stop2_order_id"] = _stop2_id
+                    _save_state(state)
+                    day_tier_logger.log_stop_placed(entry_coid, symbol, stop_order_id=_stop2_id, stop_price=stop_px)
+                    logger.info("[%s] change=conv-1018-scale-out %d sh at target %.2f (OCO) + %d sh riding, stop %.2f",
+                                symbol, _oco_qty, _tp_num, _rest_qty, stop_px)
+                else:
+                    _page(f"[{symbol}] day-tier scale-out: the stop for the riding {_rest_qty} sh was not confirmed — "
+                          f"cancelling the split OCO and protecting the whole {filled_qty_i} sh with one plain stop.")
+                    _cancel_daytrade_exit_legs(symbol)
+                    # A leg may have filled before the cancel (cold-2nd 2026-10-19): book it, then protect only what is
+                    # still owned, so the fallback stop never covers more than the lot holds.
+                    _undo_tgt = {"trade_id": entry_coid, "symbol": symbol, "side": direction, "entry_price": fill_px,
+                                 "qty": filled_qty_i, "stop_order_id": stop_leg_id, "tp_order_id": tp_leg_id}
+                    _undo = _record_confirmed_stop_exit(_undo_tgt)
+                    if _undo is True:
+                        state[key].update(state="flattened_no_stop")
+                        _save_state(state)
+                        return True
+                    if _undo is None:
+                        _halt_unresolved_exit(symbol, "Split-exit undo: a leg fill could not be read; protecting the "
+                                                      "whole lot and halting new entries until reconciled.")
+                    _prot_qty = max(1, int(_undo_tgt.get("qty") or filled_qty_i))
+                    # The booking saved a fresh state copy with the reduced qty; never write the stale in-memory qty back.
+                    state = _load_state()
+                    if not isinstance(state.get(key), dict):
+                        state[key] = {"bar_id": bar_id, "coid": entry_coid, "symbol": symbol, "side": direction}
+                    state[key].update(state="filled", fill_qty=_prot_qty)
+                    _save_state(state)
+                    protected = False
 
         if not protected:
             # OCO unavailable/rejected/inverted-geometry → fall back to the plain protective stop
@@ -3163,7 +3226,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                     except Exception:
                         pass
                 try:
-                    stop_obj = broker.submit_day_stop_order(symbol, filled_qty_i, stop_side, stop_px, tier="daytrade")
+                    stop_obj = broker.submit_day_stop_order(symbol, _prot_qty, stop_side, stop_px, tier="daytrade")
                 except Exception as e:  # noqa: BLE001 — a transient submit raise is a RETRY, not a naked ride
                     logger.warning("[%s] day-tier stop submit raised (attempt %d): %s", symbol, attempt + 1, e)
                     stop_obj = None
@@ -3380,7 +3443,7 @@ def _has_live_daytrade_stop(symbol: str) -> "bool | None":
         st = _load_state()
         for k, v in st.items():
             if k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol:
-                for _f in ("stop_order_id", "oco_order_id", "tp_order_id"):
+                for _f in ("stop_order_id", "oco_order_id", "tp_order_id", "stop2_order_id"):
                     _id = str(v.get(_f) or "")
                     if _id:
                         recorded_ids.add(_id)
@@ -3422,7 +3485,7 @@ def _foreign_stop_covers(symbol: str, side: str, qty: int, tiers_out: "list | No
         own_ids: set = set()
         for k, v in _load_state().items():
             if k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol:
-                for _f in ("stop_order_id", "oco_order_id", "tp_order_id"):
+                for _f in ("stop_order_id", "oco_order_id", "tp_order_id", "stop2_order_id"):
                     if v.get(_f):
                         own_ids.add(str(v.get(_f)))
         want_side = "sell" if side == "long" else "buy"
@@ -3576,6 +3639,9 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
     _state_stop = str(target.get("stop_order_id") or "")
     if _state_stop:
         stop_cands.append((_state_stop, "protective_stop"))
+    _state_stop2 = str(target.get("stop2_order_id") or "")
+    if _state_stop2:
+        stop_cands.append((_state_stop2, "protective_stop"))
     _state_tp = str(target.get("tp_order_id") or "")
     if _state_tp:
         tp_cands.append((_state_tp, "take_profit"))
@@ -3587,12 +3653,26 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
     # TP legs are polled only after every stop shows no fill — so a normal TP-harvest (the stop leg
     # auto-cancelled → 0 fill) still books take_profit.
     ordered = list(reversed(stop_cands)) + list(reversed(tp_cands))
-    ordered = [(i, r) for i, r in ordered if i]
+    # Each order once (an id can come from both the journal and the state record): `accounted` is read from the journal
+    # snapshot taken above, so a second pass over the same id would book its fill twice.
+    _seen: set = set()
+    _unique = []
+    for i, r in ordered:
+        if i and i not in _seen:
+            _seen.add(i)
+            _unique.append((i, r))
+    ordered = _unique
     if not ordered:
         return False
     any_readable = False
     any_unreadable = False
+    booked_partial = False
     for stop_id, _reason in ordered:
+        # A split lot (CONV-1018 scale-out) can close through several orders on one tick (both stops at the same
+        # price, or the take-profit half then the riding stop): keep booking until the owned qty is covered.
+        expected = int(target.get("qty") or 0)
+        if expected < 1:
+            return True if booked_partial else None
         order_readable, qty, price = _confirmed_order_fill(stop_id, expected)
         any_readable = any_readable or order_readable
         any_unreadable = any_unreadable or not order_readable
@@ -3612,10 +3692,11 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
             partial_qty = int(math.floor(delta))
             if partial_qty < 1 or price <= 0:
                 return None
-            if partial_qty + 1e-9 < expected:
+            if partial_qty < expected:
                 if _record_partial_exit(target, stop_id, partial_qty, price, price,
                                         f"{_reason}_partial"):
-                    return False
+                    booked_partial = True
+                    continue
                 return None
             entry = abs(float(target.get("entry_price") or 0.0))
             side = str(target.get("side") or "long")
@@ -3639,7 +3720,37 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
         # qty is cumulative. When delta==0 this exact fill is already journaled; it cannot close
         # the current residual merely because the old cumulative qty equals/exceeds residual qty.
         continue
+    if booked_partial:
+        # Booked what filled; the rest is still owned. An unreadable leg means another fill may be unbooked: unknown,
+        # never "nothing else filled" (masked-loss seat 2026-10-19 — False let the EOD exit sell shares not owned).
+        return None if any_unreadable else False
     return False if any_readable and not any_unreadable else None
+
+
+def _split_leg_fill_unbooked(target: dict) -> bool:
+    """True when a recorded exit leg of a split lot (OCO stop, take-profit, riding stop) shows more filled shares than
+    the journal has booked for it — one non-polling order read per leg. An unreadable leg or journal -> True (the full
+    booking path then decides, and fails safe). Never raises."""
+    from strategy import day_tier_logger
+    trade_id = str(target.get("trade_id") or "")
+    try:
+        events, readable = day_tier_logger.read_events_checked(trade_id)
+        if not readable:
+            return True
+        for field in ("stop_order_id", "tp_order_id", "stop2_order_id"):
+            oid = str(target.get(field) or "")
+            if not oid:
+                continue
+            ok, filled = _order_filled_qty(oid)
+            if not ok:
+                return True
+            booked = sum(abs(float(e.get("fill_qty") or 0.0)) for e in events
+                         if e.get("event") in ("partial_exit_fill", "exit_fill") and str(e.get("order_id") or "") == oid)
+            if filled > booked:
+                return True
+        return False
+    except Exception:  # noqa: BLE001 — unknown -> let the booking path decide
+        return True
 
 
 def _halt_unresolved_exit(symbol: str, detail: str) -> None:
@@ -3826,6 +3937,11 @@ def reconcile_open_state(allow_flatten: bool = True) -> dict:
             stop_state = _has_live_daytrade_stop(sym)
             if stop_state is True:
                 summary["protected"] += 1
+                if tgt.get("stop2_order_id") and sym not in submitted and _split_leg_fill_unbooked(tgt):
+                    # CONV-1018 split exit: book a filled take-profit half (or one filled stop) while the other half is
+                    # still protected. Partial fills reduce the owned qty; never closes a live lot. Called only when a
+                    # single non-polling read shows an unbooked fill, so a working lot costs one read per leg per tick.
+                    _record_confirmed_stop_exit(tgt)
                 continue
             if stop_state is None:
                 summary["unreadable"] += 1

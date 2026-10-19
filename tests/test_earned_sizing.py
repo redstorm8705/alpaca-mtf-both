@@ -363,5 +363,277 @@ class PlaceEntryConv(unittest.TestCase):
         ce.assert_not_called()
 
 
+class ScaleOutExit(unittest.TestCase):
+    """CONV-1018 split exit: a CONV-sized lot puts 1/(targets + 1) in the OCO at the target and the rest under a plain
+    stop; other lots keep one OCO for the whole fill. Every broker call is mocked."""
+
+    def _run(self, conv_sized, filled=10, rest_ok=True, oco_ok=True, undo_booked=0):
+        from types import SimpleNamespace
+        from execution import broker
+        from execution import day_trade_manager as dtm
+        from data.live_price import LivePrice
+        calls = {"oco": [], "stops": [], "cancel_legs": 0}
+        state: dict = {}
+        acct = SimpleNamespace(equity="2500", last_equity="2500", buying_power="9000", maintenance_margin="0",
+                               trading_blocked=False, account_blocked=False)
+        trigger = {"trigger": "ENTER", "direction": "long", "mode": "RIDE", "entry_ref": 100.0, "target": None,
+                   "wall_ref": 97.0}
+
+        def _oco(sym, qty, side, tp, stop, tier="daytrade"):
+            calls["oco"].append((qty, tp, stop))
+            return SimpleNamespace(id="TP1", legs=[SimpleNamespace(id="SL1", order_type="stop")]) if oco_ok else None
+
+        def _stop(sym, qty, side, stop, tier="daytrade", **k):
+            calls["stops"].append((qty, stop, k.get("allow_cancel_blocking", True)))
+            if not rest_ok and k.get("allow_cancel_blocking") is False:
+                return None
+            return SimpleNamespace(id=f"ST{len(calls['stops'])}")
+
+        def _cancel_legs(sym):
+            calls["cancel_legs"] += 1
+
+        conv = (({"proven": True, "band": "middle", "band_mean_r": 0.3, "band_n": 12}, conv_sized)
+                if conv_sized else (None, None))
+        pos = SimpleNamespace(qty=str(filled), side="long", current_price="100.1", avg_entry_price="100.0")
+        import contextlib
+        with contextlib.ExitStack() as _es:
+            _es.enter_context(mock.patch.object(dtm, "_enabled", return_value=True))
+            _es.enter_context(mock.patch.object(dtm, "_load_state", return_value=state))
+            _es.enter_context(mock.patch.object(dtm, "_save_state", return_value=True))
+            _es.enter_context(mock.patch.object(dtm, "_room_stop", side_effect=lambda _s, _d, _l, st: (st, "kept")))
+            _es.enter_context(mock.patch.object(dtm, "_account_entry_halt_reason", return_value=None))
+            _es.enter_context(mock.patch.object(dtm, "_daily_risk_used", return_value=(0.0, 0.0, "")))
+            _es.enter_context(mock.patch.object(dtm, "_conv_entry", return_value=conv))
+            _es.enter_context(mock.patch.object(dtm, "_confirm_fill", return_value=True))
+            _es.enter_context(mock.patch.object(dtm, "_await_entry_terminal", return_value=True))
+            _es.enter_context(mock.patch.object(dtm, "_final_fill", return_value=(float(filled), 100.0)))
+            _es.enter_context(mock.patch.object(dtm, "_cancel_daytrade_exit_legs", side_effect=_cancel_legs))
+
+            def _undo_book(t):
+                t["qty"] = int(t["qty"]) - undo_booked
+                return False
+            _es.enter_context(mock.patch.object(dtm, "_record_confirmed_stop_exit", side_effect=_undo_book))
+            _es.enter_context(mock.patch.object(dtm.time, "sleep"))
+            _es.enter_context(mock.patch("data.live_price.live_price", return_value=LivePrice(100.0, "iex_trade", 1.0)))
+            _es.enter_context(mock.patch("data.alpaca_data.get_latest_quote", return_value=None))
+            _es.enter_context(mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={}))
+            _es.enter_context(mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)))
+            _es.enter_context(mock.patch("strategy.day_tier_logger.log_decision", return_value=True))
+            _es.enter_context(mock.patch("strategy.day_tier_logger.log_entry_fill", return_value=True))
+            _es.enter_context(mock.patch("strategy.day_tier_logger.log_stop_placed", return_value=True))
+            _es.enter_context(mock.patch("strategy.day_tier_logger.log_target_placed", return_value=True))
+            _es.enter_context(mock.patch("trade_logger.log_event", return_value=True))
+            _es.enter_context(mock.patch.object(broker, "get_account", return_value=acct))
+            _es.enter_context(mock.patch.object(broker, "get_open_positions", return_value=[]))
+            _es.enter_context(mock.patch.object(broker, "get_open_orders", return_value=[]))
+            _es.enter_context(mock.patch.object(broker, "get_open_position", return_value=pos))
+            _es.enter_context(mock.patch.object(broker, "get_asset_maintenance_margin_rate", return_value=0.30))
+            _es.enter_context(mock.patch.object(broker, "cancel_open_orders_for_symbol", return_value=None))
+            _es.enter_context(mock.patch.object(broker, "submit_oco_exit", side_effect=_oco))
+            _es.enter_context(mock.patch.object(broker, "submit_day_stop_order", side_effect=_stop))
+            _es.enter_context(mock.patch("execution.tier_capital_allocator.live_admit",
+                           return_value=SimpleNamespace(approved=True, lease=None, reason="")))
+            _es.enter_context(mock.patch("execution.tier_capital_allocator.live_order_id", return_value="DT-x"))
+            _es.enter_context(mock.patch("execution.tier_capital_allocator.live_bind", return_value=True))
+            _es.enter_context(mock.patch("execution.tier_capital_allocator.live_release", return_value=None))
+            _es.enter_context(mock.patch.object(broker, "submit_limit_order",
+                                  return_value=SimpleNamespace(id="E1", client_order_id="DT-x")))
+            ok = dtm.place_entry("AAPL", {"would_consider": True, "conviction": 0.5}, trigger,
+                                 {"size_ok": True, "shares": filled, "conviction": 0.5, "track": "A"},
+                                 bar_id="20261020-0945", equity=2500.0)
+        rec = next((v for k, v in state.items() if k.startswith("entry::")), {})
+        return ok, calls, rec
+
+    def _sized(self, qty):
+        return {"ok": True, "stop": 99.40, "qty": qty, "per_share": 1.2, "why": "conv test"}
+
+    def test_conv_lot_splits_half_at_target(self):
+        ok, calls, rec = self._run(self._sized(10), filled=10)
+        self.assertTrue(ok)
+        self.assertEqual(calls["oco"][0][0], 5)                       # half in the OCO
+        self.assertEqual(calls["stops"], [(5, 99.40, False)])         # the rest: plain stop, cancels nothing
+        self.assertEqual(rec.get("stop2_order_id"), "ST1")
+        self.assertEqual(rec.get("state"), "protected")
+
+    def test_odd_lot_rounds_target_part_down(self):
+        _ok, calls, _rec = self._run(self._sized(3), filled=3)
+        self.assertEqual(calls["oco"][0][0], 1)
+        self.assertEqual(calls["stops"][0][0], 2)
+
+    def test_one_share_not_split(self):
+        _ok, calls, rec = self._run(self._sized(1), filled=1)
+        self.assertEqual(calls["oco"][0][0], 1)
+        self.assertEqual(calls["stops"], [])
+        self.assertNotIn("stop2_order_id", rec)
+
+    def test_non_conv_lot_keeps_one_oco(self):
+        _ok, calls, rec = self._run(None, filled=10)
+        self.assertEqual(calls["oco"][0][0], 10)
+        self.assertEqual(calls["stops"], [])
+        self.assertNotIn("stop2_order_id", rec)
+
+    def test_rest_stop_failure_undoes_split(self):
+        ok, calls, rec = self._run(self._sized(10), filled=10, rest_ok=False)
+        self.assertTrue(ok)
+        self.assertEqual(calls["cancel_legs"], 1)                      # the split OCO was cancelled
+        self.assertEqual(calls["stops"][-1], (10, 99.40, True))       # whole lot under one plain stop
+        self.assertNotIn("stop2_order_id", rec)
+        self.assertEqual(rec.get("state"), "protected")
+
+    def test_undo_after_tp_fill_protects_only_held_shares(self):
+        # the take-profit half filled before the undo cancel: it is booked, and the fallback stop covers the 5 left
+        _ok, calls, _rec = self._run(self._sized(10), filled=10, rest_ok=False, undo_booked=5)
+        self.assertEqual(calls["stops"][-1], (5, 99.40, True))
+
+    def test_oco_failure_falls_back_to_whole_lot_stop(self):
+        _ok, calls, rec = self._run(self._sized(10), filled=10, oco_ok=False)
+        self.assertEqual(calls["stops"], [(10, 99.40, True)])
+        self.assertNotIn("stop2_order_id", rec)
+
+    def test_kill_flag_disables_split(self):
+        from execution import day_trade_manager as dtm
+        real = dtm._cfg
+        with mock.patch.object(dtm, "_cfg", side_effect=lambda n, d: False if n == "DAYTRADE_CONV_SCALE_OUT_ENABLED"
+                               else real(n, d)):
+            _ok, calls, _rec = self._run(self._sized(10), filled=10)
+        self.assertEqual(calls["oco"][0][0], 10)
+
+
+class SplitLotBooking(unittest.TestCase):
+    """A filled take-profit half is booked as a partial; the riding half's stop books the rest."""
+
+    def test_tp_half_then_stop_half(self):
+        from types import SimpleNamespace
+        from execution import day_trade_manager as dtm
+        orders = {"SL1": SimpleNamespace(status="canceled", filled_qty="0", filled_avg_price=None),
+                  "ST2": SimpleNamespace(status="new", filled_qty="0", filled_avg_price=None),
+                  "TP1": SimpleNamespace(status="filled", filled_qty="5", filled_avg_price="102.4")}
+        journal = [{"event": "entry_fill", "trade_id": "C1"},
+                   {"event": "stop_placed", "trade_id": "C1", "stop_order_id": "SL1"},
+                   {"event": "target_placed", "trade_id": "C1", "tp_order_id": "TP1"},
+                   {"event": "stop_placed", "trade_id": "C1", "stop_order_id": "ST2"}]
+        tgt = {"trade_id": "C1", "symbol": "AAPL", "side": "long", "entry_price": 100.0, "qty": 10,
+               "stop_order_id": "SL1", "tp_order_id": "TP1", "stop2_order_id": "ST2"}
+        booked = []
+        with mock.patch("execution.broker.get_order", side_effect=lambda oid: orders[oid]), \
+                mock.patch.object(dtm.time, "sleep"), \
+                mock.patch("strategy.day_tier_logger.read_events_checked", return_value=(journal, True)), \
+                mock.patch.object(dtm, "_record_partial_exit",
+                                  side_effect=lambda t, oid, q, px, mk, why: booked.append((oid, q, px, why)) or True):
+            self.assertFalse(dtm._record_confirmed_stop_exit(tgt))   # partial, the lot stays open
+        self.assertEqual(booked, [("TP1", 5, 102.4, "take_profit_partial")])
+
+
+class SplitLotStopOutSameTick(unittest.TestCase):
+    """Both stops of a split lot fill before the next tick (cold-2nd + masked-loss seat 2026-10-19): one call books
+    both halves (partial + exit_fill), returns True, and no halt follows. Each order is booked once."""
+
+    def _book(self, orders, journal, tgt):
+        from execution import day_trade_manager as dtm
+        partials, exits = [], []
+
+        def _partial(t, oid, q, px, mk, why):
+            partials.append((oid, q))
+            t["qty"] = max(0, int(t.get("qty") or 0) - q)
+            return True
+        with mock.patch("execution.broker.get_order", side_effect=lambda oid: orders[oid]), \
+                mock.patch.object(dtm.time, "sleep"), \
+                mock.patch("strategy.day_tier_logger.read_events_checked", return_value=(journal, True)), \
+                mock.patch("strategy.day_tier_logger.log_exit_fill",
+                           side_effect=lambda *a, **k: exits.append((k["order_id"], k["fill_qty"], k["realized_pnl"]))
+                           or True), \
+                mock.patch("trade_logger.log_event", return_value=True), \
+                mock.patch.object(dtm, "_record_partial_exit", side_effect=_partial):
+            res = dtm._record_confirmed_stop_exit(tgt)
+        return res, partials, exits
+
+    def test_both_stops_filled_books_whole_lot_once(self):
+        from types import SimpleNamespace
+        orders = {"SL1": SimpleNamespace(status="filled", filled_qty="5", filled_avg_price="99.38"),
+                  "ST2": SimpleNamespace(status="filled", filled_qty="5", filled_avg_price="99.36"),
+                  "TP1": SimpleNamespace(status="canceled", filled_qty="0", filled_avg_price=None)}
+        journal = [{"event": "entry_fill", "trade_id": "C1"},
+                   {"event": "stop_placed", "trade_id": "C1", "stop_order_id": "SL1"},
+                   {"event": "target_placed", "trade_id": "C1", "tp_order_id": "TP1"},
+                   {"event": "stop_placed", "trade_id": "C1", "stop_order_id": "ST2"}]
+        tgt = {"trade_id": "C1", "symbol": "AAPL", "side": "long", "entry_price": 100.0, "qty": 10,
+               "stop_order_id": "SL1", "tp_order_id": "TP1", "stop2_order_id": "ST2"}
+        res, partials, exits = self._book(orders, journal, tgt)
+        self.assertTrue(res)
+        self.assertEqual(partials, [("ST2", 5)])                       # booked once despite two sources
+        self.assertEqual(len(exits), 1)
+        self.assertEqual(exits[0][0], "SL1")
+        self.assertEqual(exits[0][1], 5.0)
+        self.assertAlmostEqual(exits[0][2], -3.1)                      # (99.38 - 100) x 5: the loss is booked
+
+    def test_tp_half_then_riding_stop_same_tick(self):
+        from types import SimpleNamespace
+        orders = {"SL1": SimpleNamespace(status="canceled", filled_qty="0", filled_avg_price=None),
+                  "ST2": SimpleNamespace(status="filled", filled_qty="5", filled_avg_price="99.40"),
+                  "TP1": SimpleNamespace(status="filled", filled_qty="5", filled_avg_price="101.20")}
+        journal = [{"event": "entry_fill", "trade_id": "C1"},
+                   {"event": "stop_placed", "trade_id": "C1", "stop_order_id": "SL1"},
+                   {"event": "target_placed", "trade_id": "C1", "tp_order_id": "TP1"},
+                   {"event": "stop_placed", "trade_id": "C1", "stop_order_id": "ST2"}]
+        tgt = {"trade_id": "C1", "symbol": "AAPL", "side": "long", "entry_price": 100.0, "qty": 10,
+               "stop_order_id": "SL1", "tp_order_id": "TP1", "stop2_order_id": "ST2"}
+        res, partials, exits = self._book(orders, journal, tgt)
+        self.assertTrue(res)
+        self.assertEqual(partials, [("ST2", 5)])                       # the loss half first (stops before targets)
+        self.assertEqual([e[0] for e in exits], ["TP1"])
+
+    def test_unreadable_leg_after_partial_is_unknown(self):
+        from types import SimpleNamespace
+        orders = {"SL1": None,                                          # unreadable on every poll
+                  "ST2": SimpleNamespace(status="filled", filled_qty="5", filled_avg_price="99.36"),
+                  "TP1": SimpleNamespace(status="canceled", filled_qty="0", filled_avg_price=None)}
+        journal = [{"event": "entry_fill", "trade_id": "C1"},
+                   {"event": "stop_placed", "trade_id": "C1", "stop_order_id": "SL1"},
+                   {"event": "target_placed", "trade_id": "C1", "tp_order_id": "TP1"},
+                   {"event": "stop_placed", "trade_id": "C1", "stop_order_id": "ST2"}]
+        tgt = {"trade_id": "C1", "symbol": "AAPL", "side": "long", "entry_price": 100.0, "qty": 10,
+               "stop_order_id": "SL1", "tp_order_id": "TP1", "stop2_order_id": "ST2"}
+        res, partials, exits = self._book(orders, journal, tgt)
+        self.assertIsNone(res)                                          # unknown, never "nothing else filled"
+        self.assertEqual(partials, [("ST2", 5)])
+        self.assertEqual(exits, [])
+
+    def test_single_full_stop_unchanged(self):
+        from types import SimpleNamespace
+        orders = {"SL1": SimpleNamespace(status="filled", filled_qty="10", filled_avg_price="99.40")}
+        journal = [{"event": "entry_fill", "trade_id": "C2"},
+                   {"event": "stop_placed", "trade_id": "C2", "stop_order_id": "SL1"}]
+        tgt = {"trade_id": "C2", "symbol": "AAPL", "side": "long", "entry_price": 100.0, "qty": 10,
+               "stop_order_id": "SL1"}
+        res, partials, exits = self._book(orders, journal, tgt)
+        self.assertTrue(res)
+        self.assertEqual(partials, [])
+        self.assertEqual(exits[0][1], 10.0)
+
+
+class SplitHealGate(unittest.TestCase):
+    """The protected-lot heal runs only when one non-polling read shows an unbooked leg fill."""
+
+    def _gate(self, filled, journal):
+        from execution import day_trade_manager as dtm
+        tgt = {"trade_id": "C1", "stop_order_id": "SL1", "tp_order_id": "TP1", "stop2_order_id": "ST2"}
+        with mock.patch.object(dtm, "_order_filled_qty", side_effect=lambda oid: filled[oid]), \
+                mock.patch("strategy.day_tier_logger.read_events_checked", return_value=(journal, True)):
+            return dtm._split_leg_fill_unbooked(tgt)
+
+    def test_working_lot_no_heal(self):
+        self.assertFalse(self._gate({"SL1": (True, 0.0), "TP1": (True, 0.0), "ST2": (True, 0.0)}, []))
+
+    def test_unbooked_tp_fill_heals(self):
+        self.assertTrue(self._gate({"SL1": (True, 0.0), "TP1": (True, 5.0), "ST2": (True, 0.0)}, []))
+
+    def test_already_booked_no_heal(self):
+        journal = [{"event": "partial_exit_fill", "order_id": "TP1", "fill_qty": 5}]
+        self.assertFalse(self._gate({"SL1": (True, 0.0), "TP1": (True, 5.0), "ST2": (True, 0.0)}, journal))
+
+    def test_unreadable_leg_heals(self):
+        self.assertTrue(self._gate({"SL1": (False, 0.0), "TP1": (True, 0.0), "ST2": (True, 0.0)}, []))
+
+
 if __name__ == "__main__":
     unittest.main()
