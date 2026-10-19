@@ -117,8 +117,8 @@ Q20: Facts only in review prompts.
 Q21: The replay calls no broker; inputs come from logs.
 Q22: The gate runs read-only against the server logs before it is relied on.
 Q23: Not yet. Full-path test planned: grid + production corpus through the extracted function equals live wired quantities, plus a CI run on a deliberately broken branch.
-Q24: No absence claims.
-Q25: No market statistics.
+Q24: The design makes no claim that a tool, file or instrument does not exist, except Gro's three cited items, which were searched for in the repo and on the server this session and not found.
+Q25: The design quotes no stock or market statistic; its only figures are the bot's own logged quantities (AMZN 18, 6 and 1 shares; the five earlier 10/10 trades).
 Q26: Inputs from the bot's own logs (from T1 Alpaca reads at decision time).
 Q27: Decision records: append + fsync (existing). Gate marker: .claude/preship/markers (existing pattern).
 Q28: Logging inside place_entry before the order; the gate inside preship_gate at commit/push.
@@ -126,12 +126,12 @@ Q29: Top: it protects every future sizing, entry and exit change.
 Q30: Standard practice: regression replay of production decisions before a model change ships.
 Q31: Not a fitted model.
 Q32: The replay uses only inputs logged at decision time (no look-ahead).
-Q33: No trading cost.
-Q34: No exposure.
-Q35: Regime-independent.
+Q33: The gate compares wired share quantities before an order is sent, so spread, slippage and fills are outside it; live fills stay the record of real cost.
+Q34: The gate takes no market position and adds no exposure; it only blocks unapproved changes to how existing trades are sized.
+Q35: The replay is deterministic in any market regime; the golden-master grid includes high-volatility stop widening and thin names so those paths are covered.
 Q36: Unaffected by account size.
 Q37: Not a statistical claim; deterministic comparison.
-Q38: Not an edge.
+Q38: The gate is not an edge and cannot decay; if it ever passes a planted dropped-rule diff, its own test fails and it comes back to the owner.
 Q39: Sizing unchanged by this design.
 Q40: Outcome: no sizing, entry or exit change ships with a difference the owner did not approve. Check: the gate blocks an unlisted replay difference (tested by a planted dropped-exemption diff).
 Q41: An expert would also replay exits and keep a standing regression set of hand-built edge cases (10/10, Track B, shorts).
