@@ -192,6 +192,42 @@ def get_latest_trade_with_time(symbol: str):
         return None
 
 
+_QUOTES_PAGE_LIMIT = 1000
+
+
+def get_quote_spreads(symbol: str, start, end, feed: str = "iex") -> list | None:
+    """Bid-ask spreads (ask - bid, positive, not crossed) of the most recent
+    quotes in [start, end] (tz-aware datetimes; newest first, one page of at most
+    _QUOTES_PAGE_LIMIT). Endpoint: GET /v2/stocks/{symbol}/quotes. Used by the
+    Day tier's CONV-1018 sizing (median spread over the last 5-minute window).
+    None on any failure (the caller keeps today's stop); [] when no usable quote.
+    """
+    try:
+        params = {"start": start.isoformat(), "end": end.isoformat(),
+                  "limit": _QUOTES_PAGE_LIMIT, "feed": feed, "sort": "desc"}
+        resp = None
+        for _attempt in range(3):
+            resp = requests.get(f"{_BASE}/v2/stocks/{symbol}/quotes", params=params,
+                                headers=_headers(), timeout=_TIMEOUT)
+            if resp.status_code == 429 and _attempt < 2:
+                time.sleep(2 ** _attempt)
+                continue
+            break
+        if resp is None or resp.status_code != 200:
+            code = getattr(resp, "status_code", None)
+            logger.debug(f"[{symbol}] get_quote_spreads: HTTP {code}")
+            return None
+        out = []
+        for q in resp.json().get("quotes") or []:
+            bid, ask = q.get("bp"), q.get("ap")
+            if bid and ask and float(ask) >= float(bid) > 0:
+                out.append(float(ask) - float(bid))
+        return out
+    except Exception as e:
+        logger.debug(f"[{symbol}] get_quote_spreads failed: {e}")
+        return None
+
+
 _CA_TIMEOUT = 20.0  # seconds — offline/lab lookup, not on the trading path
 _CA_PAGE_LIMIT = 1000
 _CA_MAX_PAGES = 200  # safety cap: a repeating next_page_token cannot loop forever
