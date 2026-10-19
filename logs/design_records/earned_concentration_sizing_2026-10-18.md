@@ -141,6 +141,33 @@ upsized); only a proven band gets the 5% budget sizing. Trade count is unchanged
 fewer). The skip shipped in PR #709 was live for no trading session (deployed 2026-10-19 06:17 UTC, fixed before the open).
 Q5 (revised): no new number; every value is an existing setting or measured (G, J, ATR5, spread, band R).
 
+## Correction (2026-10-19, Claude) — the 10/10 Track-B exemption was dropped by mistake
+The CONV path replaced `_bounded_entry_qty` for Day entries. It copied that function's Track-B dollar cap (open Track-B
+notional ≤ the Track-B budget) but not its 10/10 exemption (`max_size=True` skips the cap). That exemption has been
+the owner's rule since 2026-10-10: "no caps if the conviction is high and the stops are being respected".
+
+This design never mentioned the cap, so the owner approved a design that did not show it. On 10/19 AMZN (Track B,
+10/10, decision DT-AMZN-b-1792419387444-a26f0a63), conviction sizing chose 18 shares and the cap cut it to 1. The
+trade made +$3.29. All five earlier 10/10 Track-B trades would have been cut the same way (PLTU 19→1, UBER 18→2,
+NFLX 5→2, TSLA 4→1, AVGO 3→1).
+
+**Second dropped rule (cold review + masked-loss seat, 2026-10-19).** The CONV path also never had three per-name
+rooms that `_bounded_entry_qty` applies to every Day entry, 10/10 included:
+- Day gross: the full ceiling for deep names, the base ceiling for thin ones.
+- `DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT` × equity.
+- `DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD` for names outside the deep list.
+It also lacked Track A's reserve of a live Track B budget.
+
+So since PR #709 a CONV Track-A entry could exceed them. Dropping the Track-B cap alone would have let the 10/10 AMZN
+wire 18 shares (about $4,700, 1.7× equity in one name). Under the owner's existing 10/10 rule
+(single-name 0.65 × $2,737) it gets 6 shares. At 6 shares the AMZN trade would have made about +$20, not +$59.
+
+Fix:
+1. `_conv_entry` applies those same rooms, with the same settings and helpers, to every CONV entry.
+2. The CONV path skips the Track-B cap when `max_size` is True, as `_bounded_entry_qty`'s max_size branch does.
+   Entries that are not 10/10 keep the cap.
+This restores the owner's existing rules; no new number is added.
+
 ## Owner decision beyond this design (not in CONV-1018)
 Letting EVERY trade reach full intended risk now (lifting the fixed caps for m = 1 too) would have turned -$12.92
 into -$94.16 on the same 32 trades (worst day -3.60%). Not recommended until a family earns it; available as a

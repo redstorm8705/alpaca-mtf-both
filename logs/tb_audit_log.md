@@ -11494,3 +11494,38 @@ Design record: `logs/design_records/f6_bounded_entry_2026-10-17.md`.
 - 2026-10-19 CONV-1018 sizing SHIPPED (signed: Claude): PR #709 merged 0e90986, OCI DEPLOY_OK:0e90986, services active, HEALTH_OK; deployed, unexercised (first session Mon 10/19). Files: execution/earned_sizing.py (new), execution/day_trade_manager.py (_conv_entry, place_entry wiring, _daily_risk_used charges CONV lots full per-share risk), data/alpaca_data.py (get_quote_spreads), tests/test_earned_sizing.py (35 tests, OCI py3.10 OK; Day-tier suite errors identical to main). Gate: cold-2nd FAIL (state-only CONV lot undercounted) fixed -> PASS x3; adversarial FAIL (sample minimum, spread page order) fixed -> PASS; preship Gro+GAI APPROVE on the staged files (day_trade_manager: Gro APPROVE on sha 82e0c10ba624 in pass 1, one Gro REJECT in pass 2 whose text was not captured by my output filter, rerun answered by the NVIDIA substitute while Groq was rate-limited: APPROVE). Read-only probe on prod: 32 trades, cuts 0.471/0.60, middle n=13 mean R +0.319, G 0.7674, J 0.93% (cache backfilled data/state/earned_sizing.json). Not done: half-at-2R scale-out (second diff).
 - 2026-10-19 reports item (3) finding (signed: Claude): weekly report fails closed on round-trips with tier 'unattributed' (entry order has no tier tag). Alpaca GET /v2/orders/{id}: LLY entry coid 23501cfb-5a91-40e8-9cf6-32de1ea76bf8, GEV 71e705c6-badb-41cc-ab1c-4af5a7f6bffa, META c1d768b2-fbc5-4930-99f5-ffe5086c7703 (plain UUIDs = owner manual orders); July bot entries e.g. MARA mtf-MARA-buy-cf6c7682ba09. monthly_review.py already shows an 'Unattributed' bucket; weekly_postmortem._validated raises instead.
 - 2026-10-19 CONV-1018 follow-ups SHIPPED (signed: Claude): PR #711 (losing conviction bands trade at today's size, never skipped — owner direction; Q2) deployed e9df022; PR #712 half-at-2R scale-out for CONV-sized lots deployed 3818f3b 03:29 PT, HEALTH_OK, deployed unexercised. Gate on #712: cold-2nd FAIL (same-tick double stop-out -> false halt / co-held flatten) -> fixed -> PASS -> PASS; masked-loss seat REJECT -> APPROVE-WITH-CHANGES (None on unreadable leg after partial; non-polling heal gate) -> APPROVE; Gro+GAI APPROVE on staged diff; 52 tests OCI py3.10; Day-tier suite failures identical to main. Post-live audit due after 10/19 session: grep change=conv-1018-sizing and change=conv-1018-scale-out.
+
+
+## 2026-10-19 — HALT-1019 shipped (#716, deployed 81bbf2d) + CONV-1018 10/10 Track-B regression (Claude)
+
+**HALT-1019 (#716).**
+- What changed: Day-tier whole-day latches are replaced by per-trade unresolved markers. Each marker carries a
+  worst-case charge (a long at full notional; a short as unlimited), and it clears once the exit is booked.
+- External closes are booked from the worst-priced closed orders, and only when the result is certain.
+- Kill-check errors now block the tick. They used to fail open.
+- Torn journal lines are read tolerantly, scoped per reader. CONV-1018 sizing stays strict.
+- Review history, 7 cold rounds. Findings that were fixed:
+  - r1: an unknown stop result fell through to an external booking at another order's price.
+  - r2: an earlier-day torn line blocked the next day.
+  - r3: strict readers still halted on old torn lines.
+  - r4: CONV sizing on the tolerant reader could hide a loss and upsize a losing band.
+  - r5: a co-held tier's untagged leg could be booked as the Day exit.
+  - Masked-loss seat: a short's worst case can't be bounded by the live price, so it is now unlimited.
+  - Adversarial: claims and the alert were reworded (one unresolved lot blocks all Day entries in practice).
+- Gro raised three false premises, each counter-prompted with verbatim code: the halt key still being read;
+  `charged` key mismatches; the `scope` keyword not existing. Gro then hit its daily token limit, so the ship went
+  under the Gro-unavailable rule with GAI APPROVE.
+- Read-only server run on 10 real Day trades: none would be re-booked.
+
+**CONV-1018 regression (found 2026-10-19).**
+- Cause: the CONV path copied `_bounded_entry_qty`'s Track-B dollar cap but not its 10/10 (max_size) exemption,
+  which has been the owner's rule since 2026-10-10.
+- Effect: AMZN 10/10 was sized at 18 shares and wired 1. The trade made +$3.29; at 18 shares it would have made
+  about +$59.
+- The approved design never mentioned the cap, and every reviewer passed it.
+- Fix branch: claude/conv-1010-b-cap.
+- Control to build: REPLAY-1019 (logs/design_records/sizing_replay_gate_2026-10-19.md), a before/after replay gate.
+- Memory: feedback_replacement_path_parity.
+
+**Dashboard Stop column.** It does not read Swing-tier stops (data/state/swing_breakout.json). All 5 broker stops
+are live. A fix is proposed as a separate session (dash-stops).
