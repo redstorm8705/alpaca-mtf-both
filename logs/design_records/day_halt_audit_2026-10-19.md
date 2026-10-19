@@ -50,11 +50,11 @@ Q6: Static assumption "any doubt = whole day off"; forward: per-trade resolution
 Q7: Feeds the Day budget and tier kill (worst-case charge); fails safe (unknown = blocked/charged).
 Q8: Audit facts from the code and the server state/logs gathered this session.
 Q9: Replayed against history: none of K1-K5 fired; 9/16 and 10/12 blocks were per-tick and legitimate/fixed.
-Q10: No.
+Q10: No validated edge is held back; this removes false halts that would block trading days, so more of the existing edge trades.
 Q11: Entry gating (frequency) — risk-path: board masked-loss seat reviewed.
 Q12: Stops untouched; kill strengthened (item 5); never-mask kept (items 1, 3).
 Q13: Every new read fails closed for that tick.
-Q14: No shadow.
+Q14: Not a shadow: every change acts live (blocks, clears, books) from the first tick; nothing is computed without being acted on.
 Q15: Each block/clear/booking logged with trade id, reason, fill ids.
 Q16: Log lines change=halt-1019-*; audited after the first session.
 Q17: Read-only run of item 3 on the server against real fills before live.
@@ -64,22 +64,22 @@ Q20: Prompts carried facts; false reviewer claims (fabricated citations, a 48-ho
 Q21: Broker reads mocked in tests.
 Q22: Item 3 run read-only on the server first.
 Q23: Full-path tests of each halt/clear path before ready.
-Q24: N/A.
-Q25: N/A.
+Q24: The design makes no claim that a symbol, ETF or instrument does or does not exist; the only factual claims (no halt ever fired; 10/12 buying power $0.00) were checked this session against the server state file and logs.
+Q25: The design quotes no stock or market statistic; the only figures are counts measured from the server logs (185 and 170 blocked ticks).
 Q26: T1 Alpaca fills and positions; unreadable -> blocked.
 Q27: State file (atomic, existing) and the journal (append + fsync, existing).
 Q28: run_day_tier tick: reconcile, then tier_kill_check, then entries.
 Q29: Owner-requested; protects trading days.
 Q30: Blind spot found: the fail-open kill check (item 5).
-Q31: N/A (no edge claim).
-Q32: N/A.
+Q31: No edge or performance claim is made, so no out-of-sample test applies; correctness is tested by unit tests of every halt/clear path plus a read-only run of the external-close booking on the server.
+Q32: No replay of returns is used, so look-ahead and snooping cannot arise; the history check reads the state file and logs as they stand.
 Q33: External-close bookings use real fill prices.
-Q34: N/A.
+Q34: The change carries no market exposure of its own (it gates entries and books exits), so it adds no beta; P&L attribution is unchanged.
 Q35: Gap-through loss handled by the worst-case notional charge.
-Q36: N/A.
-Q37: N/A.
-Q38: N/A.
-Q39: N/A.
+Q36: Works the same at $25K and in thin names: it reads the bot's own orders and Alpaca fills, not market liquidity; the worst-case charge scales with each lot's own notional.
+Q37: Not a statistical edge, so no sample size is needed to judge it; each halt/clear path is proven by a deterministic test.
+Q38: Nothing decays; the weekly count of halts, their causes and clear times (Q40) shows if a halt rule starts misfiring, which would come back to the owner.
+Q39: Sizing is not changed; the Day budget it feeds still uses the CONV-1018 sizing from Alpaca fills, and the worst-case charge for an unbooked lot uses its own entry notional.
 Q40: Outcome: no Day entry while a loss is unknown, and no day lost to a resolved one; check: weekly count of halts with
      their cause and clear time vs booked exits.
 Q41: Expert: per-trade resolution state with worst-case reservation — adopted.
