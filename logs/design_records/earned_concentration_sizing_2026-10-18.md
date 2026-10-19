@@ -105,6 +105,37 @@ the majority (Thorp seat, Gro, GAI, prior item G) kept Day-tier losses.
 Forward pass (separate diff): budget = min(6%, 0.25 x rolling band Kelly); targets from rolling quantiles of
 the band's best move in R. Per-trade log: S, d', binding term, A, G, budget used, shares, band, band mean R.
 
+## Gate-compliant revision (2026-10-19, Claude) — aligned 4/4, awaiting the owner's re-approval
+The owner approved the section above on 2026-10-19 ("Approve conv 1018"). It cannot ship as written: the standing
+no-static gate (.claude/preship/no_static_scan.py, owner mandate 2026-10-14) rejects every new numeric literal.
+Probed: `DAYTRADE_CONV_OPEN_RISK_PCT = 0.06`, `S / 2` and `np.quantile(x, [0.5, 0.75])` are rejected. Revised so
+that every number is an existing (grandfathered) setting or measured from data:
+1. Entries only in the conviction band with positive mean R (terciles of completed Day trades, recomputed weekly).
+2. Budget = DAYTRADE_TIER_KILL_EQUITY_PCT (5%, existing) x equity - today's realized Day losses - open Day risk.
+   A 6% budget above the Day tier's own 5% force-flat was incoherent (all four voices).
+3. S = today's stop distance. d' = min(max(DAYTRADE_MIN_STOP_ATR_MULT x ATR5, DAYTRADE_MIN_STOP_SPREAD_MULT x 5-min
+   median IEX spread), S): tighten to the noise floor the bot already measures, never wider than S. Missing,
+   stale or non-positive ATR5 or spread -> d' = S (Thorp seat: an all-zero floor would otherwise divide by zero).
+4. Gap allowance A = max(G x S, DAYTRADE_MIN_STOP_ATR_MULT x ATR5); G = pooled worst-ever overshoot/stop ratio over
+   all Day stop-outs (0.77 now), ratchets up only (GAI's rolling-20 window rejected: it loosens after a tail).
+5. Jump charge (Taleb seat): per-share risk = max(d' + A, price x J), J = pooled worst adverse 1-minute move in the
+   Day tier's own IEX paths (measured 0.93%), ratchets up only.
+6. shares = floor(remaining budget / per-share risk); then the existing account gross cap (MAX_GROSS_EXPOSURE_RATIO
+   2.5x) and buying power cut SHARES, never the stop. Open risk per lot = shares still open x per-share risk, kept
+   until the lot is closed (a stop move or partial reduces it only by shares sold).
+7. Scale-out: 1/(number of targets + 1) = 1/2 at DAYTRADE_RIDE_TARGET_R (2R'); the rest exits by the normal rules.
+Replay (read-only, 32 completed Day trades, 1-minute IEX paths, 5% budget, 2.5x gross; >12 variants tried):
+   half at 2R: in-sample n 12 +$231.85 (log-growth +0.086), walk-forward n 5 +$117.94 (+0.042);
+   no scale-out: +$269.23 (+0.101) / +$116.98 (+0.042); band at today's sizing +$57.97 / +$16.45;
+   worst day -1.85% (TSLA 10-15); no kill day; the J charge did not bind on these trades.
+Voices: Thorp seat, Taleb seat, Gro, GAI all APPROVE-WITH-CHANGES; every change is in items 1-7. Not adopted:
+Gro's 95%-of-budget watchdog (an unrequested process), GAI's rolling G. Gro's "max loss <= budget" proof was
+wrong (it omitted the gap allowance and misread S) and is not relied on.
+Forward pass (separate diff): budget = min(Day-tier kill, fractional Kelly on the band's rolling R); target from the
+band's maximum-favourable-excursion distribution; J regime-aware (VIX-scaled).
+Q2 (revised): the band filter takes 12 of the 32 replayed trades (owner-directed: entries only in the proven band).
+Q5 (revised): no new number; every value is an existing setting or measured (G, J, ATR5, spread, band R).
+
 ## Owner decision beyond this design (not in CONV-1018)
 Letting EVERY trade reach full intended risk now (lifting the fixed caps for m = 1 too) would have turned -$12.92
 into -$94.16 on the same 32 trades (worst day -3.60%). Not recommended until a family earns it; available as a

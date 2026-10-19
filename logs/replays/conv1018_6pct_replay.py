@@ -81,6 +81,7 @@ for r in rows:
     r["spread"] = st.median(sp) if sp else 0.0
     r["tight_spr"] = min(max(0.5 * r["stop_dist"], 1.5 * r["atr5"], 2 * r["spread"]), r["stop_dist"])
     r["tight"] = max(0.5 * r["stop_dist"], 1.5 * r["atr5"])
+    r["tight_floor"] = min(max(1.5 * r["atr5"], 2 * r["spread"]), r["stop_dist"])
     r["tight"] = min(r["tight"], r["stop_dist"])          # never wider than today's stop
 
 
@@ -143,11 +144,13 @@ def gap_of(r, d):
 def run(label, take, size_mode, stop_mode, scale):
     open_pos, tot, by_day, worst_t, n, kill = [], 0.0, defaultdict(float), 0.0, 0, 0
     day_real = defaultdict(float)
+    lg = 0.0
     for r in rows:
         if not take(r):
             continue
         open_pos = [p for p in open_pos if p["t1"] > r["t0"]]
-        d = {"today": r["stop_dist"], "tight": r["tight"], "tight_spr": r["tight_spr"]}[stop_mode]
+        d = {"today": r["stop_dist"], "tight": r["tight"], "tight_spr": r["tight_spr"],
+             "floor": r["tight_floor"]}[stop_mode]
         if size_mode == "today":
             q = r["qty"]
         else:
@@ -156,26 +159,38 @@ def run(label, take, size_mode, stop_mode, scale):
             room = BUDGET * r["eq"] - used
             if REALIZED:
                 room = min(room, 0.07 * r["eq"] + min(0.0, day_real[r["day"]]) - used)
-            q = math.floor(room / (d + gap_ps)) if room > 0 else 0
-            q = min(q, math.floor(4 * r["eq"] / r["entry"]))
+            per = max(d + gap_ps, r["entry"] * J) if JMODE else d + gap_ps
+            q = math.floor(room / per) if room > 0 else 0
+            q = min(q, math.floor(2.5 * r["eq"] / r["entry"]))
             if q < 1:
                 continue
         same_stop = d >= r["stop_dist"] - 1e-9
         legs = sim(r, d, scale) if (scale or not same_stop) else [(1.0, r["per_sh"])]
         pnl = sum(f * x for f, x in legs) * q
-        open_pos.append({"t1": r["t1"], "risk": q * (d + gap_of(r, d))})
+        open_pos.append({"t1": r["t1"], "risk": q * (max(d + gap_of(r, d), r["entry"] * J) if JMODE else d + gap_of(r, d))})
         day_real[r["day"]] += pnl
         tot += pnl
+        lg += math.log(1 + pnl / r["eq"])
         n += 1
         by_day[r["day"]] += pnl
         worst_t = min(worst_t, pnl / r["eq"])
     wd = min(by_day.items(), key=lambda kv: kv[1]) if by_day else ("-", 0.0)
     kill = sum(1 for v in by_day.values() if v / rows[0]["eq"] <= -0.07)
     print(f"  {label:<58} n {n:>2}  P&L {tot:+9.2f}  worst trade {worst_t:+6.2%}  worst day {wd[0]} {wd[1]:+8.2f} "
-          f"({wd[1] / rows[0]['eq']:+.2%})  kill-days {kill}")
+          f"({wd[1] / rows[0]['eq']:+.2%})  kill-days {kill}  log-growth {lg:+.4f}")
     return tot
 
 
+J = 0.0
+for r in rows:
+    prev = None
+    for b in r["path"]:
+        ref = prev if prev is not None else b["o"]
+        adv = (ref - b["l"]) / ref if r["sign"] == 1 else (b["h"] - ref) / ref
+        J = max(J, adv)
+        prev = b["c"]
+JMODE = os.environ.get("JMODE", "0") == "1"
+print(f"J (worst adverse 1-min move vs prior close, pooled) = {J:.4%}")
 conv = sorted(r["conv"] for r in rows)
 lo_c, hi_c = conv[len(conv) // 3], conv[2 * len(conv) // 3]
 print(f"in-sample bands: low < {lo_c:.2f} <= middle < {hi_c:.2f} <= top")
@@ -193,7 +208,11 @@ def wf_take(r):
     return len(same) >= 2 and st.mean(same) > 0
 
 
-V = [("today stop, no scale-out", "today", False),
+V = [("FLOOR stop (no half cap), no scale-out", "floor", False),
+     ("FLOOR stop, 1/2 @2R rest rides", "floor", {"tg": ((2, 1/2),)}),
+     ("tight+spread (approved), 1/2 @2R rest rides", "tight_spr", {"tg": ((2, 1/2),)}),
+     ("tight+spread (approved), 1/3@2R+1/3@3R (approved)", "tight_spr", {"tg": ((2, 1/3), (3, 1/3))}),
+     ("today stop, no scale-out", "today", False),
      ("tight stop (0.5x / 1.5 ATR, no spread term), no scale-out", "tight", False),
      ("tight stop WITH IEX spread term, no scale-out", "tight_spr", False),
      ("tight, 1/3 @1R + 1/3 @2R, breakeven (as tested)", "tight", {"tg": ((1, 1/3), (2, 1/3)), "be": True}),
