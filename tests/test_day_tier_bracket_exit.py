@@ -298,7 +298,7 @@ class TakeProfitHeal(unittest.TestCase):
             logged["pnl"] = realized_pnl
             return True
 
-        with mock.patch.object(day_tier_logger, "read_events_checked", lambda t: (events, True)), \
+        with mock.patch.object(day_tier_logger, "read_events_checked", lambda t, scope=None: (events, True)), \
              mock.patch.object(dtm, "_confirmed_order_fill", _fill), \
              mock.patch.object(day_tier_logger, "log_exit_fill", _log_exit), \
              mock.patch.object(trade_logger, "log_event", lambda *a, **k: True):
@@ -325,7 +325,7 @@ class TakeProfitHeal(unittest.TestCase):
             logged["pnl"] = realized_pnl
             return True
 
-        with mock.patch.object(day_tier_logger, "read_events_checked", lambda t: (events, True)), \
+        with mock.patch.object(day_tier_logger, "read_events_checked", lambda t, scope=None: (events, True)), \
              mock.patch.object(dtm, "_confirmed_order_fill", _fill), \
              mock.patch.object(day_tier_logger, "log_exit_fill", _log_exit), \
              mock.patch.object(trade_logger, "log_event", lambda *a, **k: True):
@@ -356,7 +356,7 @@ class TakeProfitHeal(unittest.TestCase):
             logged["pnl"] = realized_pnl
             return True
 
-        with mock.patch.object(day_tier_logger, "read_events_checked", lambda t: (events, True)), \
+        with mock.patch.object(day_tier_logger, "read_events_checked", lambda t, scope=None: (events, True)), \
              mock.patch.object(dtm, "_confirmed_order_fill", _fill), \
              mock.patch.object(day_tier_logger, "log_exit_fill", _log_exit), \
              mock.patch.object(trade_logger, "log_event", lambda *a, **k: True):

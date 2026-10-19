@@ -1,0 +1,16 @@
+{
+  "change": "halt-1019",
+  "tier": 2,
+  "paths": ["execution/day_trade_manager.py", "strategy/day_tier_logger.py"],
+  "proof": [{"log": "logs/day_tier_runner_cron.log", "pattern": "change=halt-1019"}],
+  "expected_rate": "only when a Day exit is unresolved, a kill-check read fails, an external close is booked, or the journal has a damaged line — rare (about 2 days a month historically), so a quiet session is normal",
+  "window_sessions": 10,
+  "window_reason": "the proof line fires only on a halt cause; historically about 2 such days a month (9/16 account_halted, 10/12 account_invalid)",
+  "reversal": "a change=halt-1019 block lasting past its booked exit (a marker cleared later than the exit_fill), any booked external_close whose price differs from the Alpaca fills of the orders it names, or a whole-day Day halt written by anything other than the 5% tier kill",
+  "metrics": [
+    {"name": "Day-tier days with a whole-day latch (_HALT_KEY written)", "source": "data/state/day_tier_state.json", "direction": "down", "bound": "zero"},
+    {"name": "unresolved markers and their clear time vs the booked exit", "source": "logs/day_tier_runner_cron.log 'change=halt-1019 unresolved-set/unresolved-cleared'", "direction": "none", "bound": "every clear at or after its exit_fill"},
+    {"name": "external-close bookings vs Alpaca fills", "source": "logs/day_tier_events.jsonl exit_reason=external_close", "direction": "none", "bound": "booked price equals the named orders' worst-first average"}
+  ],
+  "verification": "tests/test_day_halts.py"
+}

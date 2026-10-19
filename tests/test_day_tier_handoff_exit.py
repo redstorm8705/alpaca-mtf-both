@@ -78,7 +78,7 @@ class OneExitAcrossRepeatedCalls(unittest.TestCase):
             return True
         with mock.patch("strategy.day_tier_logger.log_exit_fill", side_effect=_log), \
                 mock.patch("strategy.day_tier_logger.read_events_checked",
-                           side_effect=lambda tid=None: ([{"event": "entry_fill", "trade_id": "DT-A"}] + list(journal), True)), \
+                           side_effect=lambda tid=None, scope=None: ([{"event": "entry_fill", "trade_id": "DT-A"}] + list(journal), True)), \
                 mock.patch.object(dtm, "_mark_symbol_flattened"), \
                 mock.patch.object(dtm, "_page_once_today"):
             for _ in range(3):
