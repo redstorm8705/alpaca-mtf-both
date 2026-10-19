@@ -134,6 +134,11 @@ wrong (it omitted the gap allowance and misread S) and is not relied on.
 Forward pass (separate diff): budget = min(Day-tier kill, fractional Kelly on the band's rolling R); target from the
 band's maximum-favourable-excursion distribution; J regime-aware (VIX-scaled).
 Q2 (revised): the band filter takes 12 of the 32 replayed trades (owner-directed: entries only in the proven band).
+OWNER CORRECTION 2026-10-19 (supersedes item 1's "no entry"): "Trades in the losing ranges still should be taken, they
+shouldn't be 5% of overall budget though until strategy shows edge and/or increased win rate. Skipping all together
+lowers overall trade amount and data collection." A band with mean R <= 0 now trades at TODAY'S sizing and stop (not
+upsized); only a proven band gets the 5% budget sizing. Trade count is unchanged from before CONV-1018 (Q2: never
+fewer). The skip shipped in PR #709 was live for no trading session (deployed 2026-10-19 06:17 UTC, fixed before the open).
 Q5 (revised): no new number; every value is an existing setting or measured (G, J, ATR5, spread, band R).
 
 ## Owner decision beyond this design (not in CONV-1018)

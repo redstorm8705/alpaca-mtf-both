@@ -2675,9 +2675,10 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         }
         # CONV-1018 conviction-band sizing (owner approval 2026-10-19; design record
         # logs/design_records/earned_concentration_sizing_2026-10-18.md, "Gate-compliant revision"). Tracks A and B carry
-        # a conviction; Track M keeps its own sizing. A band with a non-positive record takes no entry; a proven band is
-        # sized to the Day-tier budget with a tight stop. No usable record -> today's sizing. Kill flag:
-        # DAYTRADE_CONV_SIZING_ENABLED (only an explicit False disables it).
+        # a conviction; Track M keeps its own sizing. A proven band is sized to the Day-tier budget with a tight stop; a
+        # band with a non-positive record still TRADES at today's sizing (owner 2026-10-19: losing ranges keep trading
+        # for data collection, just not at the full budget, until they show an edge). No usable record -> today's
+        # sizing. Kill flag: DAYTRADE_CONV_SIZING_ENABLED (only an explicit False disables it).
         _conv_plan: "dict | None" = None
         _conv_sized: "dict | None" = None
         if _track in ("A", "B") and _cfg("DAYTRADE_CONV_SIZING_ENABLED", True) is not False:
@@ -2685,14 +2686,9 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                                                   _px_base, day_start_equity, live_equity, open_trades, state, pos_by_sym,
                                                   buying_power, maintenance_margin, maintenance_rate, open_orders)
             if _conv_plan is not None and not _conv_plan.get("proven"):
-                logger.info("[%s] day-tier entry skipped — CONV-1018: conviction band %s has mean R %+.2f over %d "
-                            "completed trades (entries only in a band with a positive record)", symbol,
-                            _conv_plan.get("band"), float(_conv_plan.get("band_mean_r") or 0.0),
-                            int(_conv_plan.get("band_n") or 0))
-                day_tier_logger.log_decision(decision_id or f"conv-skip-{symbol}-{bar_id}", symbol, decision=decision,
-                                             trigger=trigger, size={**size, "conv": _conv_plan,
-                                                                    "skip": "conv_band_unproven"})
-                return False
+                logger.info("[%s] CONV-1018: conviction band %s has mean R %+.2f over %d completed trades — today's "
+                            "sizing (not upsized)", symbol, _conv_plan.get("band"),
+                            float(_conv_plan.get("band_mean_r") or 0.0), int(_conv_plan.get("band_n") or 0))
         if _conv_sized is not None:
             stop_px = float(_conv_sized["stop"])
             qty, why = int(_conv_sized["qty"]), str(_conv_sized["why"])
