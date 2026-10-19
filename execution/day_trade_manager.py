@@ -62,6 +62,7 @@ import logging
 import math
 import os
 import re
+import statistics
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -2070,6 +2071,22 @@ def after_hours_exit(only_pending: bool = False) -> dict:
 
 
 # ── daily dollar risk budget (Rafael 2026-10-04 — replaces the 3-position count cap) ──────────────
+def _state_lot_risk(state: dict, coid: str, rps_by_coid: dict) -> float:
+    """A CONV-1018 lot's full risk from its state record (risk_per_share x recorded qty); 0.0 for any other lot; inf
+    when the record is unreadable (the caller's max() then charges it as unbounded -> no new entry fits). Never raises."""
+    if coid not in rps_by_coid:
+        return 0.0
+    if not (math.isfinite(rps_by_coid[coid]) and rps_by_coid[coid] > 0):
+        return float("inf")
+    try:
+        rec = next(v for k, v in state.items() if k.startswith("entry::") and isinstance(v, dict)
+                   and str(v.get("coid") or "") == coid)
+        r = rps_by_coid[coid] * abs(float(rec.get("fill_qty") or rec.get("qty") or 0.0))
+        return r if math.isfinite(r) else float("inf")
+    except (StopIteration, TypeError, ValueError):
+        return float("inf")
+
+
 def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) -> "tuple[float, float, str] | None":
     """Dollars already at risk for the day tier TODAY = realized day-tier losses today (loss-only; gains
     never offset) + every open day-tier lot's loss-if-stopped (|entry - stop| x qty). Day-tier stops never
@@ -2092,6 +2109,17 @@ def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) ->
     open_risk = 0.0
     n_open = 0
     logged = set()
+    # CONV-1018 lots carry their full per-share risk (stop + gap allowance / one-minute jump) in the state record; a
+    # lot is charged at least that, journaled or not (cold-2nd 2026-10-19: a state-only CONV lot charged only the 2%
+    # ceiling let a second entry exceed the budget).
+    rps_by_coid: dict = {}
+    for _k, _v in state.items():
+        if _k.startswith("entry::") and isinstance(_v, dict) and _v.get("risk_per_share") is not None:
+            try:
+                _r = float(_v["risk_per_share"])
+            except (TypeError, ValueError):
+                _r = float("nan")
+            rps_by_coid[str(_v.get("coid") or "")] = _r
     for t in open_trades.values():
         tid = str(t.get("trade_id") or "")
         logged.add(tid)
@@ -2104,8 +2132,12 @@ def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) ->
             r = abs(entry - stop) * qty
             if not (math.isfinite(r) and qty > 0 and entry > 0 and stop > 0):
                 raise ValueError("unreadable lot risk")
+            if tid in rps_by_coid:
+                if not (math.isfinite(rps_by_coid[tid]) and rps_by_coid[tid] > 0):
+                    raise ValueError("unreadable CONV lot risk")
+                r = max(r, rps_by_coid[tid] * qty)
         except (TypeError, ValueError):
-            r = risk_ceiling_usd
+            r = max(risk_ceiling_usd, _state_lot_risk(state, tid, rps_by_coid))
         open_risk += r
     # A lot with a logged entry_fill is either OPEN (counted above at its stop) or EXITED (its loss is in
     # realized) — never a phantom. A 'protected' state record never transitions after its stop/target fills,
@@ -2119,7 +2151,7 @@ def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) ->
                 and v.get("state") in ("submitting", "submitted", "filled", "protected", "fill_unverified")
                 and str(v.get("bar_id") or "").split("-", 1)[0] == today
                 and str(v.get("coid") or "") not in logged):
-            open_risk += risk_ceiling_usd
+            open_risk += max(risk_ceiling_usd, _state_lot_risk(state, str(v.get("coid") or ""), rps_by_coid))
             n_open += 1
     realized_loss = max(0.0, -realized)
     return realized_loss, open_risk, f"realized loss ${realized_loss:.2f} + open stop-risk ${open_risk:.2f} ({n_open} lot(s))"
@@ -2158,6 +2190,81 @@ def _budget_fit_qty(qty: int, per_share_risk: float, budget: float, realized_los
         return max(0, min(int(qty), math.floor(room / (slip_mult * per_share_risk))))
     except (TypeError, ValueError):
         return 0
+
+
+# ── CONV-1018 conviction-band sizing (owner approval 2026-10-19) ─────────────────────────────────────────────────
+def _conv_entry(symbol: str, direction: str, size: dict, decision: dict, limit_px: float, stop_px: float,
+                live_px: float, day_start_equity: float, live_equity: float, open_trades: dict, state: dict, pos_by_sym: dict,
+                buying_power: float, maintenance_margin: float, maintenance_rate: float,
+                open_orders: list) -> "tuple[dict | None, dict | None]":
+    """(band plan, sizing) for a Track A/B entry. plan None = no usable record; sizing None = today's sizing (any
+    missing input: journal, J, ATR/spread handled inside conv_size, budget). Design record:
+    logs/design_records/earned_concentration_sizing_2026-10-18.md, section "Gate-compliant revision". Never raises."""
+    try:
+        from execution import earned_sizing as es
+        from strategy import day_tier_logger
+        conviction = (size or {}).get("conviction")
+        if conviction is None:
+            conviction = (decision or {}).get("conviction")
+        events, readable = day_tier_logger.read_events_checked()
+        if not readable:
+            return None, None
+        plan = es.plan(conviction, events)
+        if plan is None or not plan.get("proven"):
+            return plan, None
+        j = es.jump_ratio(es.completed_trades(events))
+        if j is None:
+            logger.info("[%s] CONV-1018: no measured one-minute jump yet — today's sizing", symbol)
+            return plan, None
+        # Budget = the Day tier's own kill (existing setting) x start-of-day equity, less today's realized Day losses and
+        # every open Day lot's risk (_daily_risk_used charges a CONV lot its full per-share risk, journaled or not).
+        ceiling = float(config.DAYTRADE_PER_TRADE_RISK_EQUITY_PCT) * day_start_equity
+        used = _daily_risk_used(open_trades, state, ceiling)
+        if used is None:
+            return plan, None
+        realized_loss, open_risk, used_detail = used
+        budget_room = float(config.DAYTRADE_TIER_KILL_EQUITY_PCT) * day_start_equity - realized_loss - open_risk
+        atr = _robust_atr_5m(symbol)
+        spreads = None
+        try:
+            import pandas as pd
+            from data.alpaca_data import get_quote_spreads
+            _now = datetime.now(timezone.utc)
+            spreads = get_quote_spreads(symbol, _now - pd.Timedelta(config.TF_5M).to_pytimedelta(), _now)
+        except Exception as e:  # noqa: BLE001 — no spread -> d' = today's stop (conv_size)
+            logger.warning("[%s] CONV-1018 spread read failed: %s", symbol, e)
+        spread_med = statistics.median(spreads) if spreads else None
+        # The tight stop is measured from the more adverse of the limit and the live price place_entry already validated
+        # (its live-price band check), as the room stop does.
+        anchor = min(float(limit_px), float(live_px)) if direction == "long" else max(float(limit_px), float(live_px))
+        k = float(config.DAYTRADE_MIN_STOP_ATR_MULT)
+        sized = es.conv_size(direction, limit_px, stop_px, anchor, atr, spread_med, k,
+                             float(config.DAYTRADE_MIN_STOP_SPREAD_MULT), float(plan["G"]), float(j), budget_room,
+                             rt_room=_realtime_vol_room(symbol, k))
+        if not sized.get("ok"):
+            logger.info("[%s] CONV-1018 sizing unavailable — today's sizing: %s", symbol, sized.get("why"))
+            return plan, None
+        # Account limits cut SHARES, never the stop: all-tier gross, buying power after the main-book reserve, and
+        # the maintenance cushion (pending entries charged at 100%, as in _bounded_entry_qty).
+        pending_all, _ = _pending_entry_gross(open_orders, pos_by_sym)
+        rooms = {
+            "global_gross": live_equity * float(config.MAX_GROSS_EXPOSURE_RATIO) - _account_gross(pos_by_sym) - pending_all,
+            "buying_power": buying_power - float(config.DAYTRADE_MAIN_BOT_BP_RESERVE_USD),
+            "maintenance": (live_equity - maintenance_margin - float(config.DAYTRADE_MAINT_CUSHION_USD) - pending_all)
+            / maintenance_rate,
+        }
+        if not all(math.isfinite(v) for v in rooms.values()):
+            logger.warning("[%s] CONV-1018 account rooms unreadable %s — today's sizing", symbol, rooms)
+            return plan, None
+        notional_qty = math.floor(max(0.0, min(rooms.values())) / float(limit_px))
+        qty = max(0, min(int(sized["qty"]), int(notional_qty)))
+        sized.update(qty=qty, j=round(float(j), 6), budget_room=round(budget_room, 2), used=used_detail,
+                     why=sized["why"] + f"; account rooms {','.join(f'{k}:${v:.2f}' for k, v in rooms.items())} "
+                                        f"-> {notional_qty} sh; wired {qty}")
+        return plan, sized
+    except Exception as e:  # noqa: BLE001 — any failure keeps today's sizing
+        logger.warning("[%s] CONV-1018 sizing error (today's sizing): %s", symbol, e)
+        return None, None
 
 
 # ── entry (B1/B2/B3/B6 + Rafael amendments) ─────────────────────────────────────────────────────
@@ -2566,13 +2673,53 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             if k.startswith("entry::") and isinstance(v, dict) and _state_blocks(v)
             and str(v.get("coid") or "") not in _logged
         }
-        qty, why = _bounded_entry_qty(qty, limit_px, stop_px, live_equity, open_trades, pos_by_sym,
-                                      buying_power, maintenance_margin, maintenance_rate, open_orders,
-                                      risk_equity=day_start_equity, symbol=symbol, track=_track,
-                                      track_budget=size.get("budget"), extra_b_lots=_state_only,
-                                      risk_mult=size.get("risk_mult", 1.0),
-                                      max_size=size.get("max_size") is True,
-                                      reserve_b=(_track != "B" and _track_b_reserve_active(state)))
+        # CONV-1018 conviction-band sizing (owner approval 2026-10-19; design record
+        # logs/design_records/earned_concentration_sizing_2026-10-18.md, "Gate-compliant revision"). Tracks A and B carry
+        # a conviction; Track M keeps its own sizing. A band with a non-positive record takes no entry; a proven band is
+        # sized to the Day-tier budget with a tight stop. No usable record -> today's sizing. Kill flag:
+        # DAYTRADE_CONV_SIZING_ENABLED (only an explicit False disables it).
+        _conv_plan: "dict | None" = None
+        _conv_sized: "dict | None" = None
+        if _track in ("A", "B") and _cfg("DAYTRADE_CONV_SIZING_ENABLED", True) is not False:
+            _conv_plan, _conv_sized = _conv_entry(symbol, direction, size, decision, limit_px, stop_px,
+                                                  _px_base, day_start_equity, live_equity, open_trades, state, pos_by_sym,
+                                                  buying_power, maintenance_margin, maintenance_rate, open_orders)
+            if _conv_plan is not None and not _conv_plan.get("proven"):
+                logger.info("[%s] day-tier entry skipped — CONV-1018: conviction band %s has mean R %+.2f over %d "
+                            "completed trades (entries only in a band with a positive record)", symbol,
+                            _conv_plan.get("band"), float(_conv_plan.get("band_mean_r") or 0.0),
+                            int(_conv_plan.get("band_n") or 0))
+                day_tier_logger.log_decision(decision_id or f"conv-skip-{symbol}-{bar_id}", symbol, decision=decision,
+                                             trigger=trigger, size={**size, "conv": _conv_plan,
+                                                                    "skip": "conv_band_unproven"})
+                return False
+        if _conv_sized is not None:
+            stop_px = float(_conv_sized["stop"])
+            qty, why = int(_conv_sized["qty"]), str(_conv_sized["why"])
+            if _track == "B" and _cfg("DAYTRADE_TRACK_B_CASH_ONLY", True) is not False:
+                # Track B keeps its exposure cap (halt-reopen gap containment, same rule as _bounded_entry_qty):
+                # open Track-B notional + this entry <= the Track-B budget, never below one share; min()-only.
+                try:
+                    _bb = float(size.get("budget"))  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    _bb = float("nan")
+                _ob = _open_track_b_notional(open_trades, _state_only, pos_by_sym)
+                if not (math.isfinite(_bb) and _bb > 0) or _ob is None:
+                    logger.info("[%s] day-tier entry skipped — track-B budget/open notional unreadable (fail closed)",
+                                symbol)
+                    return False
+                _b_cap = max(1, math.floor(max(0.0, _bb - _ob) / limit_px))
+                if _b_cap < qty:
+                    qty, why = _b_cap, why + f"; track-B exposure cap ${_bb:.2f} (open ${_ob:.2f}) -> {_b_cap} sh"
+            why += " rooms=conv"
+        else:
+            qty, why = _bounded_entry_qty(qty, limit_px, stop_px, live_equity, open_trades, pos_by_sym,
+                                          buying_power, maintenance_margin, maintenance_rate, open_orders,
+                                          risk_equity=day_start_equity, symbol=symbol, track=_track,
+                                          track_budget=size.get("budget"), extra_b_lots=_state_only,
+                                          risk_mult=size.get("risk_mult", 1.0),
+                                          max_size=size.get("max_size") is True,
+                                          reserve_b=(_track != "B" and _track_b_reserve_active(state)))
         _min_q = _min_entry_qty(symbol, min_qty)
         if qty < _min_q:
             # Only a SIZE result routes to an ETF; a fail-closed zero (unreadable data / invalid limit — no "rooms=" in
@@ -2609,7 +2756,13 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             qty = _fit
         logger.info("[%s] day-tier wire-time sizing — %s", symbol, why)
         size = {**size, "shares": qty, "notional": round(qty * limit_px, 2),
-                "wire_cap_reason": why}
+                "wire_cap_reason": why,
+                **({"conv": {**(_conv_plan or {}), **{k: v for k, v in (_conv_sized or {}).items() if k != "why"}}}
+                   if (_conv_plan is not None or _conv_sized is not None) else {})}
+        if _conv_sized is not None:
+            logger.info("[%s] change=conv-1018-sizing band=%s mean_r=%s stop=%.2f per_share=%.4f qty=%d", symbol,
+                        (_conv_plan or {}).get("band"), (_conv_plan or {}).get("band_mean_r"), stop_px,
+                        float(_conv_sized["per_share"]), qty)
 
         # CO-HOLD D3: a bracket needs its take-profit up front — the same target rule as the post-fill OCO, priced
         # off the entry limit (a FADE pin target still on the profit side of the limit, else DAYTRADE_RIDE_TARGET_R x
@@ -2628,7 +2781,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         coid = _mint_coid(symbol, direction)
         state[key] = {"bar_id": bar_id, "coid": coid, "state": "submitting", "symbol": symbol,
                       "side": direction, "ts": datetime.now(PT).isoformat(), "qty": qty, "stop_px": stop_px,
-                      "track": _track, **({"cohold_bracket": True} if cohold else {})}
+                      "track": _track, **({"cohold_bracket": True} if cohold else {}),
+                      **({"risk_per_share": float(_conv_sized["per_share"])} if _conv_sized is not None else {})}
         if not _save_state(state):
             _page(f"[{symbol}] day-tier entry ABORTED — could not persist the idempotency record "
                   f"(B3). Not submitting (a re-fire could double the position).")
