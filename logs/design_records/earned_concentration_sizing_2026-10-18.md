@@ -79,6 +79,32 @@ Claude's response (pending the owner's answer, then replay + board/Gro/GAI on st
 - Bigger size -> tighter stop (never inside noise/spread) + closer targets with scale-out partials.
 NOT APPROVED YET — no code written.
 
+## 6% replay + mechanics review (2026-10-19, Claude) — aligned 4/4, awaiting the owner's decision
+Replay: `logs/replays/conv1018_6pct_replay.py` (read-only on OCI; 32 completed Day trades, Alpaca fills from
+logs/day_tier_events.jsonl, 1-minute IEX paths, stop checked before targets inside a bar; 9+ variants tried).
+Final mechanics (exact formulas; Thorp seat, Taleb seat, Gro and GAI aligned after 3 counter-prompt rounds):
+1. Entries only in the band with positive mean R (conviction terciles of completed Day trades, recomputed weekly).
+2. S = today's stop distance; d' = min(max(0.5 x S, 1.5 x ATR5, 2 x median IEX spread over 5 min), S).
+3. Gap allowance per share A = max(G x S, 1.5 x ATR5); G = pooled worst observed overshoot/stop ratio over all
+   Day stop-outs (0.77 now, ratchets up only, never a quantile). Measured: overshoot does not scale with stop
+   width (corr -0.01), so A is tied to S, not d'.
+4. shares = floor(remaining budget / (d' + A)), capped at 4 x equity notional; remaining budget =
+   min(6% x equity - open Day risk, 7% x equity - today's realized Day losses - open Day risk). Open risk of a
+   position = shares x (d' + A) until closed, even after a stop move; a partial reduces it only by shares sold.
+5. Scale-out (owner's request): 1/3 at +2R', 1/3 at +3R' (R' = d'), rest by the normal exit rules; no breakeven
+   move, no trail. No scale-out scored higher in the replay; the owner may drop it.
+6. Missing/stale ATR or spread -> d' = S. A position whose stop is not confirmed resting is flattened.
+Replay of the final mechanics: in-sample n 12 +$255.53 (no scale-out +$326.08); walk-forward n 5 +$160.62
+(no scale-out +$167.04); same band at today's sizing +$57.97 / +$16.45; all 32 trades as traded -$12.92.
+Worst day -2.93% of equity (TSLA 10-15); no day reached the 7% kill. Thorp seat: 1R = 6%/1.77 = 3.4% of equity,
+about 0.18 of full Kelly on the band's R (mean +0.32, sd 1.29, t about 0.9) — not significant after 9 variants;
+reversal = rolling 20-trade band mean R <= 0 (weekly recalibration) or any loss above 1.2 x its logged budget.
+Not adopted (cut trades or add restrictions): GAI's spread > 10%-of-stop entry filter, sector halving, mean-R < 0.1
+halt. Dissent noted: the Taleb seat wanted all tiers' realized losses in the 7% term and preferred no scale-out;
+the majority (Thorp seat, Gro, GAI, prior item G) kept Day-tier losses.
+Forward pass (separate diff): budget = min(6%, 0.25 x rolling band Kelly); targets from rolling quantiles of
+the band's best move in R. Per-trade log: S, d', binding term, A, G, budget used, shares, band, band mean R.
+
 ## Owner decision beyond this design (not in CONV-1018)
 Letting EVERY trade reach full intended risk now (lifting the fixed caps for m = 1 too) would have turned -$12.92
 into -$94.16 on the same 32 trades (worst day -3.60%). Not recommended until a family earns it; available as a

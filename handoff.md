@@ -24,9 +24,10 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   fixed by queue item (3) below.
 
 **⏩ EXACT NEXT ACTION (Claude):** CONV-1018 conviction sizing (design `logs/design_records/earned_concentration_sizing_2026-10-18.md`,
-NOT approved, no code): owner answered "6% TOTAL" open-risk budget (2026-10-18). Next: replay, quick board/Gro/GAI on tight stops + scale-out targets, owner package. Key fact: the raw top
-conviction scores went 0 for 8; the proven band (recalibrated weekly) is 0.47-0.60. Replay scripts:
-scratch `conviction_replay.py` / `conv_changes_replay.py` (copies in /tmp/rt on OCI). Then the queue: (2) Swing-tier
+NOT approved, no code): 6% replay done and stop/scale-out/gap mechanics aligned 4/4 (Thorp, Taleb, Gro, GAI) on
+2026-10-19 — exact formulas in the design's "6% replay + mechanics review" section; replay
+`logs/replays/conv1018_6pct_replay.py`. Next: owner package -> on approval build per the mandatory patch sequence.
+Then the queue: (2) Swing-tier
 breakdown shorts, (3) weekly reports count owner/accidental trades with an asterisk (also unblocks the weekly report),
 (4) gate false positives (incl. the launch check flagging a `claude-code` URL in PR bodies). Monday 10/19: GEX-1017
 post-ship SPY comparison + post-live audit. Master Brain login expired (owner runs `notebooklm login`). OCI-RESET-1017: the owner wrote 'Oci reset 1017 - approved', which did not record (ID-first wording; add to the gate fixes) and its record still needs Q40-Q44. F6-FLAT-1018 is approved.
