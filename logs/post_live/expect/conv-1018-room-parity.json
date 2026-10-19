@@ -1,0 +1,33 @@
+{
+  "change": "conv-1018-room-parity",
+  "tier": 2,
+  "paths": [
+    "execution/day_trade_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/day_tier_events.jsonl",
+      "pattern": "maintenance:\\$[-0-9.]+,day_gross:"
+    }
+  ],
+  "expected_rate": "every conviction-sized Day entry: its decision record's wire reason lists the CONV account rooms, now ending with day_gross and single_name",
+  "window_sessions": 5,
+  "window_reason": "conviction-sized entries happen most trading days (one on 10/19); five sessions covers a quiet stretch",
+  "reversal": "any conviction-sized Day entry whose wired notional exceeds the single-name room (0.65 x equity) or, for a name off the deep list, the thin-name room; or a 10/10 Track-B entry wired at the Track-B budget cap instead of its conviction size",
+  "metrics": [
+    {
+      "name": "10/10 Track-B conviction entries wired above the Track-B budget",
+      "source": "logs/day_tier_events.jsonl decision size.wire_cap_reason",
+      "direction": "up",
+      "bound": "every one bounded by single_name / thin_name / day_gross"
+    },
+    {
+      "name": "conviction entries wired above any per-name room",
+      "source": "logs/day_tier_events.jsonl entry_fill notional vs equity_at_entry",
+      "direction": "none",
+      "bound": "zero"
+    }
+  ],
+  "verification": "tests/test_earned_sizing.py",
+  "baseline_exempt_reason": "the proof pattern (CONV account rooms followed by day_gross) had 0 matches in the server's day_tier_events.jsonl before ship (checked 2026-10-19 13:40 PT); only the new room order produces it"
+}

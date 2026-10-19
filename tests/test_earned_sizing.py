@@ -246,6 +246,37 @@ class ConvEntry(unittest.TestCase):
         self.assertEqual(sized["qty"], 12)
         self.assertAlmostEqual(sized["stop"], 99.40)
 
+    def _sized(self, symbol, size, buying_power=20000.0):
+        from execution import day_trade_manager as dtm
+        prior = datetime(2026, 10, 14, 10, 0, tzinfo=ET)
+        ev = []
+        for i, c in enumerate((0.40, 0.41, 0.42, 0.50, 0.51, 0.52, 0.70, 0.71, 0.72)):
+            ev += _trade(f"X{i}", c, 100.0, 99.0, 101.0 if 0.45 < c < 0.6 else 99.0, day=prior)
+        with mock.patch("strategy.day_tier_logger.read_events_checked", return_value=(ev, True)), \
+                mock.patch.object(es, "jump_ratio", return_value=0.005), \
+                mock.patch.object(dtm, "_daily_risk_used", return_value=(0.0, 0.0, "none")), \
+                mock.patch.object(dtm, "_robust_atr_5m", return_value=0.4), \
+                mock.patch.object(dtm, "_realtime_vol_room", return_value=None), \
+                mock.patch.object(dtm, "_track_b_reserve_active", return_value=False), \
+                mock.patch("data.alpaca_data.get_quote_spreads", return_value=[0.1, 0.1, 0.2]):
+            return dtm._conv_entry(symbol, "long", size, {}, 100.0, 98.0, 100.0,
+                                   2400.0, 2400.0, {}, {}, {}, buying_power, 0.0, 0.3, [])[1]
+
+    def test_deep_name_clamped_to_single_name_room(self):
+        # Parity with _bounded_entry_qty (cold review 2026-10-19): with buying power ample, the single-name room
+        # DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT x equity binds a deep name, 10/10 or not.
+        from config import DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT as sn
+        for sz in ({"conviction": 0.51, "track": "A"}, {"conviction": 0.51, "track": "B", "max_size": True}):
+            sized = self._sized("AAPL", sz)
+            self.assertEqual(sized["qty"], int(sn * 2400.0 // 100.0))
+            self.assertIn("single_name", sized["why"])
+
+    def test_thin_name_clamped_to_thin_room(self):
+        from config import DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD as thin, DAYTRADE_TRACK_A_BASE_CEILING_PCT as base
+        sized = self._sized("XYZQ", {"conviction": 0.51, "track": "B", "max_size": True})
+        self.assertEqual(sized["qty"], int(min(thin, base * 2400.0) // 100.0))
+        self.assertIn("thin_name", sized["why"])
+
 
 class DailyRiskConvLots(unittest.TestCase):
     """_daily_risk_used charges a CONV lot its full per-share risk, journaled or state-only (cold-2nd 2026-10-19)."""
@@ -288,7 +319,7 @@ class DailyRiskConvLots(unittest.TestCase):
 class PlaceEntryConv(unittest.TestCase):
     """place_entry end to end up to submit, with the CONV result injected (all broker calls mocked)."""
 
-    def _run(self, conv, track="A"):
+    def _run(self, conv, track="A", max_size=None):
         from types import SimpleNamespace
         from execution import broker
         from execution import day_trade_manager as dtm
@@ -324,8 +355,10 @@ class PlaceEntryConv(unittest.TestCase):
                 mock.patch("execution.tier_capital_allocator.live_order_id", return_value="DT-x"), \
                 mock.patch("execution.tier_capital_allocator.live_release", return_value=None), \
                 mock.patch.object(broker, "submit_limit_order", side_effect=_submit):
-            ok = dtm.place_entry("AAPL", {"would_consider": True, "conviction": 0.5}, trigger,
-                                 {"size_ok": True, "shares": 5, "conviction": 0.5, "track": track, "budget": 300.0},
+            size = {"size_ok": True, "shares": 5, "conviction": 0.5, "track": track, "budget": 300.0}
+            if max_size is not None:
+                size["max_size"] = max_size
+            ok = dtm.place_entry("AAPL", {"would_consider": True, "conviction": 0.5}, trigger, size,
                                  bar_id="20261020-0945", equity=2500.0)
         return ok, sub, saved, ce
 
@@ -357,6 +390,20 @@ class PlaceEntryConv(unittest.TestCase):
         ok, sub, _saved, _ce = self._run(({"proven": True, "band": "middle", "band_mean_r": 0.3, "band_n": 12}, sized),
                                          track="B")
         self.assertEqual(sub["qty"], 2)                # floor($300 budget / $100.20 limit) = 2
+
+    def test_track_b_ten_of_ten_skips_exposure_cap(self):
+        # CEO 2026-10-10 "no caps if the conviction is high and the stops are being respected": a 10/10 (max_size)
+        # Track-B entry keeps its conviction size, as _bounded_entry_qty does (10/19 AMZN was wired 1 of a sized 18).
+        sized = {"ok": True, "stop": 99.40, "qty": 50, "per_share": 1.2, "why": "conv test"}
+        ok, sub, _saved, _ce = self._run(({"proven": True, "band": "middle", "band_mean_r": 0.3, "band_n": 12}, sized),
+                                         track="B", max_size=True)
+        self.assertEqual(sub["qty"], 50)
+
+    def test_track_b_not_ten_of_ten_keeps_exposure_cap(self):
+        sized = {"ok": True, "stop": 99.40, "qty": 50, "per_share": 1.2, "why": "conv test"}
+        ok, sub, _saved, _ce = self._run(({"proven": True, "band": "middle", "band_mean_r": 0.3, "band_n": 12}, sized),
+                                         track="B", max_size=False)
+        self.assertEqual(sub["qty"], 2)
 
     def test_track_m_not_routed(self):
         _ok, _sub, _saved, ce = self._run((None, None), track="M")

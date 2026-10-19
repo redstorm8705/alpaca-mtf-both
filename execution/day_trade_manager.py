@@ -2274,6 +2274,27 @@ def _conv_entry(symbol: str, direction: str, size: dict, decision: dict, limit_p
             "maintenance": (live_equity - maintenance_margin - float(config.DAYTRADE_MAINT_CUSHION_USD) - pending_all)
             / maintenance_rate,
         }
+        # PARITY with _bounded_entry_qty (cold review 2026-10-19): the per-name and Day-gross rooms every Day entry had
+        # before CONV-1018 — including a 10/10 (max_size) entry — stay in force: Day gross (deep names: the full
+        # ceiling; thin names: the base ceiling), the single-name cap, the thin-name cap, and Track A leaving a live
+        # Track B its unused budget. Same settings and helpers; nothing new.
+        day_gross = _current_daytrade_gross(open_trades, pos_by_sym)
+        _, pending_day = _pending_entry_gross(open_orders, pos_by_sym)
+        is_deep = bool(symbol) and symbol in set(config.DAYTRADE_DEEP_LIQUIDITY_SYMBOLS or [])
+        day_pct = float(config.DAYTRADE_TRACK_A_EQUITY_CEILING_PCT)
+        eff_ceiling = day_pct if is_deep else min(day_pct, float(config.DAYTRADE_TRACK_A_BASE_CEILING_PCT))
+        rooms["day_gross"] = live_equity * eff_ceiling - day_gross - pending_day
+        rooms["single_name"] = float(config.DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT) * live_equity
+        if not is_deep:
+            rooms["thin_name"] = float(config.DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD)
+        _track = str((size or {}).get("track") or "A").strip().upper()
+        if _track != "B" and _track_b_reserve_active(state):
+            from strategy.day_tier_sizing import _DAYTIER_ALLOC_PCT, _TRACK_B_SHARE
+            _open_b = _open_track_b_notional(open_trades, None, pos_by_sym)
+            _held = max(0.0, live_equity * float(_DAYTIER_ALLOC_PCT) * float(_TRACK_B_SHARE)
+                        - (_open_b if _open_b is not None else 0.0))
+            if math.isfinite(_held) and _held > 0:
+                rooms["day_gross"] -= _held
         if not all(math.isfinite(v) for v in rooms.values()):
             logger.warning("[%s] CONV-1018 account rooms unreadable %s — today's sizing", symbol, rooms)
             return plan, None
@@ -2719,9 +2740,14 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if _conv_sized is not None:
             stop_px = float(_conv_sized["stop"])
             qty, why = int(_conv_sized["qty"]), str(_conv_sized["why"])
-            if _track == "B" and _cfg("DAYTRADE_TRACK_B_CASH_ONLY", True) is not False:
+            if (_track == "B" and _cfg("DAYTRADE_TRACK_B_CASH_ONLY", True) is not False
+                    and size.get("max_size") is not True):
                 # Track B keeps its exposure cap (halt-reopen gap containment, same rule as _bounded_entry_qty):
                 # open Track-B notional + this entry <= the Track-B budget, never below one share; min()-only.
+                # A 10/10 (max_size) entry skips it, as _bounded_entry_qty's max_size branch does (CEO 2026-10-10: "no
+                # caps if the conviction is high and the stops are being respected"); CONV-1018 had re-applied it (10/19
+                # AMZN wired 1 share). It is still bounded by the rooms in _conv_entry (all-tier gross, buying power,
+                # maintenance, Day gross, single-name, thin-name), the daily dollar budget and the stop.
                 try:
                     _bb = float(size.get("budget"))  # type: ignore[arg-type]
                 except (TypeError, ValueError):
