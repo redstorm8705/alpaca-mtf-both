@@ -137,7 +137,8 @@ class TierKill(unittest.TestCase):
             {"event": "exit_fill", "ts": dtm.datetime.now(dtm.PT).isoformat(), "realized_pnl": 50},
             {"event": "exit_fill", "ts": dtm.datetime.now(dtm.PT).isoformat(), "realized_pnl": -30},
         ]
-        with mock.patch("strategy.day_tier_logger.read_events_checked", return_value=(events, True)):
+        # HALT-1019: today's realized loss reads the date-aware journal reader.
+        with mock.patch("strategy.day_tier_logger.read_events_today_checked", return_value=(events, True, 0)):
             pnl, readable = dtm._realized_loss_today()
         self.assertTrue(readable)
         self.assertEqual(pnl, -30.0)

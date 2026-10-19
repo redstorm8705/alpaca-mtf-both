@@ -363,30 +363,127 @@ def log_partial_exit_fill(trade_id: str, symbol: str, *, order_id: str, exit_rea
 
 # ── Restart-safe read side ───────────────────────────────────────────────────────────────────
 
-def read_events_checked(trade_id: str | None = None) -> tuple[list[dict], bool]:
-    """Return ``(events, readable)`` so risk controls can distinguish an empty log from a failed read."""
+_ET = ZoneInfo("America/New_York")
+_HARMLESS_EVENTS = frozenset({"decision", "price_sample"})   # carry no fill, order id or P&L
+_FILL_EVENTS = frozenset({"exit_fill", "partial_exit_fill"})
+
+
+def _ts_day(ts):
+    """America/New_York date of an ISO ts, or None."""
+    try:
+        return datetime.fromisoformat(str(ts)).astimezone(_ET).date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _torn_ignorable(raw: str, next_row, scope_day, harmless) -> bool:
+    """HALT-1019: may this torn line be skipped for a read scoped to `scope_day`? A crash mid-append leaves one torn
+    line and _durable_append starts the next record on a new line. Skippable when its own complete prefix (_base
+    writes ts then event first) names a `harmless` event, or its own ts / the next valid record's ts is dated before
+    `scope_day`. Never when a second record start appears inside it (a record glued on — cold review r3)."""
+    import re
+    if raw.find('{"ts": "', 1) != -1:
+        return False
+    m_ev = re.match(r'^\{"ts": "[^"]*", "event": "([^"]+)"', raw)
+    if m_ev and harmless(m_ev.group(1)):
+        return True
+    if scope_day is None:
+        return False
+    m_ts = re.match(r'^\{"ts": "([^"]+)"', raw)
+    own = _ts_day(m_ts.group(1)) if m_ts else None
+    if own is not None and own < scope_day:
+        return True
+    nxt = _ts_day(next_row.get("ts")) if isinstance(next_row, dict) else None
+    return nxt is not None and nxt < scope_day
+
+
+def read_events_checked(trade_id: str | None = None, scope=None) -> tuple[list[dict], bool]:
+    """Return ``(events, readable)`` so risk controls can distinguish an empty log from a failed read.
+
+    scope=None (default): STRICT — any torn line makes the read incomplete (the ownership reader keeps this).
+    scope="today": a torn line is skipped when it names a decision/price_sample or is dated before today (ET).
+    scope="trade" (needs trade_id): the same, dated before that trade's entry_fill — a trade id is minted at entry,
+    so an earlier line cannot be that trade's; no entry_fill found -> strict. HALT-1019 cold review r3."""
     out: list[dict] = []
     if not _JSONL.exists():
         return out, True
+    rows: list = []
     try:
-        complete = True
         with open(_JSONL, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    ev = json.loads(line)
+                    rows.append(json.loads(line))
                 except Exception:
-                    logger.warning("day_tier_events: skipping malformed/torn JSON line")
-                    complete = False
-                    continue
-                if trade_id is None or ev.get("trade_id") == trade_id:
-                    out.append(ev)
-        return out, complete
+                    rows.append(line)
     except Exception as e:
         logger.error(f"day_tier_events read failed: {e}")
         return out, False
+    scope_day = None
+    if scope == "today":
+        scope_day = datetime.now(_ET).date()
+    elif scope == "trade" and trade_id is not None:
+        ent = next((r for r in rows if isinstance(r, dict) and r.get("event") == "entry_fill"
+                    and r.get("trade_id") == trade_id), None)
+        scope_day = _ts_day(ent.get("ts")) if ent is not None else None
+    complete = True
+    for i, ev in enumerate(rows):
+        if isinstance(ev, str):
+            nxt = next((r for r in rows[i + 1:] if isinstance(r, dict) and r.get("ts")), None)
+            if scope is None or not _torn_ignorable(ev, nxt, scope_day, _HARMLESS_EVENTS.__contains__):
+                logger.warning("day_tier_events: skipping malformed/torn JSON line")
+                complete = False
+            continue
+        if not isinstance(ev, dict):
+            complete = False
+            continue
+        if trade_id is None or ev.get("trade_id") == trade_id:
+            out.append(ev)
+    return out, complete
+
+
+def read_events_today_checked(today_et) -> tuple[list[dict], bool, int]:
+    """(events, today_complete, old_malformed) for TODAY's realized-loss read (HALT-1019, owner approval 2026-10-19).
+    A malformed (torn) line can only come from a crash mid-append, and _durable_append starts the next record on a new
+    line, so a torn line holds no later record. It is ignored (counted in `old_malformed`) when its own complete prefix
+    names a non-exit event (no realized P&L) or a ts dated before `today_et` (America/New_York date, the same date
+    _realized_loss_today uses), or when the next valid record is dated before today; otherwise it counts against today. The ownership reader (open_trades_from_log_checked) keeps its strict check."""
+    out: list[dict] = []
+    if not _JSONL.exists():
+        return out, True, 0
+    rows: list = []
+    try:
+        with open(_JSONL, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    rows.append(line)          # torn: keep its raw text (its own ts/event prefix)
+    except Exception as e:
+        logger.error(f"day_tier_events read failed: {e}")
+        return out, False, 0
+    old = 0
+    today_bad = False
+    for i, ev in enumerate(rows):
+        if not isinstance(ev, str):
+            if isinstance(ev, dict):
+                out.append(ev)
+            else:
+                today_bad = True               # valid JSON but not a record: fail closed
+            continue
+        # The torn line's own prefix (cold review 2026-10-19): a complete non-exit event holds no realized P&L; a ts
+        # (its own or the next record's) dated before today is an earlier day's line.
+        nxt = next((r for r in rows[i + 1:] if isinstance(r, dict) and r.get("ts")), None)
+        if _torn_ignorable(ev, nxt, today_et, lambda name: name not in _FILL_EVENTS):
+            old += 1
+        else:
+            today_bad = True
+    return out, not today_bad, old
 
 
 def read_events(trade_id: str | None = None) -> list[dict]:

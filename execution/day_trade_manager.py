@@ -1066,7 +1066,7 @@ def _durable_exit_recorded(trade_id: str) -> bool:
         return False
     try:
         from strategy import day_tier_logger
-        events, readable = day_tier_logger.read_events_checked(trade_id)
+        events, readable = day_tier_logger.read_events_checked(trade_id, scope="trade")
         return bool(readable
                     and any(e.get("event") == "entry_fill" for e in events)
                     and any(e.get("event") == "exit_fill" for e in events))
@@ -2103,7 +2103,7 @@ def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) ->
     realized, readable = _realized_loss_today()
     if not readable:
         return None
-    events, ev_ok = day_tier_logger.read_events_checked()
+    events, ev_ok = day_tier_logger.read_events_checked(scope="today")
     stops: dict = {}
     if ev_ok:
         for e in events:
@@ -2123,6 +2123,7 @@ def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) ->
             except (TypeError, ValueError):
                 _r = float("nan")
             rps_by_coid[str(_v.get("coid") or "")] = _r
+    charged: dict = {}
     for t in open_trades.values():
         tid = str(t.get("trade_id") or "")
         logged.add(tid)
@@ -2142,6 +2143,7 @@ def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) ->
         except (TypeError, ValueError):
             r = max(risk_ceiling_usd, _state_lot_risk(state, tid, rps_by_coid))
         open_risk += r
+        charged[tid] = r
     # A lot with a logged entry_fill is either OPEN (counted above at its stop) or EXITED (its loss is in
     # realized) — never a phantom. A 'protected' state record never transitions after its stop/target fills,
     # so without this a closed winner would be charged at the ceiling all day (masked-loss seat 2026-10-04;
@@ -2154,8 +2156,20 @@ def _daily_risk_used(open_trades: dict, state: dict, risk_ceiling_usd: float) ->
                 and v.get("state") in ("submitting", "submitted", "filled", "protected", "fill_unverified")
                 and str(v.get("bar_id") or "").split("-", 1)[0] == today
                 and str(v.get("coid") or "") not in logged):
-            open_risk += max(risk_ceiling_usd, _state_lot_risk(state, str(v.get("coid") or ""), rps_by_coid))
+            _r_state = max(risk_ceiling_usd, _state_lot_risk(state, str(v.get("coid") or ""), rps_by_coid))
+            open_risk += _r_state
+            charged[str(v.get("coid") or "")] = _r_state
             n_open += 1
+    # HALT-1019: a lot whose exit is unresolved counts at its full notional (its loss is not known yet); a marker that
+    # names no trade cannot be bounded -> inf (no new entry fits).
+    for _m in _unresolved_markers(state):
+        _tids = [str(x) for x in (_m.get("trade_ids") or []) if x]
+        if not _tids:
+            open_risk = float("inf")
+            break
+        for _tid in _tids:
+            open_risk += max(0.0, _lot_notional(_tid, state) - charged.get(_tid, 0.0))
+            charged[_tid] = max(charged.get(_tid, 0.0), _lot_notional(_tid, state))
     realized_loss = max(0.0, -realized)
     return realized_loss, open_risk, f"realized loss ${realized_loss:.2f} + open stop-risk ${open_risk:.2f} ({n_open} lot(s))"
 
@@ -2209,8 +2223,12 @@ def _conv_entry(symbol: str, direction: str, size: dict, decision: dict, limit_p
         conviction = (size or {}).get("conviction")
         if conviction is None:
             conviction = (decision or {}).get("conviction")
+        # STRICT on purpose (HALT-1019 cold review r4): the band record reads every earlier week, including decision
+        # lines (conviction) — a skipped torn line could hide a loss and upsize a losing band. Unreadable -> today's size.
         events, readable = day_tier_logger.read_events_checked()
         if not readable:
+            logger.warning("[%s] change=halt-1019 CONV-1018 off: Day journal has an unreadable line — today's sizing "
+                           "used until it is repaired", symbol)
             return None, None
         plan = es.plan(conviction, events)
         if plan is None or not plan.get("proven"):
@@ -2452,6 +2470,12 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if _tier_killed_today(state):
             logger.info("[%s] day-tier entry skipped — tier killed for the day", symbol)
             return False
+        _sym_marks = [m for m in _unresolved_markers(state) if str(m.get("symbol") or "") == symbol]
+        if _sym_marks:
+            # HALT-1019: an exit on this symbol is not booked yet — no new Day entry on it until it is.
+            logger.info("[%s] change=halt-1019 day-tier entry skipped — earlier exit unresolved, trades=%s", symbol,
+                        _marker_tids(_sym_marks))
+            return False
         # B3 idempotency: one entry per (symbol, bar_id); also block if a non-terminal record exists.
         if key in state:
             logger.info("[%s] day-tier entry skipped — already acted for bar %s", symbol, bar_id)
@@ -2663,7 +2687,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         # R1). If the log cannot be read, every same-day non-terminal record counts (fail-closed over-count).
         _logged = {str(t.get("trade_id") or "") for t in open_trades.values()}
         try:
-            _evs, _evs_ok = day_tier_logger.read_events_checked()
+            _evs, _evs_ok = day_tier_logger.read_events_checked(scope="today")
         except Exception:  # noqa: BLE001 — unreadable -> over-count (fail closed)
             _evs, _evs_ok = [], False
         if _evs_ok:
@@ -3283,14 +3307,18 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
 
 
 # ── tier-kill ────────────────────────────────────────────────────────────────────────────────
+_OLD_MALFORMED_LINES = 0   # malformed journal lines older than today (reported once a day; HALT-1019)
+
+
 def _realized_loss_today() -> tuple[float, bool]:
     """Loss-only realized floor from durable day-tier exits; gains cannot mask a later loss."""
     from strategy import day_tier_logger
-    events, readable = day_tier_logger.read_events_checked()
+    global _OLD_MALFORMED_LINES
+    today = _now_et().date()
+    events, readable, _OLD_MALFORMED_LINES = day_tier_logger.read_events_today_checked(today)
     if not readable:
         return 0.0, False
     total = 0.0
-    today = _now_et().date()
     try:
         for ev in events:
             if ev.get("event") not in ("exit_fill", "partial_exit_fill"):
@@ -3341,19 +3369,23 @@ def tier_kill_check(equity: float, day_start_equity: float | None = None) -> boo
         baseline_raw = day_start_equity if day_start_equity is not None else equity
         baseline = float(baseline_raw)
         if not (math.isfinite(baseline) and baseline > 0):
-            state = _load_state()
-            state[_HALT_KEY] = f"{_now_et():%Y%m%d}"
-            _save_state(state)
-            _page("DAY-TIER tier-kill baseline unreadable — halting new entries for the day (fail-closed).")
+            # HALT-1019: block entries only while the baseline is unreadable (re-checked every tick), no day latch.
+            _page_once_today("_tier", "halt1019_baseline",
+                             "DAY-TIER: start-of-day equity unreadable — no new Day entries until it reads again.")
+            logger.warning("change=halt-1019 block=baseline_unreadable (this tick)")
             return True
         kill_threshold = kill_equity_pct * baseline
         realized_loss, realized_readable = _realized_loss_today()
+        if _OLD_MALFORMED_LINES:
+            _page_once_today("_tier", "halt1019_old_journal_lines",
+                             f"DAY-TIER: {_OLD_MALFORMED_LINES} malformed line(s) older than today in "
+                             "logs/day_tier_events.jsonl — ignored for today's realized loss; please inspect.")
         if not realized_readable:
-            state = _load_state()
-            state[_HALT_KEY] = f"{_now_et():%Y%m%d}"
-            _save_state(state)
-            _page("DAY-TIER realized-loss log unreadable — halting new entries for the day (fail-closed); "
-                  "existing protected positions remain managed.")
+            # HALT-1019: a malformed journal line that could be from today blocks entries while it is there; no latch.
+            _page_once_today("_tier", "halt1019_journal",
+                             "DAY-TIER realized-loss journal has a malformed line that could be from today — no new Day "
+                             "entries until it is resolved; existing protected positions remain managed.")
+            logger.warning("change=halt-1019 block=journal_today_unreadable (this tick)")
             return True
         targets = _flatten_targets()
         if realized_loss <= -abs(kill_threshold):
@@ -3366,6 +3398,11 @@ def tier_kill_check(equity: float, day_start_equity: float | None = None) -> boo
                       "residual liquidation will retry next tick.")
             return True
         if not targets:
+            _ks = _load_state()
+            if _unresolved_worst_case(_ks) >= abs(kill_threshold) + realized_loss:
+                logger.warning("change=halt-1019 block=unresolved_worst_case (no open lots, this tick) trades=%s",
+                               _marker_tids(_unresolved_markers(_ks)))
+                return True
             return False
         positions = broker.get_open_positions()
         pos_by_sym = {getattr(p, "symbol", None): p for p in (positions or [])}
@@ -3397,11 +3434,11 @@ def tier_kill_check(equity: float, day_start_equity: float | None = None) -> boo
                 pass
             blind = True  # could not evaluate this lot's P&L at all
         if blind:
-            _page("DAY-TIER tier-kill check is BLIND on ≥1 lot (no quote, no unrealized_pl) — "
-                  "halting new entries for the day; protected positions remain managed.")
-            state = _load_state()
-            state[_HALT_KEY] = f"{_now_et():%Y%m%d}"
-            _save_state(state)
+            # HALT-1019: block entries only while a lot's P&L cannot be read (re-checked every tick), no day latch.
+            _page_once_today("_tier", "halt1019_blind",
+                             "DAY-TIER tier-kill check is BLIND on ≥1 lot (no quote, no unrealized_pl) — no new Day "
+                             "entries until it reads again; protected positions remain managed.")
+            logger.warning("change=halt-1019 block=lot_pnl_unreadable (this tick)")
             return True
         loss_measure = realized_loss + upl
         if loss_measure <= -abs(kill_threshold):
@@ -3413,10 +3450,20 @@ def tier_kill_check(equity: float, day_start_equity: float | None = None) -> boo
             state[_KILL_KEY] = today_key
             _save_state(state)
             return True
+        # HALT-1019: an unresolved exit's lot counts at its worst case (full notional) for NEW entries only — it can
+        # block entries for the tick, never flatten or latch (its loss is unknown, not measured).
+        _ks = _load_state()
+        _worst = _unresolved_worst_case(_ks)
+        if loss_measure - _worst <= -abs(kill_threshold):
+            logger.warning("change=halt-1019 block=unresolved_worst_case loss %.2f - worst %.2f <= -%.2f (this tick) "
+                           "trades=%s", loss_measure, _worst, abs(kill_threshold),
+                           _marker_tids(_unresolved_markers(_ks)))
+            return True
         return False
     except Exception as e:  # noqa: BLE001
-        logger.warning("day-tier tier_kill_check error: %s", e)
-        return False
+        # HALT-1019: an error here means the open loss was not measured — block entries this tick (no latch).
+        logger.warning("change=halt-1019 block=kill_check_error (this tick): %s", e)
+        return True
 
 
 # ── per-tick reconcile (the board-named go-live gate for the cron runner) ────────────────────────
@@ -3615,7 +3662,7 @@ def _record_confirmed_stop_exit(target: dict) -> "bool | None":
     trade_id = str(target.get("trade_id") or "")
     if not trade_id:
         return False
-    events, readable = day_tier_logger.read_events_checked(trade_id)
+    events, readable = day_tier_logger.read_events_checked(trade_id, scope="trade")
     if not readable:
         return None
     if any(e.get("event") == "exit_fill" for e in events):
@@ -3734,7 +3781,7 @@ def _split_leg_fill_unbooked(target: dict) -> bool:
     from strategy import day_tier_logger
     trade_id = str(target.get("trade_id") or "")
     try:
-        events, readable = day_tier_logger.read_events_checked(trade_id)
+        events, readable = day_tier_logger.read_events_checked(trade_id, scope="trade")
         if not readable:
             return True
         for field in ("stop_order_id", "tp_order_id", "stop2_order_id"):
@@ -3753,17 +3800,267 @@ def _split_leg_fill_unbooked(target: dict) -> bool:
         return True
 
 
-def _halt_unresolved_exit(symbol: str, detail: str) -> None:
-    """Persist a no-entry halt and page once per symbol/day until exit P&L is reconciled."""
+_UNRESOLVED_PREFIX = "_unresolved::"
+
+
+def _closed_orders_since(symbol: str, since: datetime) -> "list | None":
+    """Every CLOSED order on `symbol` created after `since`, flat (OCO legs as their own orders), paged by created-at
+    until a page brings nothing new. None on any read error (the caller does not book). T1 broker data via the broker
+    module's trading client (the same read fill_helpers uses). Never raises."""
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.common.enums import Sort
+        from execution.broker import get_trading_client
+        client = get_trading_client()
+        seen: dict = {}
+        after = since
+        while True:   # ends when a page brings nothing new (the created-at cursor only moves forward)
+            page = client.get_orders(filter=GetOrdersRequest(status=QueryOrderStatus.CLOSED, symbols=[symbol],
+                                                             after=after, direction=Sort.ASC, nested=False))
+            new = [o for o in (page or []) if str(getattr(o, "id", "") or "") not in seen]
+            if not new:
+                return list(seen.values())
+            for o in new:
+                seen[str(getattr(o, "id", "") or "")] = o
+            stamps = [o.created_at for o in new if getattr(o, "created_at", None) is not None]
+            if not stamps:
+                return None
+            after = max(stamps) - timedelta(microseconds=1)   # re-read the boundary instant; ids de-duplicate
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] closed-orders read failed (no external-close booking): %s", symbol, e)
+        return None
+
+
+def _book_external_close(target: dict) -> bool:
+    """HALT-1019 item 3: a Day lot whose position is gone with no recorded exit order filled (e.g. closed by hand) is
+    booked from the broker's own closed orders, only when: the symbol is flat; the Day exit legs are confirmed cancelled
+    and no Day stop rests; the opposite-side orders filled after the entry — excluding any order already in the journal
+    and any order tagged to another tier — cover the owned qty. The WORST-priced fills are attributed first. Books an
+    exit_fill (exit_reason 'external_close') with the order ids. False otherwise (the caller marks it unresolved).
+    Never raises."""
+    from execution import broker
+    from execution.ownership_guard import tier_of_coid
+    from strategy import day_tier_logger
+    import trade_logger
+    sym = str(target.get("symbol") or "")
+    trade_id = str(target.get("trade_id") or "")
+    side = str(target.get("side") or "long")
+    try:
+        owned = int(target.get("qty") or 0)
+        entry_px = abs(float(target.get("entry_price") or 0.0))
+        if not sym or not trade_id or owned < 1 or not (math.isfinite(entry_px) and entry_px > 0):
+            return False
+        if broker.get_open_position(sym) is not None:
+            return False                                   # not flat (co-held or still open): never attribute
+        if _cancel_recorded_exit_legs_confirmed(sym) is not True or _has_live_daytrade_stop(sym) is not False:
+            return False                                   # a resting Day leg could still fire: do not book
+        events = day_tier_logger.read_events()   # torn lines skipped (HALT-1019 masked-loss seat)
+        entry_ev = next((e for e in events if e.get("event") == "entry_fill" and e.get("trade_id") == trade_id), None)
+        if entry_ev is None:
+            return False
+        entry_ts = datetime.fromisoformat(str(entry_ev.get("ts")))
+        # Exclude only orders already BOOKED as fills; the Day tier's own resting legs were confirmed unfilled above.
+        journaled: set = set()
+        for e in events:
+            if e.get("event") not in ("entry_fill", "exit_fill", "partial_exit_fill"):
+                continue
+            for f in ("order_id", "stop_order_id", "tp_order_id"):
+                for oid in str(e.get(f) or "").split(","):
+                    if oid:
+                        journaled.add(oid)
+        orders = _closed_orders_since(sym, entry_ts)
+        if orders is None:
+            return False
+        close_side = "sell" if side == "long" else "buy"
+        fills = []
+        for o in orders:
+            oid = str(getattr(o, "id", "") or "")
+            if not oid or oid in journaled:
+                continue
+            if _enum_text(getattr(o, "side", None)) != close_side:
+                continue
+            fq = float(getattr(o, "filled_qty", 0) or 0)
+            fp = float(getattr(o, "filled_avg_price", 0) or 0)
+            if not (math.isfinite(fq) and math.isfinite(fp) and fq > 0 and fp > 0):
+                continue
+            tier = tier_of_coid(getattr(o, "client_order_id", None))
+            if tier is not None and tier != "daytrade":
+                # Another tier closed shares of this symbol after entry: which shares it sold is not provable, so the
+                # lot stays unresolved (worst-case charged) rather than booked at another order's price (cold review r5).
+                return False
+            fills.append((fp, fq, oid))
+        # Worst-priced first: a long's close is worst at the LOWEST sell, a short's at the HIGHEST buy.
+        fills.sort(key=lambda x: x[0], reverse=(side != "long"))
+        need = float(owned)
+        value = 0.0
+        used = []
+        for fp, fq, oid in fills:
+            take = min(fq, need)
+            value += take * fp
+            need -= take
+            used.append(oid)
+            if need <= 0:
+                break
+        if need > 0:
+            return False                                   # the fills found do not cover the lot: stays unresolved
+        px = round(value / owned, 4)
+        realized = round((px - entry_px) * owned if side == "long" else (entry_px - px) * owned, 2)
+        if not day_tier_logger.log_exit_fill(trade_id, sym, order_id=",".join(used), exit_reason="external_close",
+                                             fill_price=px, fill_qty=float(owned), market_price_at_exit=px,
+                                             realized_pnl=realized):
+            return False
+        try:
+            trade_logger.log_event("exit", symbol=sym, price=px, size=owned, data_source="daytrade", tier="daytrade",
+                                   exit_reason="external_close", trade_id=trade_id, realized_pnl=realized)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[%s] external-close trade_logger write failed: %s", sym, e)
+        logger.warning("[%s] change=halt-1019 external-close booked %d sh @ %.4f (realized %.2f) from orders %s",
+                       sym, owned, px, realized, ",".join(used))
+        return True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] external-close booking failed (stays unresolved): %s", sym, e)
+        return False
+
+
+def _open_trade_ids(symbol: str, state: dict) -> list:
+    """Day trade ids on `symbol` not yet booked closed (journal open set + non-terminal state records). Never raises."""
+    ids: set = set()
+    try:
+        from strategy import day_tier_logger
+        for t in day_tier_logger.open_trades_from_log().values():
+            if str(t.get("symbol") or "") == symbol and t.get("trade_id"):
+                ids.add(str(t["trade_id"]))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] open trade ids: journal read failed: %s", symbol, e)
+    for k, v in state.items():
+        if (k.startswith("entry::") and isinstance(v, dict) and v.get("symbol") == symbol and v.get("coid")
+                and v.get("state") in ("submitted", "filled", "protected", "fill_unverified")):
+            ids.add(str(v["coid"]))
+    return sorted(ids)
+
+
+def _unresolved_markers(state: dict) -> list:
+    """Today's open unresolved-exit markers (HALT-1019). Never raises."""
+    today = f"{_now_et():%Y%m%d}"
+    try:
+        return [v for k, v in state.items() if k.startswith(_UNRESOLVED_PREFIX) and isinstance(v, dict)
+                and v.get("date") == today]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _lot_notional(trade_id: str, state: dict) -> float:
+    """Full entry notional of one Day lot (journal fill price x the qty still owned; else the state record); inf when
+    unreadable — the worst-case charge for an exit whose loss is not known yet. Never raises."""
+    try:
+        from strategy import day_tier_logger
+        t = day_tier_logger.open_trades_from_log().get(trade_id)
+        if t is not None:
+            entry = abs(float(t.get("entry_price") or 0.0))
+            q = abs(float(t.get("fill_qty") or 0.0))
+            v = entry * q
+            if str(t.get("side") or "long") == "short":
+                # A short's loss has no ceiling, and an unresolved one may already be covered at an unknown price
+                # (today's live price is not a bound): unbounded until its exit is booked (HALT-1019 masked-loss seat).
+                return float("inf")
+            if math.isfinite(v) and v > 0:
+                return v
+        rec = next((r for k, r in state.items() if k.startswith("entry::") and isinstance(r, dict)
+                    and str(r.get("coid") or "") == trade_id), None)
+        if rec is not None:
+            if str(rec.get("side") or "long") == "short":
+                return float("inf")              # a state-only short has no live-price bound here: unbounded
+            v = abs(float(rec.get("fill_px") or 0.0)) * abs(float(rec.get("fill_qty") or rec.get("qty") or 0.0))
+            if math.isfinite(v) and v > 0:
+                return v
+        if _booked_closed(trade_id):
+            return 0.0
+    except (TypeError, ValueError):
+        pass
+    except Exception as e:  # noqa: BLE001
+        logger.warning("lot notional read failed for %s: %s", trade_id, e)
+    return float("inf")
+
+
+def _marker_tids(markers: list) -> str:
+    """Comma-joined trade ids behind unresolved markers, for the decision log ("unknown" for a marker naming none)."""
+    out = []
+    for m in markers:
+        tids = [str(t) for t in (m.get("trade_ids") or []) if t]
+        out.extend(tids or [f"unknown:{m.get('symbol')}"])
+    return ",".join(out)
+
+
+def _unresolved_worst_case(state: dict) -> float:
+    """Sum of the full notional of every lot behind today's open unresolved-exit markers; inf for a marker that names no
+    trade (cannot be bounded). Never raises."""
+    total = 0.0
+    for m in _unresolved_markers(state):
+        tids = [str(t) for t in (m.get("trade_ids") or []) if t]
+        if not tids:
+            return float("inf")
+        for tid in tids:
+            total += _lot_notional(tid, state)
+    return total
+
+
+def _booked_closed(trade_id: str) -> bool:
+    """True when the journal (torn lines skipped) shows this trade entered and is no longer open. A skipped line can
+    only hide an exit (the lot stays "open") or an entry (False) — both keep the block, the safe direction. HALT-1019
+    masked-loss seat: the strict reader would keep a correctly booked exit blocked behind an unrelated old torn line."""
+    try:
+        from strategy import day_tier_logger
+        events = day_tier_logger.read_events()
+        if not any(e.get("event") == "entry_fill" and e.get("trade_id") == trade_id for e in events):
+            return False
+        return trade_id not in day_tier_logger.open_trades_from_log(events)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _clear_resolved_markers() -> None:
+    """Drop an unresolved-exit marker once EVERY trade it names has its exit booked in the journal (never on a mere
+    state retirement — HALT-1019, board masked-loss seat); drop markers from earlier days. Never raises."""
+    try:
+        state = _load_state()
+        today = f"{_now_et():%Y%m%d}"
+        changed = False
+        for k in [k for k in state if k.startswith(_UNRESOLVED_PREFIX)]:
+            m = state.get(k)
+            if not isinstance(m, dict) or m.get("date") != today:
+                state.pop(k, None)
+                changed = True
+                continue
+            tids = [str(t) for t in (m.get("trade_ids") or []) if t]
+            if tids and all(_booked_closed(t) for t in tids):
+                state.pop(k, None)
+                changed = True
+                logger.info("[%s] change=halt-1019 unresolved-cleared trades=%s (exit booked)", m.get("symbol"),
+                            ",".join(tids))
+        if changed:
+            _save_state(state)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("unresolved-marker clear pass failed: %s", e)
+
+
+def _halt_unresolved_exit(symbol: str, detail: str, trade_id: str = "") -> None:
+    """HALT-1019 (owner approval 2026-10-19): record an unresolved exit for the trade(s) involved. While it is open: no
+    new Day entry on `symbol`, and the lot counts at its full notional against today's Day budget and the tier-kill
+    entry check. It clears the tick the exit is booked in the journal. Pages once per marker."""
     state = _load_state()
     today = f"{_now_et():%Y%m%d}"
-    page_key = f"_unresolved_exit::{symbol}"
-    first = state.get(page_key) != today
-    state[_HALT_KEY] = today
-    state[page_key] = today
+    tids = [trade_id] if trade_id else _open_trade_ids(symbol, state)
+    key = f"{_UNRESOLVED_PREFIX}{symbol}::{','.join(tids) or 'unknown'}"
+    prev = state.get(key)
+    first = not (isinstance(prev, dict) and prev.get("date") == today)
+    state[key] = {"date": today, "symbol": symbol, "trade_ids": tids, "detail": str(detail)[:300]}
     _save_state(state)
+    logger.warning("[%s] change=halt-1019 unresolved-set trades=%s: %s", symbol, ",".join(tids) or "unknown", detail)
     if first:
-        _page(f"[{symbol}] day-tier exit is unresolved — halting new entries for the day. {detail}")
+        _page(f"[{symbol}] day-tier exit is unresolved — its lot counts at its full value (a short: unlimited) against "
+              f"today's Day loss budget, which usually blocks ALL new Day entries until the exit is booked. If the bot "
+              f"cannot book it, entries stay blocked for the rest of today unless the exit is booked by hand. {detail}")
 
 
 def _retire_trade_record(trade_id: str) -> None:
@@ -3792,7 +4089,7 @@ def _closed_in_log(trade_id: str) -> bool:
         return False
     try:
         from strategy import day_tier_logger
-        events, readable = day_tier_logger.read_events_checked(trade_id)
+        events, readable = day_tier_logger.read_events_checked(trade_id, scope="trade")
         if not readable or not any(e.get("event") == "entry_fill" for e in events):
             return False
         return trade_id not in day_tier_logger.open_trades_from_log()
@@ -3821,6 +4118,7 @@ def reconcile_open_state(allow_flatten: bool = True) -> dict:
         return {"enabled": False}
     from execution import broker
     summary = {"checked": 0, "flattened": 0, "protected": 0, "unreadable": 0, "cleared": 0}
+    _clear_resolved_markers()   # HALT-1019: an exit booked since the last tick lifts its block now
     try:
         targets = _flatten_targets()  # log ∪ state(filled/protected/fill_unverified)
         state = _load_state()
@@ -3923,15 +4221,21 @@ def reconcile_open_state(allow_flatten: bool = True) -> dict:
                             sym,
                             "Position is flat after invalid geometry but the exact durable exit is missing.",
                         )
-                elif _record_confirmed_stop_exit(tgt):
+                elif (_absent_stop := _record_confirmed_stop_exit(tgt)) is True:
                     summary["cleared"] += 1
                     _mark_symbol_flattened(sym)
                     logger.info("[%s] day-tier reconcile: recorded broker-confirmed protective-stop exit", sym)
+                elif _absent_stop is False and _book_external_close(tgt) is True:
+                    # Only when every Day leg was read and none filled (False, not None): an unknown stop result must
+                    # never be attributed to another order's price (HALT-1019 cold review).
+                    summary["cleared"] += 1
+                    _mark_symbol_flattened(sym)
                 else:
                     _halt_unresolved_exit(
                         sym,
-                        "Position is absent but no complete broker-confirmed protective-stop fill "
+                        "Position is absent but no complete broker-confirmed protective-stop fill or external close "
                         "could be recovered; realized loss cannot be bounded safely.",
+                        trade_id=str(tgt.get("trade_id") or ""),
                     )
                 continue
             stop_state = _has_live_daytrade_stop(sym)
@@ -3995,6 +4299,7 @@ def reconcile_open_state(allow_flatten: bool = True) -> dict:
                                 reason="reconcile_naked_flatten"):
                 summary["flattened"] += 1
                 _mark_symbol_flattened(sym)  # retire the state record(s) so re-entry is not benched
+        _clear_resolved_markers()   # HALT-1019 cold review: an exit booked during THIS reconcile lifts its block this tick
         logger.info("day-tier reconcile: %s", summary)
         return summary
     except Exception as e:  # noqa: BLE001 — reconcile must never crash the runner tick

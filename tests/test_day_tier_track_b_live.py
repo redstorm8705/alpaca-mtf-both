@@ -451,7 +451,9 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         # Even with the lot's entry_fill+exit_fill present, an UNREADABLE log means exits cannot be proven ->
         # the same-day record is counted (over-count, fail-closed) -> the $70 UBER entry wires 0.
         ev = [{"event": "entry_fill", "trade_id": "DT-NFLX-x"}, {"event": "exit_fill", "trade_id": "DT-NFLX-x"}]
-        ok, qty, _, _ = self._run("B", state=st, events=ev, events_ok=False)
+        # HALT-1019: the same unreadable file is unreadable for today's realized-loss reader too.
+        with mock.patch("strategy.day_tier_logger.read_events_today_checked", return_value=(ev, False, 0)):
+            ok, qty, _, _ = self._run("B", state=st, events=ev, events_ok=False)
         self.assertFalse(ok)
         self.assertIsNone(qty)
 

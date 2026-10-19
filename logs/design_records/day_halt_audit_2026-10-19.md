@@ -24,17 +24,17 @@ _tier_killed_date / _unresolved_exit marker in the never-pruned state file; no l
   lets entries proceed with the open-lot loss never measured.
 
 ## Design (Gro, GAI, Taleb seat; 2 rounds; aligned with the changes below)
-1. Unresolved exits (K5): a marker per trade (_unresolved_exit::<symbol>::<trade_id>). It clears ONLY when that trade's
+1. Unresolved exits (K5): a marker per trade (_unresolved::<symbol>::<trade_id>). It clears ONLY when that trade's
    exit is booked in the journal (exit_fill, or partials covering the lot) — never on "retired". While open: no new Day
-   entry on that symbol, and the lot is charged at its worst case (its full entry notional) in the Day budget and the
+   entry on that symbol, and the lot is charged at its worst case (a long: its full entry notional; a short: unbounded, because it may already be covered at an unknown price) in the Day budget and the
    tier kill until booked — so a large unknown loss blocks everything, a small one only what it must.
 2. Old torn journal line (K3): a malformed line blocks only if it could be from today (no valid record dated before
    today, ET, follows it); an older one is reported once and ignored for today's realized loss only. The ownership
    reader keeps its strict check.
-3. Day lot closed outside a recorded order (K5): book the exit from Alpaca FILL activities (fully paged) only when the
+3. Day lot closed outside a recorded order (K5): book the exit from Alpaca CLOSED orders since entry (fully paged; each order's filled qty and average fill price) only when the
    symbol is flat, the Day exit legs are confirmed cancelled with no live Day stop, and opposite-side fills after the
    entry — excluding fills whose order is already journaled and fills tagged to another tier — cover the owned qty; if
-   more fills than needed, the worst-priced ones are attributed. Logged with fill ids. Otherwise item 1 applies.
+   more fills than needed, the worst-priced ones are attributed. Logged with the closing order ids (each order's filled quantity and average fill price). Otherwise item 1 applies.
 4. K2 and K4 block only while unreadable (re-checked every tick), no day latch.
 5. tier_kill_check errors block that tick (no latch) instead of letting entries through.
 K1 unchanged. Not adopted: a 30-minute forced resolution (masks a loss); a shadow/observation period (no shadows);
@@ -45,7 +45,7 @@ Q1: More trading days (no false day-long halts) with losses still counted: data 
 Q2: Trade count goes up (fewer false halts); one blocked tick on a broker read error (item 5).
 Q3: Yes; the simpler alternative (remove halts) would mask losses.
 Q4: Builds on the existing halt code in day_trade_manager.py; no duplicate; CONV-1018 (#709/#712) interacts via exits.
-Q5: No new number; the worst-case charge is the lot's own notional; dates from the journal.
+Q5: No new number; the worst-case charge is the lot's own notional (unbounded for a short); dates from the journal.
 Q6: Static assumption "any doubt = whole day off"; forward: per-trade resolution state.
 Q7: Feeds the Day budget and tier kill (worst-case charge); fails safe (unknown = blocked/charged).
 Q8: Audit facts from the code and the server state/logs gathered this session.
@@ -55,7 +55,7 @@ Q11: Entry gating (frequency) — risk-path: board masked-loss seat reviewed.
 Q12: Stops untouched; kill strengthened (item 5); never-mask kept (items 1, 3).
 Q13: Every new read fails closed for that tick.
 Q14: Not a shadow: every change acts live (blocks, clears, books) from the first tick; nothing is computed without being acted on.
-Q15: Each block/clear/booking logged with trade id, reason, fill ids.
+Q15: Each block/clear/booking logged with trade ids, reason and closing order ids (change=halt-1019 lines).
 Q16: Log lines change=halt-1019-*; audited after the first session.
 Q17: Read-only run of item 3 on the server against real fills before live.
 Q18: The 10/12 $0 buying power is flagged as a separate anomaly, not explained away.
@@ -75,11 +75,11 @@ Q31: No edge or performance claim is made, so no out-of-sample test applies; cor
 Q32: No replay of returns is used, so look-ahead and snooping cannot arise; the history check reads the state file and logs as they stand.
 Q33: External-close bookings use real fill prices.
 Q34: The change carries no market exposure of its own (it gates entries and books exits), so it adds no beta; P&L attribution is unchanged.
-Q35: Gap-through loss handled by the worst-case notional charge.
+Q35: Gap-through loss handled by the worst-case charge (long: full notional; short: unbounded). In practice one unresolved lot blocks all new Day entries until booked, and for the rest of the day if the bot cannot book it.
 Q36: Works the same at $25K and in thin names: it reads the bot's own orders and Alpaca fills, not market liquidity; the worst-case charge scales with each lot's own notional.
 Q37: Not a statistical edge, so no sample size is needed to judge it; each halt/clear path is proven by a deterministic test.
 Q38: Nothing decays; the weekly count of halts, their causes and clear times (Q40) shows if a halt rule starts misfiring, which would come back to the owner.
-Q39: Sizing is not changed; the Day budget it feeds still uses the CONV-1018 sizing from Alpaca fills, and the worst-case charge for an unbooked lot uses its own entry notional.
+Q39: Sizing is not changed; the Day budget it feeds still uses the CONV-1018 sizing from Alpaca fills, and the worst-case charge for an unbooked lot uses its own entry notional (unbounded for a short).
 Q40: Outcome: no Day entry while a loss is unknown, and no day lost to a resolved one; check: weekly count of halts with
      their cause and clear time vs booked exits.
 Q41: Expert: per-trade resolution state with worst-case reservation — adopted.
