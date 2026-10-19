@@ -329,10 +329,13 @@ class PlaceEntryConv(unittest.TestCase):
                                  bar_id="20261020-0945", equity=2500.0)
         return ok, sub, saved, ce
 
-    def test_unproven_band_takes_no_entry(self):
-        ok, sub, _saved, _ce = self._run(({"proven": False, "band": "top", "band_mean_r": -0.27, "band_n": 12}, None))
-        self.assertFalse(ok)
-        self.assertEqual(sub, {})
+    def test_unproven_band_still_trades_at_todays_size(self):
+        # owner 2026-10-19: losing ranges keep trading (data collection) at today's sizing, never skipped
+        ok, sub, saved, _ce = self._run(({"proven": False, "band": "top", "band_mean_r": -0.27, "band_n": 12}, None))
+        self.assertIn("qty", sub)                      # an order was submitted
+        entry = next(v for s in saved for k, v in s.items() if k.startswith("entry::"))
+        self.assertNotIn("risk_per_share", entry)      # not upsized
+        self.assertAlmostEqual(entry["stop_px"], 96.9) # today's stop: wall 97 less the existing buffer
 
     def test_proven_band_wires_conv_qty_and_tight_stop(self):
         sized = {"ok": True, "stop": 99.40, "qty": 7, "per_share": 1.2, "why": "conv test"}
