@@ -1,0 +1,146 @@
+Nightly Gemini Audit — 2026-10-19
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['data/alpaca_data.py', 'execution/earned_sizing.py', 'execution/day_trade_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+The bot remains operational with no naked broker positions (all open positions in Broker Ground Truth are `COVERED`). Pre-heal P&L drift is benign telemetry per configuration, but multiple operational warnings require attention: DRAM data starvation causing silent entry blocks, repeated FIFO orphan warnings for AMZN, currents alert news penalty triggering 100% penalties, and QHM cap blocks.
+
+---
+
+### LOG ANOMALIES
+- **DRAM Fail-Closed Feed Starvation**: Repeated warnings across cycles (`2026-10-19 19:39:24`, `19:46:21`, `19:53:46`, `20:00:25`): `[DRAM] No daily data — long/short entry blocked (fail-closed)`. DRAM lacks daily historical/bar data in the fetcher, causing 100% rejection of signals on this ticker.
+- **AMZN FIFO Orphan Warning**: Persistent warning across cycles (`19:39:53`, `19:47:32`, `19:54:13`, `20:01:52`): `FIFO orphan: closing fill for AMZN has no prior lot and no tracker record — fill unmatched.` Indicates the day-trade exit for AMZN (closed at 07:56:02 PT) is not finding an open lot in `portfolio_tracker` during periodic EOD flush sweeps.
+- **Slow Ledger Sync Wall-Time**: Ledger sync took 15.6s (`19:40:17`) and 15.4s (`20:00:16`) for 790 fills / 3143 orders, nearing loop timeouts.
+- **QHM Allocation Saturation**: Repeated blocks on GOOGL tranche 2 and GEV tranche 1: `would breach QHM cap (new-money agg 40%/name 20%): need 1 sh, room 0 — BLOCKED`.
+- **EOD After-Hours Gating**: Entries for PLTR, SOFI, and UBER generated score 12/12 at 20:00:38 ET but were skipped as intended: `execute_entries: market closed (after-hours gate) — skipping all entries.`
+
+---
+
+### PERFORMANCE AUDIT
+Audit of the last 10 completed trade events:
+1. **2026-10-13T02:03:24 (EWY short)**: Entry implied ~$181.46 (from external close), exit $164.28, size 1, P&L +$17.18. Sign check: Short exit below entry $\rightarrow$ positive profit. Correct.
+2. **2026-10-13T08:20:20 (PLTR long)**: Exit $206.73, size 1, P&L +$35.14 (`external_close_drift_autoheal`). Long exit > entry. Sign correct.
+3. **2026-10-13T10:42:02 (AMZN long)**: Entry $261.87 (at 06:46:17), exit $259.68, size 6, exit_reason `protective_stop`, realized_pnl -$13.14. $(259.68 - 261.87) \times 6 = -1.19 \times 6 = -13.14$. Stop level was $259.74; exit slippage 6 cents. Sign and calculation exact.
+4. **2026-10-14T08:10:03 (UBER short)**: Entry $70.12 (at 07:10:36), exit $68.96, size 18, exit_reason `take_profit`, realized_pnl +$20.88. $(70.12 - 68.96) \times 18 = 1.16 \times 18 = +20.88$. Sign and calculation exact.
+5. **2026-10-14T12:58:12 (NFLX short)**: Entry $69.564 (at 08:00:36), exit $70.512, size 5, exit_reason `eod_force_flat`, realized_pnl -$4.74. $(69.564 - 70.512) \times 5 = -0.948 \times 5 = -4.74$. Sign and calculation exact.
+6. **2026-10-15T07:12:02 (TSLA short)**: Entry $355.465 (at 07:00:40), exit $357.79, size 4, exit_reason `protective_stop`, realized_pnl -$9.30. $(355.465 - 357.79) \times 4 = -2.325 \times 4 = -9.30$. Exact stop price hit ($357.79). Sign and calculation exact.
+7. **2026-10-16T10:16:02 (AVGO short)**: Entry $335.67 (at 08:26:31), exit $332.31, size 3, exit_reason `take_profit`, realized_pnl +$10.08. $(335.67 - 332.31) \times 3 = 3.36 \times 3 = +10.08$. Sign and calculation exact.
+8. **2026-10-16T12:58:09 (PLTD long)**: Entry $4.7094 (at 08:10:37), exit $4.78, size 18, exit_reason `eod_force_flat`, realized_pnl +$1.27. $(4.78 - 4.7094) \times 18 = 0.0706 \times 18 = +1.2708 \approx +1.27$. Sign and calculation exact.
+9. **2026-10-16T22:19:10 (LLY)**: `price_pending: true`, external close detected, 0 PDT used.
+10. **2026-10-19T07:56:02 (AMZN long)**: Entry $259.04 (at 07:16:29), exit $262.33, size 1, exit_reason `take_profit`, realized_pnl +$3.29. $(262.33 - 259.04) \times 1 = +3.29$. Sign and calculation exact.
+
+- **Stop Rate vs. Win Rate**: Out of the 8 closed intraday/day-trade positions with explicit stop vs take-profit outcomes, 2 hit stops (AMZN, TSLA), 2 force-flat at EOD (NFLX, PLTD), 3 hit take-profit (UBER, AVGO, AMZN), 1 external close. Stop hit rate = 25% (well below the 50% concern threshold).
+
+---
+
+### TRADE INTEGRITY
+- No `pnl=0.0` trades with mismatched prices.
+- All single-trade realized P&Ls match $(P_{exit} - P_{entry}) \times Qty$ for longs and $(P_{entry} - P_{exit}) \times Qty$ for shorts.
+- Authoritative daily P&L matches: Alpaca $3.29, `pnl_today: 3.29`.
+- The recurring warning `FIFO orphan: closing fill for AMZN has no prior lot and no tracker record` points to `portfolio_tracker` failing to index the day-trade entry `DT-AMZN-b-1792419387455-5eb31066` into its internal lot map prior to the exit fill processing, causing `tracker_pnl = 0.0` and creating the pre-heal $3.29 drift reported in the EOD snapshot.
+
+---
+
+### MODIFIED FILE FINDINGS
+
+#### 1. `data/alpaca_data.py`
+- **Function**: `get_quote_spreads(symbol, start, end, feed="iex")`
+  - **Trace**: Lines checking response:
+    ```python
+    if resp is None or resp.status_code != 200:
+        code = getattr(resp, "status_code", None)
+        logger.debug(f"[{symbol}] get_quote_spreads: HTTP {code}")
+        return None
+    ```
+    If `resp.status_code == 402` or `429` (exhausted retries), `resp` is returned as `None` or non-200. Does not update `_alpaca_402_stale` unlike `get_latest_quote` and `get_latest_trade`. Minor inconsistency, but safe fallback returns `None`.
+- **Function**: `get_name_changes(start, end, symbols)`
+  - **Trace**: Uses pagination with `_CA_MAX_PAGES = 200`. Clean error-handling and fail-closed design (returns `None` on any failure). Offline lab use only.
+- **Overall**: No logic bugs or syntax defects found.
+
+#### 2. `execution/earned_sizing.py`
+- **Function**: `band_cuts(convictions: list)`
+  - **Trace**:
+    ```python
+    c = sorted(float(x) for x in convictions)
+    k = len(BAND_NAMES)  # 3
+    if len(c) < k:
+        return []
+    return [c[(i * len(c)) // k] for i in range(1, k)]
+    ```
+    When `len(c)` is small (e.g., 3), cuts at indices `(1*3)//3 = 1` and `(2*3)//3 = 2`. In `plan()`, it explicitly checks `min(len(x) for x in per_band) <= 1: return None`, ensuring at least 2 trades per band (6 trades minimum) before any band is deemed proven.
+- **Function**: `conv_size(...)`
+  - **Trace**:
+    ```python
+    stop = (
+        round(float(anchor_px) - d, 2)
+        if direction == "long"
+        else round(float(anchor_px) + d, 2)
+    )
+    stop = (
+        max(stop, float(stop_px))
+        if direction == "long"
+        else min(stop, float(stop_px))
+    )
+    ```
+    Verifies that the tightened stop $d'$ never widens past today's stop `stop_px`. Calculates gap allowance $A = \max(G \times S, k \times \text{ATR5})$ and per-share risk $\max(d' + A, \text{limit} \times J)$.
+  - **Boundary condition**: If `budget_room <= 0`, `qty = 0`. Correctly fails closed.
+
+#### 3. `execution/day_trade_manager.py`
+- Visible section defines idempotency markers, pruning, and gross calculation (`_current_daytrade_gross`, `_account_gross`, `_pending_entry_gross`, `_track_b_reserve_active`).
+- **Trace**: `_account_gross` iterates `positions_by_symbol.values()`. If `market_value` is `None`, falls back to `abs(qty) * abs(current_price)`. If non-finite, raises `ValueError` to fail closed inside the caller's sizing calculation.
+- **Trace**: `_pending_entry_gross` correctly offsets reducing orders against held position quantity, treating only position reversals or excess orders as additional gross exposure.
+- No logic errors found in provided source.
+
+---
+
+### P5 STATUS
+- **P5-C1**: UNTOUCHED (strategy/signal_generator.py not modified today; no FVG crashes observed in log).
+- **P5-C2**: UNTOUCHED (run_movers.py not touched).
+- **P5-H1**: OBSOLETE (per S63 sweep, PDT enforcement deleted).
+- **P5-H2**: UNTOUCHED (no order fill crosstalk observed).
+- **P5-H3**: UNTOUCHED (no 404 orphan stop events in log).
+- **P5-H4**: UNTOUCHED.
+- **P5-H5**: FIXED (verified historical status; PDT invariant maintained).
+- **P5-M1**: UNTOUCHED.
+- **P5-M2**: UNTOUCHED.
+- **P5-M3**: UNTOUCHED (`score_comparison` logged in tracker flush).
+- **P5-L1**: UNTOUCHED.
+- **P5-L2**: UNTOUCHED.
+- **P5-L3**: UNTOUCHED.
+
+---
+
+### NEW BUGS FOUND
+1. **CATEGORY**: INFRASTRUCTURE | **SEVERITY**: MEDIUM | `confluence` / data pipeline | DRAM data starvation fail-closed loop
+   - **Description**: DRAM fails data fetch for daily bars continuously (`No daily data — long entry blocked (fail-closed)` / `short entry blocked`).
+   - **Exact failure condition**: Ticker `DRAM` is active in the scanning universe or watchlist, but the data provider returns zero daily bars. Because the confluence engine enforces strict fail-closed validation, every cycle logs duplicate warning lines and completely blocks signal generation for DRAM, polluting log volume and wasting scan cycle time.
+
+2. **CATEGORY**: EXECUTION BUG | **SEVERITY**: LOW | `execution/portfolio_tracker.py` | Missing lot registration for day-trade orders causing recurring FIFO orphan warnings
+   - **Description**: Day trade fills (e.g. AMZN entry `DT-AMZN-b-1792419387455-5eb31066` and exit at 07:56:02) are executed in `execution.day_trade_manager` but not registered in `portfolio_tracker`'s active lot table prior to the closing fill event.
+   - **Exact failure condition**: When `portfolio_tracker` runs periodic EOD flushes or syncs fills from Alpaca, the closing fill for AMZN finds no matching open lot in the tracker, emitting `FIFO orphan: closing fill for AMZN has no prior lot and no tracker record — fill unmatched.` This produces a temporary `$3.29` discrepancy between Alpaca P&L and `tracker_pnl` until the 8:30pm ET nightly reconciliation sweep.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Prune or Fix DRAM Data Feed**: Either configure the data provider to pull the correct feed/symbol mapping for DRAM or remove `DRAM` from the active scan universe to prevent recurring fail-closed log spam and scan cycle delays.
+2. **Synchronize Day-Tier Entries with Portfolio Tracker**: Ensure `execution/day_trade_manager.py` notifies `portfolio_tracker` upon `entry_fill` so daytime fills are tracked as open lots immediately, eliminating the recurring FIFO orphan warning and intra-day P&L telemetry drift on day trades.
+3. **Investigate Ledger Sync Latency**: Address `ledger_sync` taking >15 seconds to parse 790 fills and 3143 orders; introduce caching or bounded order lookback windows for daily settlement to prevent blocking the execution loop.
+================================================================================
+BROKER GROUND TRUTH (2026-10-19, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AMZN   COVERED                  owners=day exposed=39m no-broker-stop=0m [07:16-07:16] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

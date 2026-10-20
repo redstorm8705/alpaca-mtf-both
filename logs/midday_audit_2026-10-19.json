@@ -1,0 +1,199 @@
+{
+  "audit_date": "2026-10-19",
+  "run_ts": "2026-10-19T10:30:02.344995-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AMZN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 29,
+    "levels": {
+      "STRESSED": 19,
+      "ELEVATED": 10
+    },
+    "last_score": 42,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 66,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-19 16:14:27,869 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for AMZN has no prior lot and no tracker record \u2014 fill un",
+      "2026-10-19 16:14:39,570 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$3.29 tracker=$0.00 drift=$+3.29",
+      "2026-10-19 16:19:56,084 | WARNING  | strategy.run_cycle | [ANOMALY-2] [AAPL] confirm_gate=5 scans but no entry \u2014 risk.open_positions=2 vs tracker=0 | ",
+      "2026-10-19 16:20:17,339 WARNING ledger_sync ledger_sync wall-time 15.5s (fills=790 orders=3143)",
+      "2026-10-19 16:20:36,543 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 1,
+    "losses": 0,
+    "total_pnl": 3.2899999999999636,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 3.2899999999999636,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "AMZN",
+      "pnl": 3.2899999999999636,
+      "entry_price": 259.04,
+      "exit_price": 262.33,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 257.4,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "AMZN",
+      "pnl": 3.2899999999999636,
+      "entry_price": 259.04,
+      "exit_price": 262.33,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 257.4,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "AMZN",
+        "pnl": 3.2899999999999636,
+        "entry_price": 259.04,
+        "exit_price": 262.33,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 257.4,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "AMZN": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 39,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:16-10:16"
+        ],
+        "uncovered_windows_pt": [
+          "07:16-07:16"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-19",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "AMZN"
+    ],
+    "by_symbol": {
+      "AMZN": {
+        "buy": 1,
+        "sell": 1
+      }
+    }
+  }
+}
