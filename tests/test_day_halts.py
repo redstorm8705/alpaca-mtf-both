@@ -245,7 +245,8 @@ class ConvSizingReaderStaysStrict(unittest.TestCase):
         def _rec(trade_id=None, scope=None):
             calls.append(scope)
             return [], False
-        with mock.patch("strategy.day_tier_logger.read_events_checked", side_effect=_rec):
+        with mock.patch("strategy.day_tier_logger.read_events_checked", side_effect=_rec), \
+                mock.patch.object(dtm, "_daily_risk_used", return_value=(0.0, 0.0, "")):
             plan, sized = dtm._conv_entry("AAPL", "long", {"conviction": 0.6}, {}, 100.0, 99.0, 100.0, 2500.0, 2500.0,
                                           {}, {}, {}, 5000.0, 0.0, 0.25, [])
         self.assertEqual((plan, sized), (None, None))

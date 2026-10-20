@@ -135,9 +135,11 @@ class ConfigShape(unittest.TestCase):
 
     def test_place_entry_has_no_count_cap(self):
         import inspect
-        src = inspect.getsource(dtm.place_entry)
+        # REPLAY-1019: the wired-size math moved, unchanged, into the pure _wired_entry that place_entry calls.
+        src = inspect.getsource(dtm.place_entry) + inspect.getsource(dtm._wired_entry)
         self.assertNotIn("DAYTRADE_MAX_CONCURRENT_POSITIONS", src)
         self.assertIn("_budget_fit_qty(", src)
+        self.assertIn("_wired_entry(", inspect.getsource(dtm.place_entry))
 
 
 if __name__ == "__main__":
