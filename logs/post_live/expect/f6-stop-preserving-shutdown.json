@@ -1,0 +1,29 @@
+{
+  "change": "f6-stop-preserving-shutdown",
+  "tier": 2,
+  "paths": [
+    "events/handlers.py",
+    "execution/stop_protection.py",
+    "main.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "SHUTDOWN-SWING-PRESERVE: symbols="
+    }
+  ],
+  "expected_rate": "once on the first explicit operator shutdown while Swing holds at least one position; dormant until that event",
+  "window_sessions": 10,
+  "window_reason": "explicit operator shutdowns are event-driven rather than daily; ten sessions distinguish an unexercised path from a broken frequent path without claiming the event must occur",
+  "reversal": "the process exits with any initial Swing symbol missing exactly one verified stable GTC stop, or shutdown submits a close, stop, cancellation, or mutation of a QHM/F6 claim",
+  "metrics": [
+    {
+      "name": "shutdown_swing_proof_completeness",
+      "source": "logs/mtf_bot.log plus Alpaca open positions/orders at the shutdown timestamp",
+      "direction": "none",
+      "bound": "Every allowed exit has exactly one already_protected result per initial Swing symbol; every unresolved result defers exit and leaves the process running."
+    }
+  ],
+  "verification": "tests/test_shutdown_preserves_swing.py",
+  "baseline_exempt_reason": "SHUTDOWN-SWING-PRESERVE is a new log token introduced by this diff and cannot appear in production before merge."
+}

@@ -231,6 +231,29 @@ def _is_stop_type(o) -> bool:
     return "stop" in str(getattr(_t, "value", _t)).lower()
 
 
+def _is_gtc(o) -> bool:
+    _tif = getattr(o, "time_in_force", "")
+    return str(getattr(_tif, "value", _tif)).lower() == "gtc"
+
+
+def _is_stable_shutdown_stop(o) -> bool:
+    """True only when Alpaca explicitly reports a stable working order state."""
+    _status = getattr(o, "status", "")
+    return str(getattr(_status, "value", _status)).lower() in {"new", "accepted"}
+
+
+def _order_stop_price(o) -> float | None:
+    try:
+        price = float(getattr(o, "stop_price", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return price if math.isfinite(price) and price > 0 else None
+
+
+def _stop_at_least_as_protective(direction: str, actual: float, intended: float) -> bool:
+    return actual >= intended if direction == "long" else actual <= intended
+
+
 def _order_qty(o) -> float:
     try:
         return abs(float(getattr(o, "qty", 0) or 0))
@@ -453,6 +476,8 @@ def reconcile_protection(
     session: str,
     place: bool = True,
     only_symbols: set | None = None,
+    allow_cover: bool = True,
+    require_gtc: bool = False,
 ) -> dict:
     """Ensure every open intraday position has a live protective stop — the single enforcer.
 
@@ -469,6 +494,8 @@ def reconcile_protection(
                      passes the positions the design says must hold a broker stop — carried
                      overnight or with a stored broker stop id; entry-day software-stop positions
                      wait for the full pre-close sweep). None = every tracker position.
+      allow_cover : when False, a breached naked position pages instead of market-covering.
+      require_gtc : when True, DAY stops do not count as shutdown-safe protection.
     """
     summary: dict = {
         "session": session,
@@ -570,6 +597,10 @@ def reconcile_protection(
             continue
         try:
             if str(trade.get("status", "")).lower() not in ("open", ""):
+                if require_gtc:
+                    summary["skipped"].append(
+                        (symbol, f"shutdown cannot prove tracker status {trade.get('status')!r}")
+                    )
                 continue
             if not ownership_enforced and symbol in qhm:
                 summary["excluded_qhm"].append(symbol)  # quarterly holds are not ours to manage
@@ -612,11 +643,39 @@ def reconcile_protection(
                                "(closed/stale) — deferring to orphan reconcile.", symbol)
                 continue
             try:
-                net_qty = abs(float(getattr(pos, "qty", 0) or 0))
+                signed_qty = float(getattr(pos, "qty", 0) or 0)
+                net_qty = abs(signed_qty)
                 mkt_px = float(getattr(pos, "current_price", 0) or 0)
             except (TypeError, ValueError):
                 _skip_unknown(symbol, summary, "unparseable position qty/price")
                 continue
+            if require_gtc and (
+                not math.isfinite(net_qty)
+                or net_qty <= _QTY_EPS
+                or not math.isfinite(mkt_px)
+                or mkt_px <= 0
+            ):
+                _skip_unknown(
+                    symbol,
+                    summary,
+                    "shutdown position qty/current price is not finite and positive",
+                )
+                continue
+            if require_gtc:
+                qty_direction = "long" if signed_qty > 0 else "short"
+                broker_side_raw = getattr(pos, "side", "") or ""
+                broker_side = str(
+                    getattr(broker_side_raw, "value", broker_side_raw)
+                ).lower()
+                if qty_direction != direction or (
+                    broker_side and broker_side not in {"long", "short"}
+                ) or (broker_side and broker_side != qty_direction):
+                    _skip_unknown(
+                        symbol,
+                        summary,
+                        "shutdown broker position direction contradicts tracker",
+                    )
+                    continue
             if net_qty <= _QTY_EPS:
                 _skip_streak.pop(symbol, None)
                 _clear_page_throttle(symbol)   # definite outcome (flat) — re-arm fresh pages
@@ -706,6 +765,66 @@ def reconcile_protection(
                 continue
 
             if stop_cov >= target_qty - _QTY_EPS:
+                if require_gtc:
+                    intended = _intended_stop(trade)
+                    if intended is None:
+                        _throttled_page(
+                            symbol,
+                            "shutdown stop level unknown",
+                            "cannot compare the live stop with a finite stored Swing stop "
+                            "— shutdown remains blocked.",
+                            now_mono,
+                        )
+                        summary["paged"].append(
+                            (symbol, "shutdown stop level unknown")
+                        )
+                        continue
+                    if mkt_px > 0 and _is_breached(direction, intended, mkt_px):
+                        _throttled_page(
+                            symbol,
+                            "shutdown breached stop",
+                            f"{direction} position is already beyond its stored stop "
+                            f"${intended:.2f}; a stale live stop cannot authorize shutdown.",
+                            now_mono,
+                        )
+                        summary["paged"].append(
+                            (symbol, "shutdown breached stop")
+                        )
+                        continue
+                    want = _reducing_side_for(direction)
+                    gtc_cov = 0.0
+                    for order in orders:
+                        order_stop = _order_stop_price(order)
+                        if (
+                            _order_side(order) == want
+                            and _is_stop_type(order)
+                            and _is_gtc(order)
+                            and _is_stable_shutdown_stop(order)
+                            and order_stop is not None
+                            and _stop_at_least_as_protective(
+                                direction, order_stop, intended
+                            )
+                            and not _is_breached(direction, order_stop, mkt_px)
+                        ):
+                            if exact_shared_owner:
+                                from execution.ownership_guard import tier_of_coid
+
+                                if tier_of_coid(
+                                    getattr(order, "client_order_id", None)
+                                ) != "intraday":
+                                    continue
+                            gtc_cov += _order_qty(order)
+                    if gtc_cov < target_qty - _QTY_EPS:
+                        _throttled_page(
+                            symbol,
+                            "shutdown stop expires",
+                            f"stop covers {stop_cov:g} shares but only {gtc_cov:g} "
+                            "are GTC — process shutdown would leave the remainder "
+                            "unprotected after today's close; VERIFY manually.",
+                            now_mono,
+                        )
+                        summary["paged"].append((symbol, "shutdown stop expires"))
+                        continue
                 _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
                 _clear_page_throttle(symbol)             # protected — re-arm fresh pages if it recurs
                 summary["already_protected"].append((symbol, target_qty, stop_cov))
@@ -803,6 +922,17 @@ def reconcile_protection(
                 continue
 
             if mkt_px > 0 and _is_breached(direction, intended, mkt_px):
+                if not allow_cover:
+                    _throttled_page(
+                        symbol,
+                        "shutdown breached stop",
+                        f"UNPROTECTED {direction} x{qty_int} is already beyond its "
+                        f"stored stop ${intended:.2f}; shutdown mode forbids a new "
+                        "market close. VERIFY/COVER manually before stopping.",
+                        now_mono,
+                    )
+                    summary["paged"].append((symbol, "shutdown breached stop"))
+                    continue
                 _cover(symbol, trade, mkt_px, intended, direction, tracker, risk, summary, now_mono)
                 continue
 
@@ -835,6 +965,23 @@ def reconcile_protection(
                 # So the position IS protected and our get_open_orders read above was stale
                 # (visibility lag). Not a placement and NOT a failure: do not page, do not
                 # record an order id, do not arm the double-place guard (we placed nothing).
+                # The broker sentinel does not prove the blocking order's time-in-force.
+                # In explicit-shutdown mode a hidden DAY stop is not sufficient because it
+                # can expire after this process exits.  Keep shutdown unresolved until a
+                # later sweep can read and verify the actual GTC order.
+                if require_gtc:
+                    _throttled_page(
+                        symbol,
+                        "shutdown broker-held TIF unknown",
+                        "broker reports the shares are held by a reducing order, but its "
+                        "time-in-force is not visible — not claiming overnight protection; "
+                        "the process must remain running until a GTC stop is proven.",
+                        now_mono,
+                    )
+                    summary["paged"].append(
+                        (symbol, "shutdown broker-held TIF unknown")
+                    )
+                    continue
                 if exact_shared_owner:
                     _throttled_page(
                         symbol,
@@ -893,6 +1040,22 @@ def reconcile_protection(
                 _unknown_page_streak.pop(symbol, None)   # definite outcome — end any episode
                 _clear_page_throttle(symbol)             # placed a stop — re-arm fresh pages if it recurs
                 summary["placed"].append((symbol, oid, side, qty_int, intended))
+                if require_gtc:
+                    # A submit acknowledgement is not proof that the order is live, GTC,
+                    # correctly sized, or visible at Alpaca.  Keep explicit shutdown
+                    # unresolved; the next main-loop pass must read this order back from
+                    # the broker book and verify its complete GTC coverage before exit.
+                    _throttled_page(
+                        symbol,
+                        "shutdown placement awaiting readback",
+                        f"submitted candidate GTC stop {oid or '<missing-id>'}, but shutdown "
+                        "requires a later broker snapshot proving live GTC coverage; the "
+                        "process will remain running.",
+                        now_mono,
+                    )
+                    summary["paged"].append(
+                        (symbol, "shutdown placement awaiting readback")
+                    )
             else:
                 _throttled_page(symbol, "place failed",
                                 f"UNPROTECTED {direction} x{qty_int} and stop placement FAILED "

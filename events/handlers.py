@@ -143,3 +143,93 @@ def safe_close_all(tracker, risk=None,
             "safe_close_all: no positions closed (all protected) — "
             "entries NOT halted. Bucket A stops remain active."
         )
+
+
+def preserve_swing_on_shutdown(tracker, risk=None) -> bool:
+    """Contain repeated interrupts while proving Swing shutdown protection."""
+    try:
+        return _preserve_swing_on_shutdown_once(tracker, risk)
+    except KeyboardInterrupt:
+        # A second Ctrl-C can arrive during broker I/O or alert delivery.  It
+        # must become an unresolved verdict instead of escaping main's active
+        # KeyboardInterrupt handler and terminating the process.
+        return False
+
+
+def _preserve_swing_on_shutdown_once(tracker, risk=None) -> bool:
+    """Keep Swing positions managed when an operator stops the process.
+
+    Alpaca has no atomic stop-to-market conversion.  The production stop
+    reconciler is therefore reused in read-only mode to prove existing coverage
+    without introducing a competing exit or stop during shutdown.
+    """
+    from execution.stop_protection import reconcile_protection
+
+    symbols = set(tracker.open_trades)
+    if not symbols:
+        logger.info("SHUTDOWN-SWING-PRESERVE: no Swing positions")
+        return True
+    try:
+        summary = reconcile_protection(
+            tracker,
+            risk,
+            session="closed",
+            place=False,
+            only_symbols=symbols,
+            allow_cover=False,
+            require_gtc=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        summary = {"skipped": [(symbol, repr(exc)) for symbol in sorted(symbols)]}
+    issues = (
+        list(summary.get("paged", ()))
+        + list(summary.get("skipped", ()))
+        + list(summary.get("placed", ()))
+    )
+    issues.extend(
+        (symbol, "QHM co-hold excluded")
+        for symbol in summary.get("excluded_qhm", ())
+    )
+    issues.extend(
+        (symbol, "F6 co-hold excluded")
+        for symbol in summary.get("excluded_forever6", ())
+    )
+    proof_rows = list(summary.get("already_protected", ()))
+    proof_symbols = [
+        str(row[0] if isinstance(row, (tuple, list)) and row else row)
+        for row in proof_rows
+    ]
+    if len(proof_symbols) != len(set(proof_symbols)) or set(proof_symbols) != symbols:
+        missing = sorted(symbols - set(proof_symbols))
+        unexpected = sorted(set(proof_symbols) - symbols)
+        issues.append(
+            (
+                "<proof>",
+                f"incomplete shutdown proof missing={missing} unexpected={unexpected} "
+                f"rows={proof_symbols}",
+            )
+        )
+    issue_symbols = sorted(
+        {str(row[0] if isinstance(row, (tuple, list)) else row) for row in issues}
+    )
+    logger.warning(
+        "SHUTDOWN-SWING-PRESERVE: symbols=%s result=%s",
+        sorted(symbols),
+        summary,
+    )
+    if not issue_symbols:
+        return True
+    logger.critical(
+        "SHUTDOWN-SWING-PRESERVE unresolved protection for %s", issues
+    )
+    try:
+        from alerts import send_slack
+
+        send_slack(
+            ":rotating_light: Swing shutdown protection is unresolved for "
+            f"{', '.join(issue_symbols)}. Positions were NOT force-sold; "
+            "check Alpaca stops."
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("shutdown protection page failed: %s", exc)
+    return False
