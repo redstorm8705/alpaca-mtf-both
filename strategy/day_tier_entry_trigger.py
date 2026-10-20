@@ -191,6 +191,15 @@ def _f(x):
         return None
 
 
+def _wait(symbol: str, result: dict, reason: str) -> dict:
+    """Record a WAIT reason AND log it (TRIGGER-LOG-1020, owner-approved 2026-10-20; Rule D decision
+    explainability): every qualifying name that does not trigger leaves one line saying why, with the
+    numbers the decision used. Logging only — the returned result is otherwise unchanged."""
+    result["reason"] = reason
+    logger.info("[%s] day-tier ENTRY-TRIGGER: %s", symbol, reason)
+    return result
+
+
 def compute_entry_trigger(symbol: str, decision: dict, bars=None, levels: "dict | None" = None) -> dict:
     """Track-A entry trigger from live price action vs the GEX walls (design §2). READ-ONLY + INERT.
 
@@ -224,25 +233,24 @@ def compute_entry_trigger(symbol: str, decision: dict, bars=None, levels: "dict 
             from data.gex import get_gex_levels
             levels = get_gex_levels(symbol)
         if not isinstance(levels, dict) or not levels.get("levels_ok"):
-            result["reason"] = "no actionable GEX levels — wait"
-            return result
+            return _wait(symbol, result, "no actionable GEX levels — wait")
         call_wall = _f(levels.get("call_wall"))
         put_wall = _f(levels.get("put_wall"))
         centroid = _f(levels.get("centroid"))
 
         df = _recent_bars(symbol, bars)
         if df is None or getattr(df, "empty", True) or len(df) < _MIN_BARS or "close" not in getattr(df, "columns", []):
-            result["reason"] = "insufficient bars — wait"
-            return result
+            return _wait(symbol, result, "insufficient bars — wait")
         close = _f(df["close"].iloc[-1])
         if close is None:
-            result["reason"] = "no usable close — wait"
-            return result
+            return _wait(symbol, result, "no usable close — wait")
         window = df.tail(_SWEEP_LOOKBACK)
         hi = _f(window["high"].max()) if "high" in df.columns else None
         lo = _f(window["low"].min()) if "low" in df.columns else None
         vol_ok = _vol_ok(df)
         result["vol_confirmed"] = vol_ok
+        _inputs = (f"close {close}, {len(window)}-bar hi {hi} / lo {lo}; call_wall {call_wall}, put_wall {put_wall}, "
+                   f"vol_confirmed {vol_ok}")
 
         if mode == "FADE":
             # Failed sweep of a wall → fade back toward the pin/centroid.
@@ -255,8 +263,7 @@ def compute_entry_trigger(symbol: str, decision: dict, bars=None, levels: "dict 
                               entry_ref=close, mode="FADE")
                 _cand = "failed DOWNSIDE sweep of put_wall"
             else:
-                result["reason"] = "FADE: no failed wall-sweep yet — wait"
-                return result
+                return _wait(symbol, result, f"FADE: no failed wall-sweep yet ({_inputs}) — wait")
         else:  # RIDE
             # Close-through of a wall → ride with the break.
             if call_wall is not None and close > call_wall * (1.0 + _SWEEP_MARGIN):
@@ -268,8 +275,7 @@ def compute_entry_trigger(symbol: str, decision: dict, bars=None, levels: "dict 
                               entry_ref=close, mode="RIDE")
                 _cand = "close-through BELOW put_wall"
             else:
-                result["reason"] = "RIDE: no wall close-through yet — wait"
-                return result
+                return _wait(symbol, result, f"RIDE: no wall close-through yet ({_inputs}) — wait")
             _n = _bars_since_cross(df, float(result["wall_ref"]), str(result["direction"]))
             result["bars_since_cross"] = _n
             if _n is None or not (1 <= _n <= _RIDE_FRESH_BARS):
@@ -292,8 +298,7 @@ def compute_entry_trigger(symbol: str, decision: dict, bars=None, levels: "dict 
                 _cand += f" (pin {_t} behind price -> wall stop + R-multiple target)"
         # A candidate pattern is present — require the volume confirmation to ENTER.
         if not vol_ok:
-            result["reason"] = f"{_cand} but volume not confirmed (RVOL < {_VOL_CONFIRM}) — wait"
-            return result
+            return _wait(symbol, result, f"{_cand} but volume not confirmed (RVOL < {_VOL_CONFIRM}; {_inputs}) — wait")
         result["trigger"] = "ENTER"
         result["reason"] = f"{_cand} @ {close} (wall {result['wall_ref']}, vol-confirmed) -> {result['direction']} — INERT, no order placed"
         logger.info("[%s] day-tier ENTRY-TRIGGER (INERT): %s", symbol, result["reason"])

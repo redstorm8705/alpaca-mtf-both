@@ -1,0 +1,17 @@
+{
+  "change": "trigger-wait-log-1020",
+  "tier": 1,
+  "paths": [
+    "strategy/day_tier_entry_trigger.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/day_tier_runner_cron.log",
+      "pattern": "day-tier ENTRY-TRIGGER: FADE: no failed wall-sweep yet \\(close"
+    }
+  ],
+  "expected_rate": "once per qualifying name per 2-minute tick while it waits; ~600 lines per session (10/20 had 799 would_consider decisions, e.g. ~220 each for AMZN/GOOGL/TSLA)",
+  "window_sessions": 5,
+  "reversal": "any change in Day-tier trigger outcomes (ENTER/WAIT, direction, entry_ref, target) versus the same inputs before the change, or a new exception in compute_entry_trigger",
+  "baseline_exempt_reason": "The proof line is new text that only this change writes ('FADE: no failed wall-sweep yet (close'); the old code never logged FADE waits, so it has zero matches before ship. No change_id tag is added to keep the line in the existing ENTRY-TRIGGER format."
+}

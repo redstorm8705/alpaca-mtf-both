@@ -211,5 +211,55 @@ class FreshCross(unittest.TestCase):
         self.assertTrue(et._vol_ok(_tbars(rows)))                       # vs today's 1000s, not yesterday's 50000
 
 
+
+class WaitReasonsAreLogged(unittest.TestCase):
+    """TRIGGER-LOG-1020 (owner-approved 2026-10-20): every WAIT after a name qualifies logs its reason + inputs."""
+
+    def _logged(self, decision, rows, levels):
+        with self.assertLogs(et.logger, level="INFO") as cm:
+            r = et.compute_entry_trigger("NVDA", decision, bars=_bars(rows), levels=levels)
+        self.assertEqual(r["trigger"], "WAIT")
+        line = [m for m in cm.output if "day-tier ENTRY-TRIGGER:" in m]
+        self.assertEqual(len(line), 1, cm.output)
+        self.assertIn(r["reason"], line[0])
+        return r, line[0]
+
+    def test_fade_no_sweep_logs_inputs(self):
+        rows = _CALM + [(101.0, 101.5, 100.5, 3000), (101.0, 101.2, 100.5, 3000)]
+        r, line = self._logged(_decision("FADE"), rows, _levels())
+        for part in ("no failed wall-sweep", "close 101.0", "3-bar hi 101.5 / lo 99.5", "call_wall 105.0",
+                     "put_wall 95.0", "vol_confirmed"):
+            self.assertIn(part, line)
+
+    def test_ride_no_break_logs_inputs(self):
+        rows = _CALM + [(104.0, 104.5, 103.0, 3000), (104.0, 104.2, 103.5, 3000)]
+        r, line = self._logged(_decision("RIDE"), rows, _levels())
+        self.assertIn("no wall close-through", line)
+        self.assertIn("close 104.0", line)
+
+    def test_volume_not_confirmed_logs_inputs(self):
+        rows = _CALM + [(105.0, 105.2, 104.0, 1000), (106.0, 106.5, 105.0, 1000)]
+        r, line = self._logged(_decision("RIDE"), rows, _levels())
+        self.assertIn("volume not confirmed", line)
+        self.assertIn("vol_confirmed False", line)
+
+    def test_no_levels_and_insufficient_bars_are_logged(self):
+        self._logged(_decision("RIDE"), _CALM + [(106.0, 106.5, 105.0, 3000)], _levels(levels_ok=False))
+        self._logged(_decision("RIDE"), [(100.0, 100.5, 99.5, 1000)] * 3, _levels())
+
+    def test_not_a_candidate_is_not_logged_here(self):
+        # The DECISION line already records a non-candidate every tick; the trigger stays silent for it.
+        with mock.patch.object(et.logger, "info") as info:
+            et.compute_entry_trigger("NVDA", _decision("RIDE", would_consider=False),
+                                     bars=_bars(_CALM), levels=_levels())
+        info.assert_not_called()
+
+    def test_decisions_unchanged(self):
+        # Logging only: the same inputs give the same trigger/direction as before the change.
+        rows = _CALM + [(101.0, 101.5, 100.5, 3000), (101.0, 101.2, 100.5, 3000)]
+        r = et.compute_entry_trigger("NVDA", _decision("FADE"), bars=_bars(rows), levels=_levels())
+        self.assertEqual((r["trigger"], r["direction"], r["entry_ref"], r["target"]), ("WAIT", "none", None, None))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
