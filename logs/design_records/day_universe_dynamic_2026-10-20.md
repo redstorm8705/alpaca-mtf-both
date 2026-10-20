@@ -153,3 +153,16 @@ See the board/Gro/GAI answers once aligned; Claude fills Q1–Q44 in the final d
     includes losers), or a different trigger that shows edge before costs.
   - Re-test the universe expansion once such a trigger exists.
   - Investigate why Track A trades gex_wall_ride/fade live while the admission registry reportedly lists them BLOCKED.
+
+## Meta-label test (forward pass, 2026-10-20, scratchpad meta_label.py; pre-registered rules)
+- Model: L2 logistic regression on entry-known features only (stop width, log RVOL, |gap|, signed gap, signed side
+  score, minutes after open, DRIVE/PULLBACK, direction, watch day, room_ok, ATR bps, risk/ATR, gate).
+- Protocol: monthly expanding walk-forward with a ~5-trading-day embargo. Take a signal iff p > the training win
+  rate. Out of sample 2026-01 to 2026-10.
+- Results:
+  - All signals, taken: n=3,258, −0.053R (t −2.68). Not taken: n=3,439, −0.134R (t −5.97).
+  - As-live, taken: n=1,664, −0.046R (t −1.65, CI90 [−0.107, +0.018]). Not taken: −0.101R.
+  - Current 15 as-live, taken: −0.062R (n=180).
+- Verdict: the model ranks signals, but the taken set is still negative, so it does not create edge from this
+  trigger. No further variants were tried (snooping guard). The Track-B mover trigger needs replacing, not filtering.
+  The next research item is a trigger with demonstrated edge before costs.
