@@ -63,13 +63,39 @@ _SEV = {"critical": "🔴", "high": "🟡", "low": "✓"}
 
 # ── P&L block (authoritative, code-computed) ─────────────────────────────────
 
-def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> dict:
+def _fifo_day(day: str) -> Optional[tuple[float, float, int]]:
+    """(trading-tier realized, quarterly-hold realized, closing orders) for PT date `day`, from Alpaca
+    fills by FIFO — the authoritative P&L source — split exactly as the 8:30 PM ET heal splits it
+    (pnl_ledger.build_ledger / heal_history: `pnl_today` = per_day_intraday, `pnl_today_qhm` =
+    per_day_qhm), so the card means what the EOD file means. A partial close counts once per closing
+    order. None when the fills or orders cannot be read in full (callers fall back and label it).
+    Never raises."""
+    try:
+        import reporting.pnl_ledger as _pl
+        fills = _pl.fetch_all_fills(strict=True) or []      # a short history must fall back, never mislabel
+        orders = _pl.fetch_all_orders(strict=True) or []
+        led = _pl.compute_realized(fills, qhm_symbols=_pl._get_qhm_symbols(),
+                                   coid_map=_pl.build_coid_map(orders))
+        trading = round(float(led.get("per_day_intraday", {}).get(day, 0.0) or 0.0), 2)
+        holds = round(float(led.get("per_day_qhm", {}).get(day, 0.0) or 0.0), 2)
+        closes = {r.get("exit_order_id") or r.get("exit_fill_id") or r.get("id")
+                  for r in led.get("round_trips", []) if r.get("exit_date") == day}
+        return trading, holds, len(closes)
+    except Exception as e:  # noqa: BLE001 — a card must never break on the P&L read
+        logger.warning("audit card: Alpaca FIFO read failed (%s)", e)
+        return None
+
+
+def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None,
+                     day: Optional[str] = None) -> dict:
     """
     Return {"today": [...fields...], "lifetime": [...fields...], "source_note": str,
             "injected_numbers": [str,...], "mismatch": bool}.
 
-    mode="nightly": realized P&L from EOD snapshot `pnl_today` (ledger-authoritative);
-                    reconciliation status from `_healed_by`/`pnl_unreconciled`, not drift.
+    mode="nightly": trading-tier realized P&L (the heal's `pnl_today` definition), any quarterly-hold
+                    realized P&L as its own line, and the closed-order count for `day`, straight from
+                    Alpaca fills (FIFO, SLACK-EOD-1020); if the fills cannot be read in full, the EOD
+                    snapshot's `pnl_today` / `pnl_today_qhm`, labeled. Reconciliation alarm from `pnl_unreconciled`, not drift.
     mode="midday" : unrealized mark-to-market from live positions; labeled provisional.
     Numbers here are the ONLY source of truth for the card — the LLM never restates them.
     """
@@ -87,7 +113,14 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
         # this 4:05pm audit, so a raw drift here is EXPECTED and is NOT a reconciliation
         # failure. Key off the `_healed_by` provenance stamp + `pnl_unreconciled`, never off
         # drift magnitude (BGG 2026-07-27, masked-loss + reliability seats).
-        realized = float(eod.get("pnl_today", eod.get("alpaca_pnl", 0.0)) or 0.0)
+        fifo = _fifo_day(day) if day else None
+        if fifo is not None:
+            realized, holds, closed_n = fifo
+            closed = str(closed_n)
+        else:
+            realized = float(eod.get("pnl_today", eod.get("alpaca_pnl", 0.0)) or 0.0)
+            holds = float(eod.get("pnl_today_qhm", 0.0) or 0.0)
+            closed = "—"   # the EOD trades_today count misses Day-tier closes; never show a wrong 0
         healed = bool(eod.get("_healed_by"))
         unreconciled = bool(eod.get("pnl_unreconciled"))
         # The ONLY thing that shows an alarm instead of a number is a genuine ledger-flagged
@@ -98,15 +131,19 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None) -> 
         else:
             realized_str = _dollar(realized)
             injected.append(_dollar(realized))
-        closed = int(eod.get("trades_today", 0) or 0)
         today_fields = [
             {"type": "mrkdwn", "text": f"*Realized P&L*\n{realized_str}"},
             {"type": "mrkdwn", "text": f"*Closed today*\n{closed}"},
         ]
-        if healed:
-            source = "Alpaca FIFO · reconciled"
+        if holds:   # a quarterly-hold sale is shown on its own line, never folded in or hidden
+            injected.append(_dollar(holds))
+            today_fields.append({"type": "mrkdwn", "text": f"*Quarterly holds (separate)*\n{_dollar(holds)}"})
+        if fifo is not None:
+            source = "Alpaca FIFO · computed from today's fills"
+        elif healed:
+            source = "EOD snapshot · reconciled"
         else:
-            source = "Alpaca FIFO · _provisional until the 5:30 PM PT reconcile_"
+            source = "EOD snapshot · _Alpaca fills unreadable — provisional until the 5:30 PM PT reconcile_"
     else:  # midday — REALIZED P&L SO FAR THIS SESSION (Rafael 2026-09-14: "see what has happened
            # so far this session" — not unrealized MTM, which now lives in the weekly recap).
         n_open = len(positions or [])
