@@ -222,15 +222,34 @@ def _eod_pnl_provenance(eod: dict) -> tuple[dict, str]:
         return eod, ""
 
 
-def _collect_eod() -> str:
-    """Today's EOD snapshot, with a deterministic P&L-provenance annotation so the
-    stateless LLM auditor can never read a PRE-HEAL self-check `pnl_drift` as P&L
-    corruption (BGG 2026-07-27). Keys off `_healed_by`/`pnl_unreconciled`, never drift."""
+def _eod_path() -> Path:
+    """Today's EOD snapshot path, else yesterday's (the LLM prompt's long-standing fallback)."""
     eod_path = LOGS_DIR / f"eod_{AUDIT_DATE}.json"
     if not eod_path.exists():
         # try yesterday
         yesterday = (datetime.now(PT) - timedelta(days=1)).strftime("%Y-%m-%d")
         eod_path = LOGS_DIR / f"eod_{yesterday}.json"
+    return eod_path
+
+
+def _load_eod_dict() -> dict:
+    """TODAY's raw EOD snapshot as a dict for the Slack card, or {} (missing, unreadable, or
+    another day's file — yesterday's numbers must never render as today's). The card used to
+    json.loads() the LLM-prompt string from _collect_eod(), which carries a provenance header
+    before the JSON, so it always failed and the card showed $0.00 (SLACK-EOD-1020)."""
+    try:
+        raw = json.loads((LOGS_DIR / f"eod_{AUDIT_DATE}.json").read_text())
+        return raw if isinstance(raw, dict) and raw.get("date", AUDIT_DATE) == AUDIT_DATE else {}
+    except (OSError, ValueError) as e:
+        logger.warning("EOD snapshot for the card unavailable (%s) — card uses Alpaca fills only", e)
+        return {}
+
+
+def _collect_eod() -> str:
+    """Today's EOD snapshot, with a deterministic P&L-provenance annotation so the
+    stateless LLM auditor can never read a PRE-HEAL self-check `pnl_drift` as P&L
+    corruption (BGG 2026-07-27). Keys off `_healed_by`/`pnl_unreconciled`, never drift."""
+    eod_path = _eod_path()
     if not eod_path.exists():
         return "(No EOD snapshot found)"
     try:
@@ -1009,13 +1028,8 @@ def main():
         from scripts.audit_slack import (build_pnl_fields, render_card,
                                          validate_no_pnl_rewrite, post_to_slack,
                                          findings_from_report)
-        try:
-            eod_dict = json.loads(eod)
-            if not isinstance(eod_dict, dict):
-                eod_dict = {}
-        except (json.JSONDecodeError, TypeError):
-            eod_dict = {}  # "(No EOD snapshot found)" etc. → mismatch-free empty card
-        pnl = build_pnl_fields("nightly", eod_dict)
+        eod_dict = _load_eod_dict()
+        pnl = build_pnl_fields("nightly", eod_dict, day=AUDIT_DATE)
         # Deterministic broker ground-truth alarms first (never LLM-derived), then the LLM's.
         findings = gt_findings + findings_from_report(filtered_report)
         dist = [f"✅ full report — logs/gemini_audit_{AUDIT_DATE}.txt",
