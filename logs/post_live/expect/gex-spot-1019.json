@@ -1,0 +1,15 @@
+{
+  "change": "gex-spot-1019",
+  "tier": 2,
+  "paths": ["data/gex.py"],
+  "proof": [{"log": "logs/live_writer.log", "pattern": "change=gex-spot-1019 (accepted|kept_suspect)"}],
+  "expected_rate": "each GEX refresh where the IEX quote spread exceeds 2% of mid; on 10/08-10/19 that was 143 readings (~14/session), mostly SNDK and EWY",
+  "window_sessions": 5,
+  "reversal": "an accepted (bar_atr) spot that lies outside the range traded in the next 15 minutes by more than one session ATR, or bar_atr labels flipping on the next quote-validated refresh more often than quote-validated labels do",
+  "metrics": [
+    {"name": "quote_unusable readings accepted vs kept suspect", "source": "logs/live_writer.log change=gex-spot-1019 accepted / kept_suspect", "direction": "up", "bound": "accepted share near the replay's 129/143"},
+    {"name": "Day-tier GEX stand-downs on SNDK/EWY", "source": "logs/day_tier_runner_cron.log GEX-ACTION STAND_DOWN lines", "direction": "down", "bound": "below 10/19's 141 SNDK stand-downs on a comparable session"},
+    {"name": "P&L of trades opened on bar_atr labels", "source": "Alpaca fills via reporting.pnl_ledger, split by spot_validated_by", "direction": "none", "bound": "reported separately from quote-validated trades"}
+  ],
+  "verification": "tests/test_gex_spot_guard.py"
+}
