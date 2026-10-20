@@ -333,28 +333,35 @@ class PlaceEntryConv(unittest.TestCase):
             return None
         trigger = {"trigger": "ENTER", "direction": "long", "mode": "RIDE", "entry_ref": 100.0, "target": None,
                    "wall_ref": 97.0}
-        with mock.patch.object(dtm, "_enabled", return_value=True), \
-                mock.patch.object(dtm, "_load_state", return_value={}), \
+        import contextlib
+        with contextlib.ExitStack() as _x:
+            for _p in (
+                mock.patch.object(dtm, "_enabled", return_value=True),
+                mock.patch.object(dtm, "_load_state", return_value={}),
                 mock.patch.object(dtm, "_save_state", side_effect=lambda st: saved.append(
-                    {k: dict(v) for k, v in st.items() if isinstance(v, dict)}) or True), \
-                mock.patch.object(dtm, "_room_stop", side_effect=lambda _s, _d, _l, st: (st, "kept")), \
-                mock.patch.object(dtm, "_account_entry_halt_reason", return_value=None), \
-                mock.patch.object(dtm, "_daily_risk_used", return_value=(0.0, 0.0, "")), \
-                mock.patch.object(dtm, "_conv_entry", return_value=conv) as ce, \
-                mock.patch("data.live_price.live_price", return_value=LivePrice(100.0, "iex_trade", 1.0)), \
-                mock.patch("data.alpaca_data.get_latest_quote", return_value=None), \
-                mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={}), \
-                mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)), \
-                mock.patch("strategy.day_tier_logger.log_decision", return_value=True), \
-                mock.patch.object(broker, "get_account", return_value=acct), \
-                mock.patch.object(broker, "get_open_positions", return_value=[]), \
-                mock.patch.object(broker, "get_open_orders", return_value=[]), \
-                mock.patch.object(broker, "get_asset_maintenance_margin_rate", return_value=0.30), \
+                    {k: dict(v) for k, v in st.items() if isinstance(v, dict)}) or True),
+                mock.patch.object(dtm, "_room_stop", side_effect=lambda _s, _d, _l, st: (st, "kept")),
+                mock.patch.object(dtm, "_account_entry_halt_reason", return_value=None),
+                mock.patch.object(dtm, "_daily_risk_used", return_value=(0.0, 0.0, "")),
+                mock.patch.object(dtm, "_conv_compute", return_value=conv),
+                mock.patch("data.live_price.live_price", return_value=LivePrice(100.0, "iex_trade", 1.0)),
+                mock.patch("data.alpaca_data.get_latest_quote", return_value=None),
+                mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={}),
+                mock.patch("strategy.day_tier_logger.read_events_checked", return_value=([], True)),
+                mock.patch("strategy.day_tier_logger.log_decision", return_value=True),
+                mock.patch.object(broker, "get_account", return_value=acct),
+                mock.patch.object(broker, "get_open_positions", return_value=[]),
+                mock.patch.object(broker, "get_open_orders", return_value=[]),
+                mock.patch.object(broker, "get_asset_maintenance_margin_rate", return_value=0.30),
                 mock.patch("execution.tier_capital_allocator.live_admit",
-                           return_value=SimpleNamespace(approved=True, lease=None, reason="")), \
-                mock.patch("execution.tier_capital_allocator.live_order_id", return_value="DT-x"), \
-                mock.patch("execution.tier_capital_allocator.live_release", return_value=None), \
-                mock.patch.object(broker, "submit_limit_order", side_effect=_submit):
+                           return_value=SimpleNamespace(approved=True, lease=None, reason="")),
+                mock.patch("execution.tier_capital_allocator.live_order_id", return_value="DT-x"),
+                mock.patch("execution.tier_capital_allocator.live_release", return_value=None),
+                mock.patch.object(broker, "submit_limit_order", side_effect=_submit),
+            ):
+                _x.enter_context(_p)
+            # place_entry reads through _conv_inputs and sizes in the pure _conv_compute (REPLAY-1019)
+            ce = _x.enter_context(mock.patch.object(dtm, "_conv_inputs", return_value={"stage": "ok"}))
             size = {"size_ok": True, "shares": 5, "conviction": 0.5, "track": track, "budget": 300.0}
             if max_size is not None:
                 size["max_size"] = max_size
@@ -450,7 +457,8 @@ class ScaleOutExit(unittest.TestCase):
             _es.enter_context(mock.patch.object(dtm, "_room_stop", side_effect=lambda _s, _d, _l, st: (st, "kept")))
             _es.enter_context(mock.patch.object(dtm, "_account_entry_halt_reason", return_value=None))
             _es.enter_context(mock.patch.object(dtm, "_daily_risk_used", return_value=(0.0, 0.0, "")))
-            _es.enter_context(mock.patch.object(dtm, "_conv_entry", return_value=conv))
+            _es.enter_context(mock.patch.object(dtm, "_conv_inputs", return_value={"stage": "ok"}))
+            _es.enter_context(mock.patch.object(dtm, "_conv_compute", return_value=conv))
             _es.enter_context(mock.patch.object(dtm, "_confirm_fill", return_value=True))
             _es.enter_context(mock.patch.object(dtm, "_await_entry_terminal", return_value=True))
             _es.enter_context(mock.patch.object(dtm, "_final_fill", return_value=(float(filled), 100.0)))

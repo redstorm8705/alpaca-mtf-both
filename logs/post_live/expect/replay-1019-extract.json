@@ -1,0 +1,10 @@
+{
+  "change": "replay-1019-extract",
+  "tier": 1,
+  "paths": ["execution/day_trade_manager.py"],
+  "proof": [{"log": "logs/day_tier_runner_cron.log", "pattern": "day-tier wire-time sizing"}],
+  "expected_rate": "each Day-tier entry attempt that reaches wire-time sizing; ~1-10/day",
+  "window_sessions": 5,
+  "reversal": "any live Day-tier entry whose wired qty, stop or skip reason differs from what origin/main's sizing would produce on the same logged inputs, or a new exception in place_entry",
+  "baseline_exempt_reason": "behavior-neutral refactor: the existing wire-time sizing line is reused unchanged, so it already appears before ship; the proof is that it keeps appearing with no new place_entry exception"
+}
