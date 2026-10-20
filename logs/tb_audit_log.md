@@ -11529,3 +11529,26 @@ Design record: `logs/design_records/f6_bounded_entry_2026-10-17.md`.
 
 **Dashboard Stop column.** It does not read Swing-tier stops (data/state/swing_breakout.json). All 5 broker stops
 are live. A fix is proposed as a separate session (dash-stops).
+
+## 2026-10-20 (Claude, AWP) — REPLAY-1019 diff 1, GEX-SPOT-1019, SLACK-EOD-1020; post-live #671/#720
+
+- **REPLAY-1019 diff 1 (#722, deployed d92f6ba):** Day-tier wire-time sizing split into reads (`place_entry`, `_conv_inputs`) and pure compute (`_conv_compute`, `_wired_entry`).
+  - A 720-case golden grid generated from origin/main is pinned; pre-#717 code differs on 112 cases.
+  - Gates: cold-2nd PASS, adversarial PASS after a claims correction (24→112), Gro+GAI APPROVE.
+  - Known gap: the `used is None` abort is not pinned on its own (it fails closed by exception).
+- **GEX-SPOT-1019 (#723, deployed e8229be 04:13 PT):**
+  - Problem: a wide IEX quote (>2% of mid) left the spot unvalidated. SNDK on 10/19 had 23 rejections and 158 Day-tier stand-downs.
+  - Fix: the spot is now validated against the last completed 5-minute bar's [low−ATR, high+ATR]. Fresh, regular-way trades only; "T" (extended hours) was added after a live probe.
+  - Replay: 129 of 143 rejections accepted.
+  - Gates: masked-loss seat APPROVE, cold-2nd PASS, adversarial PASS. Gro+GAI were re-run after correcting a false premise in Claude's own context ("spot does not feed share count"): spot reaches size indirectly through the GEX-wall stop.
+  - Follow-up: copy `spot_validated_by` into the Day-tier decision record (day_tier_gex_action.py).
+- **SLACK-EOD-1020 (#724):**
+  - Root cause: the post-market card ran `json.loads` on the prompt string (header + JSON), which always failed, so it showed $0.00 and 0 closed.
+  - Fix: the card now reads Alpaca fills FIFO, split as the heal splits it (trading tiers, plus quarterly holds on a separate line).
+  - Validation: 10/09–10/19 all match the reconciled EOD fields. The adversarial review caught the 10/14 LLY hold-sale mismatch before ship.
+  - Separate open defect: the EOD `trades_today` count misses Day-tier closes.
+- **Post-live:**
+  - #671 closed: the proof line exists, and the evaluator checks before it writes it.
+  - #720 closed: F6 validation runs inside `validate_config` and logged "Config validation passed" on 10/20; the expectation's proof pattern matches no code.
+  - Still open: #672 (AVGO fifo phantom short) and #636.
+- **Live check 10/20 08:22 PT:** GEX-SPOT-1019 accepted 5 wide-quote spots (SNDK 3, MU 1, MSFT 1), 0 kept suspect, no tracebacks; SNDK STALE stand-downs 8 so far vs 141 on 10/19. SLACK-EOD-1020 deployed 8dd0fbc (first run 16:05 ET).
