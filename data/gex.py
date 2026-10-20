@@ -216,6 +216,93 @@ def _spot_is_suspect(spot: float, quote: dict | None) -> tuple[bool, dict]:
     return False, {"dev": round(dev, 4), "band": round(band, 4)}
 
 
+# ── Wide-quote fallback: validate the trade against the recent tape (GEX-SPOT-1019, owner approval 2026-10-20) ──
+# The free IEX quote is a thin slice of the market: on high-priced or thin names (SNDK ~$1,385, EWY, MU, TSLA, META) it
+# routinely quotes wider than GEX_SPOT_SPREAD_SANITY_PCT, so the guard above rejected a good last trade and the label
+# froze into STALE (SNDK 10/19: 23 rejections, 141 Day-tier stand-downs). When the quote is too wide to validate the
+# trade, validate the trade against the last COMPLETED real-time 5-minute IEX bar that ended at or before it (never a
+# bar that contains it), widened by the session's measured ATR. Board Harris + Taleb, Gro, GAI (design record
+# logs/design_records/gex_spot_guard_wide_quote_2026-10-19.md). Replay 10/08-10/19: 129 of 143 rejections accepted,
+# every accepted trade consistent with the next 15 minutes of tape.
+# Trade conditions that do not set a minute bar's high/low per Alpaca's bar-aggregation table (docs: Market Data FAQ,
+# "How are bars aggregated?"): such a print is not a current regular-way price. Odd lots ("I") are kept — they are real
+# executed prices and most IEX prints on a high-priced name are odd lots; they only skip the bar's high/low.
+# "T" (Form T, extended hours) is excluded too: a live probe on 2026-10-20 showed the latest SNDK/SPY prints carry it
+# after the close, and an extended-hours print reported during the session is not a current regular-way price.
+_NOT_CURRENT_PRICE_CONDITIONS = frozenset({"B", "C", "G", "H", "M", "N", "P", "Q", "R", "T", "U", "V", "W", "Z", "4",
+                                           "7", "9"})
+
+
+def _get_spot_trade(symbol: str) -> dict | None:
+    """Latest trade with its time and conditions — {"price", "ts", "conds"} — or None. T1 Alpaca Data REST (same
+    endpoint as _get_spot). Never raises."""
+    try:
+        resp = requests.get(f"{_BASE_DATA}/v2/stocks/{symbol}/trades/latest", headers=_headers(), timeout=4.0)
+        if resp.status_code != 200:
+            return None
+        t = resp.json().get("trade") or {}
+        price = float(t.get("p") or 0.0)
+        raw_ts = str(t.get("t") or "")
+        import pandas as pd
+        ts = pd.Timestamp(raw_ts).floor("us").to_pydatetime()   # RFC-3339 with nanoseconds, UTC ("Z")
+        if ts.tzinfo is None:
+            return None
+        if not (math.isfinite(price) and price > 0):
+            return None
+        return {"price": price, "ts": ts, "conds": [str(c) for c in (t.get("c") or [])]}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("GEX trade [%s] failed: %s", symbol, e)
+        return None
+
+
+def _bar_validated_spot(symbol: str) -> tuple[bool, dict]:
+    """(accepted, diag) for a trade whose quote was too wide to validate it (GEX-SPOT-1019). Accepted only when the
+    latest trade is fresh, regular-way, and inside [bar low - ATR, bar high + ATR] of the last completed real-time
+    5-minute IEX bar that ended at or before it, with ATR the median true range of today's completed regular-session
+    bars before it. Anything missing, stale or off-condition -> (False, reason): the caller keeps the spot suspect,
+    exactly as before. Never raises."""
+    try:
+        import config as _cfg
+        from strategy.day_tier_entry_trigger import _INTRADAY_BARS, _MAX_LAST_BAR_AGE, _is_rth, fetch_bars_ref
+        tr = _get_spot_trade(symbol)
+        if tr is None:
+            return False, {"reason": "no_trade"}
+        diag: dict = {"price": tr["price"], "trade_ts": tr["ts"].isoformat(), "conds": tr["conds"]}
+        bad = sorted(set(tr["conds"]) & _NOT_CURRENT_PRICE_CONDITIONS)
+        if bad:
+            return False, {**diag, "reason": "trade_condition", "bad_conds": bad}
+        now = datetime.now(ET)
+        if now - tr["ts"] > _MAX_LAST_BAR_AGE:
+            return False, {**diag, "reason": "stale_trade"}
+        df = fetch_bars_ref(symbol, _cfg.TF_5M, _INTRADAY_BARS)
+        if df is None or getattr(df, "empty", True):
+            return False, {**diag, "reason": "no_fresh_bars"}
+        import pandas as pd
+        bar_len = pd.Timedelta(_cfg.TF_5M).to_pytimedelta()
+        today = tr["ts"].astimezone(ET).date()
+        rows = [(ts.to_pydatetime(), float(h), float(lo), float(c))
+                for ts, h, lo, c in zip(df.index, df["high"], df["low"], df["close"], strict=True)
+                if ts.astimezone(ET).date() == today and _is_rth(ts.astimezone(ET))
+                and ts.to_pydatetime() + bar_len <= tr["ts"]]
+        if len(rows) < 2:
+            return False, {**diag, "reason": "too_few_session_bars"}
+        trs = [max(h - lo, abs(h - pc), abs(lo - pc)) for (_t, h, lo, _c), (_pt, _ph, _pl, pc) in zip(rows[1:], rows, strict=False)]
+        trs = [x for x in trs if math.isfinite(x) and x >= 0]
+        if not trs:
+            return False, {**diag, "reason": "no_atr"}
+        import statistics
+        atr = statistics.median(trs)
+        ref_t, ref_h, ref_l, _ref_c = rows[-1]
+        lo_b, hi_b = ref_l - atr, ref_h + atr
+        diag.update(bar_start=ref_t.isoformat(), bar_high=ref_h, bar_low=ref_l, atr=round(atr, 4),
+                    band=[round(lo_b, 4), round(hi_b, 4)])
+        if lo_b <= tr["price"] <= hi_b:
+            return True, {**diag, "reason": "inside_bar_atr_band"}
+        return False, {**diag, "reason": "outside_bar_atr_band"}
+    except Exception as e:  # noqa: BLE001
+        return False, {"reason": "error", "detail": repr(e)[:160]}
+
+
 def _prior_good_entry(symbol: str) -> dict | None:
     """Return the previous snapshot's entry for `symbol` IFF it carries a real (non-error,
     non-UNKNOWN) label with a confirmed-good timestamp. Used to carry the last confirmed-good
@@ -1022,6 +1109,18 @@ def refresh_gex() -> None:
         # about the spot degrades toward neutral, never up-sizes the book on a bad tick.
         _quote = _get_spot_quote(symbol)
         _suspect, _sdiag = _spot_is_suspect(spot, _quote)
+        _validated_by = "quote"
+        _bar_diag: dict = {}
+        if _suspect and _sdiag.get("reason") == "quote_unusable":
+            # GEX-SPOT-1019: a quote too wide to validate the trade is not evidence of a bad trade — check the trade
+            # against the recent tape instead (fail-safe: anything missing keeps the spot suspect, as before).
+            _ok, _bar_diag = _bar_validated_spot(symbol)
+            logger.info("GEX [%s]: change=gex-spot-1019 %s quote_spread=%s | %s", symbol,
+                        "accepted" if _ok else "kept_suspect", _sdiag.get("spread"), _bar_diag)
+            if _ok:
+                _suspect = False
+                spot = float(_bar_diag["price"])
+                _validated_by = "bar_atr"
         if _suspect:
             _prior = _prior_good_entry(symbol)
             if _prior is not None:
@@ -1101,6 +1200,9 @@ def refresh_gex() -> None:
             # carried-forward label ages from its last-clean time. quote_mid kept for the audit.
             gex["confirmed_ts"]      = ts_str
             gex["quote_mid"]         = round(_quote["mid"], 2) if _quote else None
+            gex["spot_validated_by"] = _validated_by   # GEX-SPOT-1019: "quote" or "bar_atr" (fills/P&L split)
+            if _bar_diag:
+                gex["spot_guard"]    = _bar_diag
             results[symbol]          = gex
             # INFO (was debug): this line IS the shadow-review record — must be visible
             # at production log level or the 30-session clock never accumulates evidence.
@@ -1198,6 +1300,7 @@ def get_gex_regime(symbol: str = "SPY") -> dict:
             "expiries":     sorted(k for k, v in (sym_data.get("expiries_used") or {}).items()
                                    if isinstance(v, dict) and v.get("admitted")),
             "admission":    sym_data.get("admission"),
+            "spot_validated_by": sym_data.get("spot_validated_by", "quote"),   # GEX-SPOT-1019 provenance
         }
     except Exception as e:
         logger.warning("GEX get_gex_regime failed: %s", e)
