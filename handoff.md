@@ -23,10 +23,11 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - Known: this week's and 9/28's weekly reports fail closed on owner manual sales tagged 'unattributed' (LLY, GEV) —
   fixed by queue item (3) below.
 
-**⏩ EXACT NEXT ACTION (Claude):** CONV-1018 sizing diff is merged (PR #709) and deployed, unexercised; verify with
-`gh pr view 709 --json state` (captured: MERGED). Next: (a) post-live audit of PR #709 after Monday 10/19's session
-(grep `change=conv-1018-sizing` in the Day runner log); (b) build the half-at-2R scale-out as the second CONV-1018
-diff (design section "Gate-compliant revision", item 7). Details in logs/tb_audit_log.md.
+**⏩ EXACT NEXT ACTION (Claude, 2026-10-20):** Shipped and deployed on 10/20: REPLAY-1019 diff 1 (#722), GEX-SPOT-1019
+(#723, live and exercised) and SLACK-EOD-1020 (#724, first run 16:05 ET 10/20). Details in logs/tb_audit_log.md.
+Next: (a) post-live audit of #722/#723/#724 after 10/20's session; (b) REPLAY-1019 diffs 2-3 (log sizing inputs
+on every attempt; the replay gate in preship + CI); (c) dashboard live stops for every tier; (d) post-live #672
+(AVGO fifo phantom short) and #636. Waiting on the owner: SLACK-0930 (remove the 6:30 AM PT $0 card).
 Then the queue: (2) Swing-tier
 breakdown shorts, (3) weekly reports count owner/accidental trades with an asterisk (also unblocks the weekly report),
 (4) gate false positives (incl. the launch check flagging a `claude-code` URL in PR bodies). Monday 10/19: GEX-1017
