@@ -1,0 +1,66 @@
+Nightly Gemini Audit — 2026-10-20
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['nightly_audit.py', 'scripts/audit_slack.py', 'data/gex.py', 'strategy/day_tier_logger.py', 'strategy/day_tier_entry_trigger.py', 'execution/day_trade_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but the persistent "No daily data" warnings for [DRAM] and the recurring Rule 1 lockout indicate ongoing data-feed and risk-management gating issues.
+
+### LOG ANOMALIES
+*   **[DRAM] Data Gap**: The log shows recurring `[DRAM] No daily data — long/short entry blocked (fail-closed)` warnings throughout the 24h period. This indicates a persistent failure to ingest daily data for this symbol, causing it to be permanently blocked from trading.
+*   **Rule 1 Lockout**: The bot repeatedly triggered `🔴 RULE 1 — PREMARKET RED LOCKOUT` (78% of movers red). While this is an intentional safety feature, the frequency of this lockout suggests the bot is consistently unable to take long positions during the current market regime.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The last 10 trades (from the provided `trade_events.jsonl`) show consistent P&L sign logic.
+*   **Stop/Target Analysis**: The `AMZN` trade on 2026-10-13 (Entry: 261.87, Stop: 259.74, Exit: 259.68) correctly hit the protective stop. The `UBER` trade on 2026-10-14 (Entry: 70.12, Exit: 68.96) correctly captured profit.
+*   **Score Correlation**: The bot is currently in a "STAND_DOWN" or "WAIT" state for most tickers due to the Rule 1 lockout and GEX regime, making score-based performance correlation statistically insignificant for this 24h window.
+
+### TRADE INTEGRITY
+*   **No issues**: All recorded trades in the provided `trade_events.jsonl` show valid P&L calculations and logical exit reasons.
+
+### MODIFIED FILE FINDINGS
+*   **`strategy/day_tier_entry_trigger.py`**:
+    *   **Finding**: The `_vol_ok` function relies on `_IEX_LOOKBACK_DAYS` (5 days). If the IEX feed is sparse (as noted in the GEX module), the volume baseline may be skewed.
+    *   **Severity**: MEDIUM.
+    *   **Failure Condition**: If `prior` volume list is empty due to lack of IEX trades, `_vol_ok` returns `False`, causing a silent `WAIT` for the entry trigger.
+*   **`data/gex.py`**:
+    *   **Finding**: The `_spot_is_suspect` guard uses `GEX_SPOT_SPREAD_SANITY_PCT` (default 0.02). As noted in the code comments, this is causing valid trades on high-priced names (e.g., `SNDK`) to be rejected.
+    *   **Severity**: MEDIUM.
+    *   **Failure Condition**: Valid trades are rejected as "suspect" because the IEX quote spread exceeds 2% of the mid-price, leading to stale GEX labels.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: OBSOLETE
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+*   **P5-M1**: UNTOUCHED
+*   **P5-M2**: UNTOUCHED
+*   **P5-M3**: UNTOUCHED
+*   **P5-L1**: UNTOUCHED
+*   **P5-L2**: UNTOUCHED
+*   **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **INFRASTRUCTURE | MEDIUM | data/gex.py | Stale GEX labels due to overly aggressive spot guard | The `_spot_is_suspect` guard rejects valid trades on high-priced/thin symbols because the IEX quote spread exceeds the 2% sanity threshold, causing the bot to rely on stale labels.**
+*   **ALPHA ISSUE | MEDIUM | strategy/day_tier_entry_trigger.py | Volume confirmation failure on thin IEX tape | The `_vol_ok` function fails to confirm volume if the IEX feed has insufficient history, causing the entry trigger to `WAIT` even when the GEX regime is favorable.**
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Investigate DRAM Data Feed**: Resolve the missing daily data for `DRAM` to prevent the persistent "fail-closed" state.
+2.  **Adjust GEX Spot Guard**: Increase `GEX_SPOT_SPREAD_SANITY_PCT` or implement a symbol-specific spread threshold to prevent valid trades on high-priced stocks (like `SNDK`) from being rejected by the spot guard.
+3.  **Review IEX Volume Baseline**: Evaluate if `_VOL_CONFIRM` and the baseline calculation in `strategy/day_tier_entry_trigger.py` are too restrictive for the current IEX feed liquidity.
+================================================================================
+BROKER GROUND TRUTH (2026-10-20, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
