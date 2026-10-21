@@ -249,6 +249,7 @@ def test_real_shutdown_mode_rejects_pending_cancel_gtc(monkeypatch):
 def test_real_shutdown_accepts_stable_gtc_at_stored_stop(monkeypatch):
     live_stop = SimpleNamespace(
         symbol="NVDA",
+        client_order_id="IN-NVDA-protect",
         side="sell",
         type="stop",
         time_in_force="gtc",
@@ -260,6 +261,26 @@ def test_real_shutdown_accepts_stable_gtc_at_stored_stop(monkeypatch):
     assert handlers.preserve_swing_on_shutdown(
         _real_reconciler_tracker(), object()
     ) is True
+
+
+def test_real_shutdown_rejects_gtc_owned_by_another_tier(monkeypatch):
+    qhm_stop = SimpleNamespace(
+        symbol="NVDA",
+        client_order_id="QH-NVDA-stale",
+        side="sell",
+        type="stop",
+        time_in_force="gtc",
+        status="new",
+        qty="1",
+        stop_price="100",
+    )
+    _patch_real_reconciler_book(monkeypatch, orders=[qhm_stop], current_price="110")
+    import alerts
+
+    monkeypatch.setattr(alerts, "send_slack", lambda message: None)
+    assert handlers.preserve_swing_on_shutdown(
+        _real_reconciler_tracker(), object()
+    ) is False
 
 
 @pytest.mark.parametrize("bad_price", [None, "0", "nan", "inf"])

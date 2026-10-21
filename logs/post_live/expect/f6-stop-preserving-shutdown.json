@@ -15,7 +15,7 @@
   "expected_rate": "once on the first explicit operator shutdown while Swing holds at least one position; dormant until that event",
   "window_sessions": 10,
   "window_reason": "explicit operator shutdowns are event-driven rather than daily; ten sessions distinguish an unexercised path from a broken frequent path without claiming the event must occur",
-  "reversal": "the process exits with any initial Swing symbol missing exactly one verified stable GTC stop, or shutdown submits a close, stop, cancellation, or mutation of a QHM/F6 claim",
+  "reversal": "the process exits with any initial Swing symbol missing complete verified stable GTC stop coverage, or shutdown submits a close, stop, cancellation, or mutation of a QHM/F6 claim",
   "metrics": [
     {
       "name": "shutdown_swing_proof_completeness",

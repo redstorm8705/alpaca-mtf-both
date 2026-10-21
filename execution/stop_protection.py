@@ -806,13 +806,16 @@ def reconcile_protection(
                             )
                             and not _is_breached(direction, order_stop, mkt_px)
                         ):
-                            if exact_shared_owner:
-                                from execution.ownership_guard import tier_of_coid
+                            # Explicit shutdown may trust only a Swing-owned stop.
+                            # A stale QHM/F6/Day order can otherwise make aggregate
+                            # quantity look covered while another tier owns the
+                            # lifecycle and may cancel or replace it independently.
+                            from execution.ownership_guard import tier_of_coid
 
-                                if tier_of_coid(
-                                    getattr(order, "client_order_id", None)
-                                ) != "intraday":
-                                    continue
+                            if tier_of_coid(
+                                getattr(order, "client_order_id", None)
+                            ) != "intraday":
+                                continue
                             gtc_cov += _order_qty(order)
                     if gtc_cov < target_qty - _QTY_EPS:
                         _throttled_page(

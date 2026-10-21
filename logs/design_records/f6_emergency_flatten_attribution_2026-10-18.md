@@ -3,7 +3,7 @@
 **Author:** OpenAI Codex
 **Status:** Rafael approved the final read-only design on 2026-10-20; ready for commit/CI/deploy
 Approval-ID: F6-FLAT-1018
-Covers: events/handlers.py, execution/stop_protection.py, main.py, tests/test_shutdown_preserves_swing.py, logs/design_records/f6_emergency_flatten_attribution_2026-10-18.md, handoff.md, logs/tb_audit_log.md
+Covers: events/handlers.py, execution/stop_protection.py, main.py, tests/test_shutdown_preserves_swing.py, logs/design_records/f6_emergency_flatten_attribution_2026-10-18.md, logs/post_live/expect/f6-stop-preserving-shutdown.json, handoff.md, logs/tb_audit_log.md
 
 ## Prior work
 
