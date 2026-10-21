@@ -1,0 +1,10 @@
+{
+  "change": "account-pnl-1020",
+  "tier": 1,
+  "paths": ["scripts/audit_slack.py"],
+  "proof": [{"log": "logs/nightly_audit_cron.log", "pattern": "Slack Block Kit card posted"}],
+  "expected_rate": "every weekday 16:05 ET nightly audit run",
+  "window_sessions": 5,
+  "reversal": "an 'Account today' or 'Account since start' figure shown clean that differs from Alpaca equity minus prior-close equity / minus the $2,500 start by more than the ledger tolerance, or a reconcile warning on a day both sources agree",
+  "baseline_exempt_reason": "The card-posted line already exists for the nightly run; the proof for this change is the Account lines on the posted card, which the Slack log does not record. It is verified by the post-live check comparing the card numbers with Alpaca's account and portfolio history for the same session."
+}

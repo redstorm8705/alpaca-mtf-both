@@ -38,6 +38,7 @@ This module renders + posts only. Distribution wiring (git push / directives app
 from __future__ import annotations
 
 import json
+import math
 import logging
 import os
 import re
@@ -63,7 +64,107 @@ _SEV = {"critical": "🔴", "high": "🟡", "low": "✓"}
 
 # ── P&L block (authoritative, code-computed) ─────────────────────────────────
 
-def _fifo_day(day: str) -> Optional[tuple[float, float, int]]:
+def _ledger_and_account() -> Optional[dict]:
+    """One consistent read of the authoritative inputs (ACCOUNT-PNL-1020): full-history Alpaca fills + orders
+    (strict — a short history raises and the card falls back), the FIFO ledger split as the 8:30 PM heal splits it,
+    and ONE account + ONE positions read so equity, prior-close equity and open P&L come from the same moment.
+    Returns None on any failure. Never raises."""
+    try:
+        import reporting.pnl_ledger as _pl
+        fills = _pl.fetch_all_fills(strict=True) or []      # a short history must fall back, never mislabel
+        orders = _pl.fetch_all_orders(strict=True) or []
+        led = _pl.compute_realized(fills, qhm_symbols=_pl._get_qhm_symbols(),
+                                   coid_map=_pl.build_coid_map(orders))
+        acct = _pl.fetch_account()
+        positions = _pl.fetch_positions()
+        deposits = _pl.fetch_net_deposits()
+        try:   # account-view inputs only: a failure here withholds the account lines, never the realized line
+            hist = _pl._get_json(f"{_pl._PAPER_BASE}/v2/account/portfolio/history?period=1W&timeframe=1D")
+            fees = _fees_total(_pl)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("audit card: fee/history read failed (%s) — account lines withheld", e)
+            hist, fees = None, None
+        return {"led": led, "acct": acct, "positions": positions, "deposits": deposits, "fees": fees,
+                "history": hist, "tolerance": float(_pl._INVARIANT_TOLERANCE),
+                "check_invariant": _pl.check_invariant}
+    except Exception as e:  # noqa: BLE001 — a card must never break on the P&L read
+        logger.warning("audit card: Alpaca ledger/account read failed (%s)", e)
+        return None
+
+
+def _fees_total(_pl) -> float:
+    """Sum of every posted FEE activity (regulatory/CAT fees; negative). Pages with page_token (Alpaca ignores
+    after_id). Raises on a failed or non-list page so the account check is withheld rather than wrong."""
+    total, token = 0.0, None
+    for _ in range(200):
+        url = f"{_pl._PAPER_BASE}/v2/account/activities/FEE?page_size=100" + (f"&page_token={token}" if token else "")
+        batch = _pl._get_json(url)
+        if not isinstance(batch, list):
+            raise RuntimeError("fee activities returned a non-list page")
+        total += sum(float(a.get("net_amount") or 0.0) for a in batch)
+        if len(batch) < 100:
+            return round(total, 2)
+        token = batch[-1].get("id")
+        if not token:
+            raise RuntimeError("fee activities page has no id to continue from")
+    raise RuntimeError("fee activities exceeded the page limit")
+
+
+def _history_prior_close(hist: dict, day: str) -> Optional[float]:
+    """Equity at the last completed session before ET date `day`, from Alpaca's portfolio-history endpoint (each
+    daily point is stamped 20:00 ET on its own session date, so converted to ET it lands on that date). An independent check on the account's last_equity, which
+    has gone stale before (2026-09-16 kill-switch false trip). None when unreadable."""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        et = ZoneInfo("America/New_York")
+        pts = [(datetime.fromtimestamp(int(t), tz=et).strftime("%Y-%m-%d"), e)
+               for t, e in zip(hist.get("timestamp") or [], hist.get("equity") or [], strict=False)]
+        prior = [float(e) for d, e in pts if d < day and e is not None]
+        return prior[-1] if prior else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _account_pnl(day: str, src: Optional[dict]) -> Optional[dict]:
+    """Whole-account P&L for the post-market card (ACCOUNT-PNL-1020), each number cross-checked against an
+    independent source before it is shown:
+      today  = equity - prior-close equity, where the prior close from the account (last_equity) must agree with
+               the prior close in Alpaca's portfolio history (a stale last_equity is the known failure);
+      since  = equity - net deposits (Alpaca cash activities; when the account has no deposit records, the
+               ledger's assumed $2,500 start, labelled), checked against lifetime FIFO realized + posted fees + open
+               unrealized (pnl_ledger.check_invariant, the ledger's own tolerance);
+      open   = the open positions' unrealized P&L.
+    None when any input is unreadable. Never raises."""
+    try:
+        if not src:
+            return None
+        acct, positions, led = src["acct"], src["positions"], src["led"]
+        equity = float(acct["equity"])
+        last_equity = float(acct["last_equity"])
+        if not (math.isfinite(equity) and math.isfinite(last_equity) and equity > 0 and last_equity > 0):
+            return None
+        unreal = round(sum(float(p.get("unrealized_pl") or 0.0) for p in positions), 2)
+        tol = src["tolerance"]
+        today = round(equity - last_equity, 2)
+        hist_prev = _history_prior_close(src.get("history") or {}, day)
+        if hist_prev is None or src.get("fees") is None:
+            return None
+        today_alt = round(equity - hist_prev, 2)
+        deposits = float(src["deposits"] or 0.0)
+        assumed = deposits == 0   # no deposit records on this account (portfolio history base 2,500 on 04-02)
+        start = 2500.0 if assumed else deposits   # pnl_ledger.build_ledger's documented assumed start capital
+        fees = float(src["fees"])   # posted fees are cash out of equity, not in the fills FIFO
+        inv = src["check_invariant"](float(led.get("lifetime", 0.0) or 0.0) + fees, unreal, equity, start)
+        return {"today": today, "today_alt": today_alt, "today_ok": abs(today - today_alt) <= tol,
+                "since": inv["expected_total_pnl"], "since_alt": inv["computed_total_pnl"], "since_ok": bool(inv["ok"]),
+                "open": unreal, "start": start, "start_assumed": assumed, "equity": equity}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("audit card: account P&L unavailable (%s)", e)
+        return None
+
+
+def _fifo_day(day: str, src: Optional[dict] = None) -> Optional[tuple[float, float, int]]:
     """(trading-tier realized, quarterly-hold realized, closing orders) for PT date `day`, from Alpaca
     fills by FIFO — the authoritative P&L source — split exactly as the 8:30 PM ET heal splits it
     (pnl_ledger.build_ledger / heal_history: `pnl_today` = per_day_intraday, `pnl_today_qhm` =
@@ -71,11 +172,10 @@ def _fifo_day(day: str) -> Optional[tuple[float, float, int]]:
     order. None when the fills or orders cannot be read in full (callers fall back and label it).
     Never raises."""
     try:
-        import reporting.pnl_ledger as _pl
-        fills = _pl.fetch_all_fills(strict=True) or []      # a short history must fall back, never mislabel
-        orders = _pl.fetch_all_orders(strict=True) or []
-        led = _pl.compute_realized(fills, qhm_symbols=_pl._get_qhm_symbols(),
-                                   coid_map=_pl.build_coid_map(orders))
+        src = src if src is not None else _ledger_and_account()
+        if not src:
+            return None
+        led = src["led"]
         trading = round(float(led.get("per_day_intraday", {}).get(day, 0.0) or 0.0), 2)
         holds = round(float(led.get("per_day_qhm", {}).get(day, 0.0) or 0.0), 2)
         closes = {r.get("exit_order_id") or r.get("exit_fill_id") or r.get("id")
@@ -113,7 +213,9 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None,
         # this 4:05pm audit, so a raw drift here is EXPECTED and is NOT a reconciliation
         # failure. Key off the `_healed_by` provenance stamp + `pnl_unreconciled`, never off
         # drift magnitude (BGG 2026-07-27, masked-loss + reliability seats).
-        fifo = _fifo_day(day) if day else None
+        src = _ledger_and_account() if day else None
+        fifo = _fifo_day(day, src) if day else None   # src None -> _fifo_day retries its own read once
+        acct_pnl = _account_pnl(day, src) if (day and src) else None
         if fifo is not None:
             realized, holds, closed_n = fifo
             closed = str(closed_n)
@@ -138,6 +240,24 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None,
         if holds:   # a quarterly-hold sale is shown on its own line, never folded in or hidden
             injected.append(_dollar(holds))
             today_fields.append({"type": "mrkdwn", "text": f"*Quarterly holds (separate)*\n{_dollar(holds)}"})
+        if acct_pnl is not None:   # whole-account view (ACCOUNT-PNL-1020) — shown only when it cross-checks
+            for label, val, ok, alt, src_name in (
+                    ("Account today", acct_pnl["today"], acct_pnl["today_ok"], acct_pnl["today_alt"],
+                     "portfolio history says"),
+                    ("Open positions (unrealized)", acct_pnl["open"], True, acct_pnl["open"], ""),
+                    ("Account since start", acct_pnl["since"], acct_pnl["since_ok"], acct_pnl["since_alt"],
+                     "fills + fees + open say")):
+                injected.append(_dollar(val))
+                text = _dollar(val)
+                if not ok:
+                    injected.append(_dollar(alt))
+                    text = f"⚠️ {_dollar(val)} — {src_name} {_dollar(alt)}; does not reconcile, verify"
+                today_fields.append({"type": "mrkdwn", "text": f"*{label}*\n{text}"})
+            injected.append(_dollar(acct_pnl["start"]))
+            injected.append(_dollar(acct_pnl["equity"]))
+            today_fields.append({"type": "mrkdwn", "text": (
+                f"*Account value*\n{_dollar(acct_pnl['equity'])} vs {_dollar(acct_pnl['start'])} start"
+                + (" _(assumed — no deposit records)_" if acct_pnl["start_assumed"] else ""))})
         if fifo is not None:
             source = "Alpaca FIFO · computed from today's fills"
         elif healed:
