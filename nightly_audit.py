@@ -264,8 +264,28 @@ def _collect_eod() -> str:
         return f"(Error reading EOD: {e})"
 
 
+def _diff_24h(rel_path: str) -> str | None:
+    """The file's change over the last 24h as a unified diff (git: the last commit before 24h ago vs HEAD), or None
+    when git cannot produce it. Used for files too long to send whole (AUDIT-DIFF-1020): a head-truncated file hid
+    the actual change from the auditor (10/20: data/gex.py is ~77k chars and its fix began at char ~61k, so the LLM
+    flagged the pre-fix behaviour as a live bug). Never raises."""
+    import subprocess
+    try:
+        base = subprocess.run(["git", "-C", str(BASE_DIR), "rev-list", "-1", "--before=24 hours ago", "HEAD"],
+                              capture_output=True, text=True, timeout=20).stdout.strip()
+        if not base:
+            return None
+        out = subprocess.run(["git", "-C", str(BASE_DIR), "diff", "--unified=12", base, "HEAD", "--", rel_path],
+                             capture_output=True, text=True, timeout=20)
+        return out.stdout if out.returncode == 0 and out.stdout.strip() else None
+    except Exception as e:  # noqa: BLE001 — a diff failure falls back to the truncated file
+        logger.warning("nightly audit: 24h diff for %s unavailable (%s)", rel_path, e)
+        return None
+
+
 def _collect_modified_files() -> dict[str, str]:
-    """Source .py files modified in the last 24h."""
+    """Source .py files modified in the last 24h. A file longer than MAX_FILE_CHARS is sent as its last-24h diff
+    (labelled as such), not as a head-truncated copy that can hide the change (AUDIT-DIFF-1020)."""
     cutoff = datetime.now(UTC).timestamp() - 86_400
     modified = {}
     # `.claude`/`tests` excluded (BGG 2026-07-27): nightly's job is post-close review of
@@ -278,9 +298,21 @@ def _collect_modified_files() -> dict[str, str]:
         if py_file.stat().st_mtime >= cutoff:
             try:
                 content = py_file.read_text(errors="replace")
+                rel = str(py_file.relative_to(BASE_DIR))
                 if len(content) > MAX_FILE_CHARS:
-                    content = content[:MAX_FILE_CHARS] + f"\n... [truncated at {MAX_FILE_CHARS} chars]"
-                modified[str(py_file.relative_to(BASE_DIR))] = content
+                    diff = _diff_24h(rel)
+                    if diff:
+                        logger.info("nightly audit: %s (%d chars) sent as its last-24h diff (%d chars) "
+                                    "[change=audit-diff-1020]", rel, len(content), len(diff))
+                        content = (f"# NOTE TO AUDITOR: this file is {len(content):,} chars, too long to show whole. "
+                                   f"Below is its LAST-24H DIFF only (unified, 12 lines of context). Code outside "
+                                   f"these hunks is NOT shown — do not assert what it does or does not contain.\n"
+                                   + diff[:MAX_FILE_CHARS]
+                                   + (f"\n... [diff truncated at {MAX_FILE_CHARS} chars]"
+                                      if len(diff) > MAX_FILE_CHARS else ""))
+                    else:
+                        content = content[:MAX_FILE_CHARS] + f"\n... [truncated at {MAX_FILE_CHARS} chars]"
+                modified[rel] = content
             except Exception as e:
                 modified[str(py_file.relative_to(BASE_DIR))] = f"(read error: {e})"
     return modified

@@ -1,0 +1,16 @@
+{
+  "change": "audit-diff-1020",
+  "tier": 1,
+  "paths": [
+    "nightly_audit.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/nightly_audit_cron.log",
+      "pattern": "sent as its last-24h diff .*change=audit-diff-1020"
+    }
+  ],
+  "expected_rate": "every nightly run that has a modified .py file longer than 20,000 chars; most trading days",
+  "window_sessions": 5,
+  "reversal": "a nightly finding that asserts the behaviour of code outside the shown diff hunks, or a nightly run that fails to post because of the diff collection"
+}
