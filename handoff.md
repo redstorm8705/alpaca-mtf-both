@@ -8,6 +8,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-21, OpenAI Codex signed) — stop-preserving explicit shutdown (#725), F6 OFF
+
+- Owner-approved design `F6-FLAT-1018` replaces the unsafe explicit-shutdown Swing liquidation with a read-only
+  proof that every Swing remainder already has complete stable, correctly attributed, sufficiently protective
+  GTC stop coverage at Alpaca. If any symbol cannot be proved, Ctrl-C is deferred and the running manager continues protecting
+  the account; the shutdown path never submits, cancels, or replaces an order.
+- The proof rejects missing coverage, duplicate per-symbol proof rows, DAY, transitional, breached, stale,
+  wrong-side, wrong-quantity, or wrong-owner stops, as well as unreadable broker positions/prices and incomplete
+  per-symbol results. Multiple valid Swing stops may supply aggregate coverage. SIGTERM,
+  the 7% trading brake, and normal stop management keep their existing behavior.
+- F6 remains disabled. This prerequisite changes no entry, sizing, signal, or allocator rule. Exact design and
+  approval evidence: `logs/design_records/f6_emergency_flatten_attribution_2026-10-18.md`.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** build ETF wind-down detection, then run the full-path pre-market
+simulation and prepare Rafael's one-page enablement decision. Do not enable F6.
+
 ## ⏩ LATEST (2026-10-18, Claude signed) — shared owner approvals (#701) + RULES-1018 report checks (#702) live
 
 - #701 (merged, synced): one owner-approval parser and store (inside the git common dir) for Claude, Codex and all

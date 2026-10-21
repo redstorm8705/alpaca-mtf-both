@@ -109,7 +109,7 @@ from execution.fill_helpers import (
 )
 # _halt_entries_for_session moved to events/handlers.py (Phase 2)
 from events.handlers import (
-    safe_close_all as _safe_close_all,
+    preserve_swing_on_shutdown as _preserve_swing_on_shutdown,
     set_halt_entries as _set_halt_entries,
 )
 # B1: _SHORTING_ENABLED, _feed_age_history, _systemic_stale_alerted, _partial_fail_counts
@@ -1112,8 +1112,12 @@ def main():
 
         except KeyboardInterrupt:
             logger.info("Bot stopped by user.")
-            _safe_close_all(tracker, risk, circuit_breaker=True,
-                            mri_level=mri.level() if mri else "NORMAL")  # H-6 / C-2: user shutdown = close all
+            if not _preserve_swing_on_shutdown(tracker, risk):
+                logger.critical(
+                    "User shutdown deferred: Swing protection is unresolved; "
+                    "the process will keep managing positions."
+                )
+                continue
             try:
                 qhm.safe_stop(circuit_breaker=False)  # persist QHM state on user shutdown
             except Exception as _qhm_kb_e:

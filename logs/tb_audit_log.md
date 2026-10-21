@@ -11552,3 +11552,5 @@ are live. A fix is proposed as a separate session (dash-stops).
   - #720 closed: F6 validation runs inside `validate_config` and logged "Config validation passed" on 10/20; the expectation's proof pattern matches no code.
   - Still open: #672 (AVGO fifo phantom short) and #636.
 - **Live check 10/20 08:22 PT:** GEX-SPOT-1019 accepted 5 wide-quote spots (SNDK 3, MU 1, MSFT 1), 0 kept suspect, no tracebacks; SNDK STALE stand-downs 8 so far vs 141 on 10/19. SLACK-EOD-1020 deployed 8dd0fbc (first run 16:05 ET).
+
+- 2026-10-21 F6-FLAT-1018 / PR #725 (OpenAI Codex): owner-approved explicit shutdown now preserves Swing positions only after a read-only broker proof of complete stable, correctly attributed, sufficiently protective GTC stop coverage per Swing symbol; any incomplete or contradictory proof defers Ctrl-C while the manager keeps running. No shutdown order mutation, trading-rule change, or F6 enablement; `FOREVER6_ENABLED` stays false.
