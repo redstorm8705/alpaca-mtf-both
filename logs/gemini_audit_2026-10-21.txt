@@ -1,0 +1,149 @@
+Nightly Gemini Audit — 2026-10-21
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['nightly_audit.py', 'main.py', 'scripts/audit_slack.py', 'execution/stop_protection.py', 'events/handlers.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+*(Per verification discipline: Ground Truth explicitly marks GE as NAKED, but code already owns and posts this finding to Slack, and per Ground Truth instructions, symbols marked NAKED in the broker block must not be repeated here).*
+
+---
+
+### VERDICT: WARN
+Bot operational; paper account incurred day-trading losses (-$30.54 authoritative today). Multiple recurring operational warnings around FIFO orphan fills on DRAM, unmanaged GE residual, and volume data anomalies need attention.
+
+---
+
+### LOG ANOMALIES
+- **FIFO Orphan Warnings on DRAM**:
+  - `2026-10-21 19:26:47,294 | WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for DRAM has no prior lot and no tracker record — fill unmatched.` (repeated at 19:41:13, 19:50:27, 19:59:47).
+  - Cause: DRAM positions opened and closed in the daytrade tier (`DT-DRAM-s-1792590624588-f62c2eeb` and `DT-DRAM-s-1792609586151-9e571943`) are tracked in the daytrade engine while the core `portfolio_tracker` FIFO listener receives broker fill callbacks for symbols it did not open.
+- **Fail-Closed Data Block on DRAM**:
+  - `confluence | [DRAM] No daily data — long entry blocked (fail-closed)` and short entry blocked logged consistently across cycles, preventing new swing confluence entries while daytrade tier traded DRAM earlier.
+- **Unmanaged Position Residual on GE**:
+  - `2026-10-21 19:27:01,023 | WARNING | execution.unmanaged_positions | [unmanaged-position] [GE] still unmanaged: residual 1 (paged)`. Ground truth confirms GE naked for 123m (10:57–13:00 PT).
+- **ANOMALY-2 on AAPL**:
+  - `strategy.run_cycle | [ANOMALY-2] [AAPL] confirm_gate=4 scans but no entry — risk.open_positions=2 vs tracker=0 | MAX_OPEN_POSITIONS=20`. Indicates state desync between `risk.open_positions` and `tracker` open positions count.
+- **Slow Ledger Sync Wall-Time**:
+  - `ledger_sync | ledger_sync wall-time 17.2s (fills=809 orders=3151)` — approaching timeout thresholds due to growing unpruned fill/order history.
+
+---
+
+### PERFORMANCE AUDIT
+- **Trade Records Inspected (Last 10 Events from `trade_events`)**:
+  1. `2026-10-16T08:26:31.143539-07:00`: AVGO Short @ 335.67, exit at `2026-10-16T10:16:02.444041-07:00` @ 332.31 (size 3) -> realized P&L: `(335.67 - 332.31) * 3 = +$10.08`. Sign and math correct.
+  2. `2026-10-16T08:10:37.775407-07:00`: PLTD Long @ 4.7094, exit at `2026-10-16T12:58:09.792610-07:00` @ 4.78 (size 18) -> realized P&L: `(4.78 - 4.7094) * 18 = +$1.27`. Correct.
+  3. `2026-10-16T22:19:10.131840-07:00`: LLY Exit `external_close_detected`, price `null` (hold_days=54). Managed externally/QHM.
+  4. `2026-10-19T07:16:29.025592-07:00`: AMZN Long @ 259.04, exit at `2026-10-19T07:56:02.762839-07:00` @ 262.33 (size 1) -> realized P&L: `(262.33 - 259.04) * 1 = +$3.29`. Correct.
+  5. `2026-10-21T06:50:27.167564-07:00`: DRAM Short @ 48.51, exit at `2026-10-21T09:40:03.486380-07:00` @ 49.26 (size 26) -> realized P&L: `(48.51 - 49.26) * 26 = -$19.50`. Correct.
+  6. `2026-10-21T09:46:34.462657-07:00`: TSLA Long @ 387.465, partial exit at `2026-10-21T12:00:13.334545-07:00` @ 386.02 (size 2) -> realized P&L: `(386.02 - 387.465) * 2 = -$2.89`. Correct.
+  7. `2026-10-21T09:46:34.462657-07:00`: TSLA Long @ 387.465, final exit at `2026-10-21T12:00:13.853468-07:00` @ 385.995 (size 2) -> realized P&L: `(385.995 - 387.465) * 2 = -$2.94`. Correct.
+  8. `2026-10-21T12:06:30.877477-07:00`: DRAM Short @ 48.85, exit at `2026-10-21T12:18:03.084245-07:00` @ 49.0504 (size 26) -> realized P&L: `(48.85 - 49.0504) * 26 = -$5.2104` -> recorded as `-$5.21`. Correct.
+- **Stop-Hit Rate vs Win Rate**:
+  - Today (2026-10-21): 3 round-trip trades completed (DRAM short #1, TSLA long, DRAM short #2). All 3 exited on protective stops (100% stop hit rate).
+  - P&L: `-$19.50 + (-$2.89 - $2.94) + (-$5.21) = -$30.54`, exactly matching `pnl_today=-30.54`.
+
+---
+
+### TRADE INTEGRITY
+- **P&L Signs**: All positive for winning trades, negative for losing trades.
+- **Zero P&L Records**: None found with entry ≠ exit price.
+- **Partial Exits**: TSLA partial exit cleanly divided 4 shares into 2 and 2, computing realized loss for each tranche accurately against the original entry price of $387.465.
+
+---
+
+### MODIFIED FILE FINDINGS
+
+#### 1. `execution/stop_protection.py`
+- **Function**: `reconcile_protection()`
+- **Tracing**:
+  - In `reconcile_protection(require_gtc=True)`:
+    Lines 795–820:
+    ```python
+    from execution.ownership_guard import tier_of_coid
+
+    if tier_of_coid(
+        getattr(order, "client_order_id", None)
+    ) != "intraday":
+        continue
+    gtc_cov += _order_qty(order)
+```
+    If `order.client_order_id` is empty, untagged, or assigned by a broker stop without an `"IN-"` prefix (for example manual or legacy orders), `tier_of_coid()` returns `"unknown"` or `"other"`. When checking shutdown protection with `require_gtc=True`, GTC stops that are validly protecting Swing positions but lack client_order_id tagging will be ignored (`continue`), causing `gtc_cov` to remain 0 and paging `shutdown stop expires`. This is safe (fail-closed, keeps managing), but operator manual stops could block graceful shutdown.
+  - Line 959+:
+    When `require_gtc=True`, a submit acknowledgement of a new GTC stop pages `shutdown placement awaiting readback` and does not complete shutdown until the next pass reads the order back from Alpaca. This correctly enforces verification before terminating.
+
+#### 2. `events/handlers.py`
+- **Function**: `_preserve_swing_on_shutdown_once()` / `preserve_swing_on_shutdown()`
+- **Tracing**:
+  - `preserve_swing_on_shutdown()` replaces the unconditional `_safe_close_all()` on user shutdown (`KeyboardInterrupt` in `main.py`).
+  - If Swing positions exist, it calls `reconcile_protection(session="closed", place=False, allow_cover=False, require_gtc=True)`. If any symbol has missing or non-GTC stops, it returns `False`, and `main.py` logs `User shutdown deferred...` and executes `continue`.
+  - **Issue**: If an operator triggers `SIGINT` (Ctrl-C) to stop the bot and a position has no GTC stop (e.g., waiting for pre-close sweep or holding an unmanaged residual), `main.py` catches `KeyboardInterrupt`, calls `preserve_swing_on_shutdown()`, receives `False`, and executes `continue`. This makes the bot ignore Ctrl-C indefinitely unless killed via `SIGKILL` (`kill -9`).
+
+#### 3. `scripts/audit_slack.py`
+- **Function**: `_account_pnl()`
+- **Tracing**:
+  - Correctly implements independent cross-checking of account equity, prior close from portfolio history, and deposits invariant tolerance before outputting whole-account stats.
+
+#### 4. `nightly_audit.py`
+- **Function**: `_diff_24h()`
+- **Tracing**:
+  - Implements git diff collection for files exceeding `MAX_FILE_CHARS` (addressing AUDIT-DIFF-1020). Fallbacks gracefully to head truncation if git command fails.
+
+---
+
+### P5 STATUS
+- **P5-C1**: UNTOUCHED (strategy/signal_generator.py not modified today).
+- **P5-C2**: UNTOUCHED (run_movers.py not modified today).
+- **P5-H1**: OBSOLETE (Rule confirmed permanently deleted).
+- **P5-H2**: UNTOUCHED (`execution/fill_helpers.py` not modified today).
+- **P5-H3**: UNTOUCHED (`execution/orphan_manager.py` not modified today).
+- **P5-H4**: UNTOUCHED.
+- **P5-H5**: UNTOUCHED.
+- **P5-M1**: UNTOUCHED.
+- **P5-M2**: UNTOUCHED.
+- **P5-M3**: UNTOUCHED (Logs show `scans_logged: 41`, growing steadily).
+- **P5-L1**: UNTOUCHED.
+- **P5-L2**: UNTOUCHED.
+- **P5-L3**: UNTOUCHED.
+
+---
+
+### NEW BUGS FOUND
+
+1. **EXECUTION BUG | MEDIUM | `main.py` & `events/handlers.py` (`preserve_swing_on_shutdown`)**
+   - **Description**: Unbreakable process loop on `KeyboardInterrupt` when Swing GTC stop is unresolved.
+   - **Code Path**: In `main.py`, the `KeyboardInterrupt` block calls `if not _preserve_swing_on_shutdown(tracker, risk): continue`. In `events/handlers.py`, `_preserve_swing_on_shutdown_once` returns `False` if any issue is present in `summary` (e.g. stop is DAY instead of GTC, or co-held in QHM/F6, or position unmanaged).
+   - **Runtime Failure**: When `_preserve_swing_on_shutdown` returns `False`, `main.py` issues `continue` back into `while True:`. When running in foreground or under process supervision, pressing Ctrl+C does not shut down the process; subsequent Ctrl+C presses are caught by the `except KeyboardInterrupt: return False` in `preserve_swing_on_shutdown`, endlessly looping without an exit escape hatch.
+   - **Failure Condition**: User issues Ctrl+C to terminate `main.py` while a position in `tracker.open_trades` cannot prove working GTC stop coverage (such as during RTH when stops are DAY orders).
+
+2. **EXECUTION BUG | LOW | `execution/portfolio_tracker.py`**
+   - **Description**: Daytrade fills generate spurious `FIFO orphan` warnings in `portfolio_tracker`.
+   - **Code Path**: `portfolio_tracker` processes broker fill callbacks without filtering for `daytrade` client_order_id prefixes, attempting to match DRAM daytrade fills against its own swing lot table.
+   - **Failure Condition**: Any daytrade execution closing fill triggers `FIFO orphan: closing fill for <SYM> has no prior lot and no tracker record`.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Fix Shutdown Escape Hatch in `main.py`**: Add a retry counter or forced-exit path for `KeyboardInterrupt` (e.g., if Ctrl+C is pressed twice within 5 seconds, prompt or proceed with shutdown after warning, rather than an unconditional `continue`).
+2. **Reconcile GE Unmanaged Residual**: Inspect Alpaca account for the 1-share residual of `GE` that has remained unmanaged across cycles.
+3. **Filter Daytrade Fills from Swing FIFO Tracker**: Update `portfolio_tracker` fill handler to ignore order IDs with prefix `DT-` so DRAM daytrade fills do not log FIFO orphan errors.
+4. **Prune Ledger Sync Input Data**: In `reporting/pnl_ledger.py`, paginate or window order and fill retrieval to keep sync wall-time well below the 17.2s mark seen today.
+
+================================================================================
+SUPPRESSION POST-FILTER: 0 false-alarm removed, 0 acknowledged | card verdict WARN → FAIL (see logs/audit_suppressions.jsonl; ground-truth escalation)
+
+================================================================================
+BROKER GROUND TRUTH (2026-10-21, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  DRAM   COVERED                  owners=day exposed=180m no-broker-stop=0m [06:50-06:50, 12:06-12:06] rejected_stop_orders=0
+  GE     NAKED                    owners=other/qhm exposed=390m no-broker-stop=123m [10:53-10:53, 10:57-13:00] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=133m no-broker-stop=0m [09:46-09:46] rejected_stop_orders=0
