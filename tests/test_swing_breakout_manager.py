@@ -309,11 +309,49 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(coid.startswith("IN-AAA-b-"))
         self.assertEqual(sent, [coid])
 
-    def test_forever6_universe_is_excluded(self):
-        with mock.patch.object(sb.config, "FOREVER6_UNIVERSE", ["AAA"], create=True):
+    def test_f6_reserved_universe_is_excluded(self):
+        with mock.patch.object(
+            sb.config, "SWING_BREAKOUT_F6_RESERVED_SYMBOLS", ["AAA"], create=True
+        ):
             _, got = self._run_entries(FakeBroker(), {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)})
         self.assertEqual(got, [])
         self.assertTrue(any(ev == "skip" and s == "AAA" for ev, s, _ in self.logs))
+
+    def test_runtime_f6_universe_addition_is_excluded_without_reserved_list_edit(self):
+        with mock.patch.object(sb.config, "FOREVER6_UNIVERSE", [" AAA "]), mock.patch.object(
+            sb.config, "SWING_BREAKOUT_F6_RESERVED_SYMBOLS", [], create=True
+        ):
+            _, got = self._run_entries(
+                FakeBroker(), {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)}
+            )
+        self.assertEqual(got, [])
+        self.assertTrue(any(ev == "skip" and s == "AAA" for ev, s, _ in self.logs))
+
+    def test_retired_f6_etfs_remain_swing_reserved(self):
+        self.assertIn("DRAM", sb.config.SWING_BREAKOUT_F6_RESERVED_SYMBOLS)
+        self.assertIn("EWY", sb.config.SWING_BREAKOUT_F6_RESERVED_SYMBOLS)
+        with mock.patch.multiple(
+            sb.config,
+            SWING_BREAKOUT_POOL=["DRAM"],
+            SWING_BREAKOUT_F6_RESERVED_SYMBOLS=["DRAM", "EWY"],
+        ):
+            _, got = self._run_entries(FakeBroker(), {"DRAM": _breakout_df()})
+        self.assertEqual(got, [])
+        self.assertTrue(any(ev == "skip" and s == "DRAM" for ev, s, _ in self.logs))
+
+    def test_retired_f6_etfs_remain_excluded_when_runtime_lists_are_empty(self):
+        with mock.patch.multiple(
+            sb.config,
+            SWING_BREAKOUT_POOL=["DRAM", "EWY"],
+            FOREVER6_UNIVERSE=[],
+            SWING_BREAKOUT_F6_RESERVED_SYMBOLS=[],
+        ):
+            _, got = self._run_entries(
+                FakeBroker(), {"DRAM": _breakout_df(), "EWY": _breakout_df()}
+            )
+        self.assertEqual(got, [])
+        skipped = {s for ev, s, _ in self.logs if ev == "skip"}
+        self.assertTrue({"DRAM", "EWY"}.issubset(skipped))
 
     def test_broker_read_failure_unlatches_the_day(self):
         b = FakeBroker()

@@ -13,6 +13,7 @@ from execution.instrument_policy import (
     LEVERAGED_ETF_TICKERS,
     f6_live_asset_eligible,
     f6_symbol_eligible,
+    instrument_policy,
     is_leveraged_etf,
 )
 from strategy import day_tier_leverage
@@ -24,6 +25,16 @@ def _entry_clock():
 
 def test_current_f6_universe_has_no_leveraged_etf() -> None:
     assert not ({s.upper() for s in config.FOREVER6_UNIVERSE} & LEVERAGED_ETF_TICKERS)
+
+
+def test_current_f6_universe_contains_common_stocks_only() -> None:
+    assert "DRAM" not in config.FOREVER6_UNIVERSE
+    assert "EWY" not in config.FOREVER6_UNIVERSE
+    assert all(
+        instrument_policy(symbol) is not None
+        and instrument_policy(symbol).kind == "equity"
+        for symbol in config.FOREVER6_UNIVERSE
+    )
 
 
 def test_registry_covers_every_day_router_product_above_one_x() -> None:
@@ -60,9 +71,12 @@ def test_active_day_router_override_is_rejected(monkeypatch) -> None:
     assert "existing bot map" in reason
 
 
-def test_unleveraged_funds_remain_eligible() -> None:
+def test_unleveraged_funds_are_not_admitted_to_f6() -> None:
     for symbol in ("DRAM", "EWY"):
-        assert f6_symbol_eligible(symbol, config.FOREVER6_UNIVERSE) == (True, "ok")
+        assert f6_symbol_eligible(symbol, [symbol]) == (
+            False,
+            "etf_not_admitted: F6 accepts common stocks only",
+        )
         assert not is_leveraged_etf(symbol)
 
 
@@ -158,6 +172,26 @@ def test_execute_starter_blocks_leveraged_symbol_before_broker(monkeypatch) -> N
     assert "leveraged/inverse" in result["skipped"][0]["skip"]
     broker.assert_not_called()
     slack.assert_called_once()
+
+
+def test_execute_starter_blocks_unleveraged_etf_before_broker(monkeypatch) -> None:
+    broker = mock.Mock()
+    manager = f6.ForeverHoldManager(broker, clock=_entry_clock)
+    monkeypatch.setattr(config, "FOREVER6_UNIVERSE", ["DRAM"])
+    monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
+    monkeypatch.setattr(f6, "_STARTUP_READY", True)
+    monkeypatch.setattr(f6, "_read_sync_degraded", lambda: False)
+    monkeypatch.setattr(f6, "_slack_safe", mock.Mock())
+
+    result = manager.execute_starter(
+        [{"symbol": "DRAM", "price": 40.0, "why": "invalid external plan"}],
+        budget=100.0,
+        settled_cash=1_000.0,
+    )
+
+    assert result["placed"] == []
+    assert "etf_not_admitted" in result["skipped"][0]["skip"]
+    broker.assert_not_called()
 
 
 def test_execute_starter_blocks_live_asset_contradiction_before_reservation(

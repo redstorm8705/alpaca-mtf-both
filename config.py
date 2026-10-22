@@ -419,13 +419,11 @@ QHM_EARNINGS_STOP_CANCEL_ENABLED = False
 # Ships DARK until the module is wired + live-validated.
 FOREVER6_ENABLED = False                       # master flag — DARK until validated live
 FOREVER6_UNIVERSE = ["TSLA", "GOOGL", "AMZN", "CRWD", "META", "NVDA",
-                     "MU", "SNDK", "DRAM", "EWY"]  # leveraged ETFs are forbidden by startup + order-path policy
-# KNOWN RISK (Rafael-accepted 2026-09-05; CLOSE before FOREVER6_ENABLED flips): the never-sell exit
-# design is trim-only at 10x/20x gain with NO other exit — it has no handling for an ETF issuer
-# WINDING DOWN the fund (DRAM/EWY). A sponsor closure force-liquidates a "never-sell" holding on the
-# sponsor's timeline, possibly while underwater — a failure class single-stocks don't have. Add
-# fund-closure/wind-down detection before this tier goes live. Separate caveat: memory is a cyclical
-# (boom/bust) sub-sector, so "forever" duration is a judgment call for these names (tier is DARK).
+                     "MU", "SNDK"]  # common stocks only; every ETF is forbidden at startup + order time
+# Preserve the Swing entry exclusions that FOREVER6_UNIVERSE historically supplied. DRAM/EWY are no
+# longer F6 candidates, but removing them must not silently create new Swing ETF exposure.
+SWING_BREAKOUT_F6_RESERVED_SYMBOLS = ["TSLA", "GOOGL", "AMZN", "CRWD", "META", "NVDA",
+                                      "MU", "SNDK", "DRAM", "EWY"]
 # Starter timing is derived from completed SPY return and volume-stress distributions in
 # execution/f6_empirical_trigger.py. No fixed price/volatility threshold is configured.
 FOREVER6_STARTER_MAX_NAMES = 3                 # fund at most 3 names per starter event (breadth-first)
@@ -1338,4 +1336,9 @@ def validate_config():
     log.info(
         f"Config validation passed — profile={ACTIVE_PROFILE}, "
         f"{len(warnings)} warning(s), 0 errors."
+    )
+    log.info(
+        "change_id=f6-etf-winddown common_stock_only=%d swing_reserved=%d",
+        len(_f6_symbols),
+        len(SWING_BREAKOUT_F6_RESERVED_SYMBOLS),
     )

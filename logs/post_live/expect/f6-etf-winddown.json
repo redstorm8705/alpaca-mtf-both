@@ -1,0 +1,35 @@
+{
+  "change": "f6-etf-winddown",
+  "tier": 2,
+  "paths": [
+    "config.py",
+    "execution/instrument_policy.py",
+    "execution/forever_hold_manager.py",
+    "execution/swing_breakout_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change_id=f6-etf-winddown common_stock_only=8 swing_reserved=10"
+    }
+  ],
+  "expected_rate": "Once on each bot startup when configuration validation succeeds; F6 remains disabled.",
+  "window_sessions": 1,
+  "window_reason": "Deployment restarts the bot, so the common-stock-only configuration proof must appear immediately.",
+  "reversal": "Any ETF remains in the F6 universe, reaches an F6 reservation/submission, or becomes newly eligible for Swing because it left F6.",
+  "metrics": [
+    {
+      "name": "F6 ETF admissions",
+      "source": "configuration proof, canonical ownership ledger, F6 orders, and Alpaca activity",
+      "direction": "none",
+      "bound": "Exactly zero ETF candidates, claims, reservations, or submitted orders in F6."
+    },
+    {
+      "name": "Swing exclusion preservation",
+      "source": "configuration proof and Swing decision events",
+      "direction": "none",
+      "bound": "The explicit reserved set remains ten symbols and DRAM/EWY produce zero new Swing entries."
+    }
+  ],
+  "verification": "tests/test_f6_instrument_policy.py"
+}

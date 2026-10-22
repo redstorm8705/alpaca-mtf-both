@@ -8,7 +8,21 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-21, OpenAI Codex signed) — stop-preserving explicit shutdown (#725), F6 OFF
+## ⏩ LATEST (2026-10-21, OpenAI Codex signed) — F6 common-stock-only boundary, F6 OFF
+
+- Owner-approved design `F6-WIND-1021` removes DRAM and EWY from the F6 universe and makes every ETF ineligible
+  at configuration, startup ownership/order reconciliation, and the final starter-order boundary. Unknown product
+  identity also refuses the path. Existing ETF claims or orders are never mutated automatically; they keep startup
+  blocked for operator resolution.
+- A separate ten-name Swing reserved set plus an immutable DRAM/EWY floor preserves the existing exclusions, so removing DRAM/EWY from F6 does not
+  silently authorize new Swing exposure. The eight remaining F6 candidates are common stocks.
+- F6 remains disabled. This shipment changes no signal, threshold, position size, stop, exit, or enabled tier.
+  Exact design and evidence: `logs/design_records/f6_etf_winddown_2026-10-21.md`.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** build and run the full-path pre-market simulation, then prepare
+Rafael's one-page F6 enablement decision. Do not enable F6.
+
+## ⏩ PRIOR (2026-10-21, OpenAI Codex signed) — stop-preserving explicit shutdown (#725), F6 OFF
 
 - Owner-approved design `F6-FLAT-1018` replaces the unsafe explicit-shutdown Swing liquidation with a read-only
   proof that every Swing remainder already has complete stable, correctly attributed, sufficiently protective
@@ -21,8 +35,7 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - F6 remains disabled. This prerequisite changes no entry, sizing, signal, or allocator rule. Exact design and
   approval evidence: `logs/design_records/f6_emergency_flatten_attribution_2026-10-18.md`.
 
-**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** build ETF wind-down detection, then run the full-path pre-market
-simulation and prepare Rafael's one-page enablement decision. Do not enable F6.
+**Next action at that ship:** close the ETF prerequisite, then run the full-path pre-market simulation. F6 stayed off.
 
 ## ⏩ LATEST (2026-10-18, Claude signed) — shared owner approvals (#701) + RULES-1018 report checks (#702) live
 

@@ -507,9 +507,23 @@ class SwingBreakoutManager:
             qhm |= set(_configured_qhm_symbols())
         except Exception as e:
             logger.warning("swing_breakout: QHM configured picks unreadable: %s", e)
-        # Forever-6 universe names too: a resting breakout sell stop would make Alpaca reject F6's buy on the
-        # same symbol (wash-trade rule) for up to 30 sessions — F6 crash-buys must never be blocked by this tier.
-        qhm |= {str(x).upper() for x in (_cfg("FOREVER6_UNIVERSE", []) or [])}
+        # Active F6 names plus the explicit reserved names: a resting breakout sell stop would make Alpaca reject
+        # F6's buy on the same symbol (wash-trade rule) for up to 30 sessions.  The union means a runtime/new F6
+        # common-stock candidate is excluded immediately, while the reserved list retains retired ETF candidates
+        # DRAM/EWY so narrowing F6 cannot silently expand Swing exposure (cold-2nd 2026-10-21).
+        # Runtime configuration can replace either list.  Keep the retired ETF pair as an immutable floor so a
+        # configuration override cannot silently release them into Swing (adversarial review 2026-10-21).
+        qhm |= {"DRAM", "EWY"}
+        qhm |= {
+            str(x).strip().upper()
+            for x in (_cfg("FOREVER6_UNIVERSE", []) or [])
+            if str(x).strip()
+        }
+        qhm |= {
+            str(x).strip().upper()
+            for x in (_cfg("SWING_BREAKOUT_F6_RESERVED_SYMBOLS", []) or [])
+            if str(x).strip()
+        }
         for s in universe:
             if len({x for x, p in state["positions"].items() if p.get("status") in _HOLDING}) >= int(_cfg("SWING_BREAKOUT_MAX_SLOTS", 4)):
                 _log("skip", s, reason="all slots full")
