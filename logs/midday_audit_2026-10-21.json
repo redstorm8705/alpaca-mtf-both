@@ -1,0 +1,221 @@
+{
+  "audit_date": "2026-10-21",
+  "run_ts": "2026-10-21T10:30:01.433128-07:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "DRAM",
+      "TSLA"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 27,
+    "levels": {
+      "ELEVATED": 27
+    },
+    "last_score": 38,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 58,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-21 16:00:14,971 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-21 16:00:14,974 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-21 16:00:20,817 WARNING ledger_sync ledger_sync wall-time 19.6s (fills=792 orders=3146)",
+      "2026-10-21 16:07:21,420 | WARNING  | strategy.run_cycle | [ANOMALY-2] [AAPL] confirm_gate=3 scans but no entry \u2014 risk.open_positions=3 vs tracker=0 | ",
+      "2026-10-21 16:08:15,796 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -19.5,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -19.5,
+    "best": {
+      "symbol": "DRAM",
+      "pnl": -19.5,
+      "entry_price": 48.51,
+      "exit_price": 49.26,
+      "size": 26.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 49.27,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "DRAM",
+      "pnl": -19.5,
+      "entry_price": 48.51,
+      "exit_price": 49.26,
+      "size": 26.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 49.27,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "DRAM",
+        "pnl": -19.5,
+        "entry_price": 48.51,
+        "exit_price": 49.26,
+        "size": 26.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 49.27,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "DRAM": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 170,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:50-09:50"
+        ],
+        "uncovered_windows_pt": [
+          "06:50-06:50"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "TSLA": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 44,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "12:46-12:46"
+        ],
+        "uncovered_windows_pt": [
+          "09:46-09:46"
+        ],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-21",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 7,
+    "symbols": [
+      "DRAM",
+      "TSLA"
+    ],
+    "by_symbol": {
+      "TSLA": {
+        "buy": 4,
+        "sell": 0
+      },
+      "DRAM": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}
