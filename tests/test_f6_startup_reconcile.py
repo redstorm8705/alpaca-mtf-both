@@ -8,11 +8,11 @@ import execution.forever_hold_manager as f6
 import execution.ownership_guard as guard
 
 
-def _ledger(*, f6_qty=0.0, net=0.0, drift=0.0):
+def _ledger(*, symbol="NVDA", f6_qty=0.0, net=0.0, drift=0.0):
     return {
         "version": 1,
         "positions": {
-            "NVDA": {
+            symbol: {
                 "alpaca_net_qty": net,
                 "drift": drift,
                 "tiers": {
@@ -65,6 +65,19 @@ class F6StartupReconcileTests(unittest.TestCase):
         self.assertEqual(result.pending_order_ids, ("order-1",))
         self.assertTrue(f6._read_sync_degraded())
 
+    def test_open_f6_etf_order_names_product_violation(self):
+        self.broker.get_open_orders.return_value = [
+            SimpleNamespace(
+                id="order-etf",
+                symbol="EWY",
+                client_order_id="F6-EWY-b-1-abc",
+            )
+        ]
+        result = self._run(_ledger())
+        self.assertFalse(result.ready)
+        self.assertIn("non-equity/unknown instrument EWY", result.reason)
+        self.assertTrue(f6._read_sync_degraded())
+
     def test_other_tier_open_order_does_not_block(self):
         self.broker.get_open_orders.return_value = [
             SimpleNamespace(id="order-2", client_order_id="IN-NVDA-s-1-abc")
@@ -94,6 +107,14 @@ class F6StartupReconcileTests(unittest.TestCase):
             with self.subTest(ledger=ledger):
                 self.assertFalse(self._run(ledger).ready)
                 self.assertTrue(f6._read_sync_degraded())
+
+    def test_positive_f6_etf_claim_blocks_without_mutation(self):
+        ledger = _ledger(symbol="EWY", f6_qty=1, net=1, drift=0)
+        result = self._run(ledger)
+        self.assertFalse(result.ready)
+        self.assertIn("non-equity/unknown instrument EWY", result.reason)
+        self.assertEqual(ledger["positions"]["EWY"]["tiers"]["forever6"]["qty"], 1)
+        self.broker.assert_not_called()
 
     def test_unreadable_open_orders_blocks(self):
         self.broker.get_open_orders.return_value = None

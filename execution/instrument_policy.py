@@ -204,8 +204,8 @@ def f6_symbol_eligible(symbol: object, universe: object) -> tuple[bool, str]:
         return False, "instrument classification is missing"
     if meta.inverse:
         return False, "inverse ETF is incompatible with F6"
-    if meta.kind == "leveraged_etf":
-        return False, "leveraged ETF is incompatible with F6"
-    if meta.kind not in {"equity", "unleveraged_etf"}:
+    if meta.kind.endswith("_etf"):
+        return False, "etf_not_admitted: F6 accepts common stocks only"
+    if meta.kind != "equity":
         return False, f"instrument kind {meta.kind!r} is incompatible with F6"
     return True, "ok"

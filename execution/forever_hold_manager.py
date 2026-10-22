@@ -34,7 +34,11 @@ from zoneinfo import ZoneInfo
 
 import config
 from execution.f6_empirical_trigger import evaluate_empirical_starter
-from execution.instrument_policy import f6_live_asset_eligible, f6_symbol_eligible
+from execution.instrument_policy import (
+    f6_live_asset_eligible,
+    f6_symbol_eligible,
+    instrument_policy,
+)
 
 logger = logging.getLogger("forever6")
 
@@ -383,7 +387,18 @@ class ForeverHoldManager:
                 oid = getattr(order, "id", None)
                 if oid is None and isinstance(order, dict):
                     oid = order.get("id")
-                pending.append(str(oid or coid or "unknown"))
+                order_identity = str(oid or coid or "unknown")
+                symbol = getattr(order, "symbol", None)
+                if symbol is None and isinstance(order, dict):
+                    symbol = order.get("symbol")
+                sym = str(symbol or "").strip().upper()
+                policy = instrument_policy(sym)
+                if policy is None or policy.kind != "equity":
+                    return self._startup_reconcile_failed(
+                        f"F6-tagged order has non-equity/unknown instrument {sym or 'UNKNOWN'}",
+                        pending=tuple(sorted([*pending, order_identity])),
+                    )
+                pending.append(order_identity)
             if pending:
                 return self._startup_reconcile_failed(
                     "F6-tagged order(s) still open",
@@ -396,6 +411,11 @@ class ForeverHoldManager:
                 own = _og.tier_qty(ledger, symbol, "forever6")
                 if own <= _EPS:
                     continue
+                policy = instrument_policy(symbol)
+                if policy is None or policy.kind != "equity":
+                    return self._startup_reconcile_failed(
+                        f"F6 ownership has non-equity/unknown instrument {str(symbol).upper()}"
+                    )
                 net = float(entry.get("alpaca_net_qty", 0.0) or 0.0)
                 drift = float(entry.get("drift", 0.0) or 0.0)
                 if (
