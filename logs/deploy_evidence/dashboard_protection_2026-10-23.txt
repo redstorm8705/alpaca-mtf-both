@@ -1,0 +1,64 @@
+DASH-PROTECT-1022 deployment evidence — 2026-10-23 (OpenAI Codex)
+
+GitHub merge
+  command: gh pr view 741 --json state,mergedAt,mergeCommit,url,title
+  output: state=MERGED mergeCommit=5dcc714dc1238aa5b41aa1aabcaecd390618cc59
+          mergedAt=2026-10-23T11:34:20Z
+
+OCI deploy and services
+  command: git pull origin main --ff-only; restart mtf-bot mtf-writer mtf-http
+  output: DEPLOY_OK:5dcc714
+  command: systemctl is-active mtf-bot mtf-writer mtf-http
+  output: active / active / active
+
+Read-only Alpaca position-to-stop reconciliation
+  AAPL  swing  owned=1  stop_qty=1  stop=$328.70  PROTECTED
+  MSFT  swing  owned=1  stop_qty=1  stop=$497.10  PROTECTED
+  GE    qhm    owned=2  stop_qty=2  stop=$272.71  PROTECTED
+  GOOGL qhm    owned=1  stop_qty=1  stop=$288.97  PROTECTED
+  NVDA  qhm    owned=2  stop_qty=2  stop=$192.41  PROTECTED
+
+Served dashboard.html assertions
+  tier_share_suffix_absent=True
+  protection_table=True
+  raw_open_orders_absent=True
+  daily_brake_unavailable_on_inexact_snapshot=True
+  aapl_stop=True msft_stop=True ge_stop=True googl_stop=True nvda_stop=True
+  ALL=True
+  direct served-HTML/broker-adapter command output:
+    POSITION_TIER_BADGE_QTY_SUFFIX_MATCHES []
+    OWNED_LOTS 5 PROTECTED 5 MISMATCHES []
+
+Served dashboard.html row excerpts (`sed -n '198,230p;270,325p' dashboard.html`)
+  Open positions:
+    AAPL | tier badge Swing | Qty 1 | stop Swing: $328.70 (1 sh)
+    GE   | tier badge QHM   | Qty 2 | stop QHM: $272.71 (2 sh)
+  Protection & next action:
+    AAPL  | Swing | PROTECTED | $328.70 (1 sh) | 1/1 protected
+    GE    | QHM   | PROTECTED | $272.71 (2 sh) | 2/2 protected
+    GOOGL | QHM   | PROTECTED | $288.97 (1 sh) | 1/1 protected
+    MSFT  | Swing | PROTECTED | $497.10 (1 sh) | 1/1 protected
+    NVDA  | QHM   | PROTECTED | $192.41 (2 sh) | 2/2 protected
+
+Risk snapshot read
+  generated_at_utc=2026-10-23T11:35:01.448866+00:00
+  session_date_et=2026-10-23
+  trading_pnl=-2.60
+  limit_pct=0.07
+  consumed_pct=1.3972304742415187
+  killed=false
+  attribution_exact=false
+  included_tiers=[day,swing]
+  excluded_held_tiers=[qhm,forever_6]
+  result: strict dashboard reader rendered Daily brake status unavailable.
+
+Validation
+  OCI Python 3.10 focused and adjacent: 97 passed, 1 dependency warning.
+  OCI file-isolated full suite: files=131 new_failures=0 baseline_fail_files=4.
+  Local: py_compile PASS; Ruff E/W/F/B PASS; mypy --warn-unreachable PASS.
+  Cold second review PASS; adversarial review PASS.
+  Groq + Google AI Studio exact-diff preship APPROVE for all four code/test files.
+
+F6 state
+  command: venv/bin/python3 -c "import config; print(config.FOREVER6_ENABLED)"
+  output: FOREVER6_ENABLED False
