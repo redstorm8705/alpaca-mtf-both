@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-17 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-23 (OpenAI Codex) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,31 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-23, OpenAI Codex signed) — dashboard protection truth live (#741)
+
+- Owner-approved `DASH-PROTECT-1022` is deployed at OCI commit `5dcc714`. The position table now shows canonical
+  tier names without repeating share counts and joins current owned tier lots to live Alpaca stop orders.
+  The raw Open Orders table is replaced by **Protection & next action**, with explicit protected, partial, missing,
+  breached, over-covered, unavailable, and unattributed states.
+- The daily-brake bar now renders only the risk engine's exact Day + Swing snapshot at the runtime 7% limit. QHM
+  and F6 held shares stay excluded. Inexact, contradictory, stale, malformed, or truncated evidence cannot be
+  shown as current truth; a durable triggered latch preserves only a clearly labeled trigger-time value.
+- Post-deploy broker proof: AAPL Swing 1/1 at $328.70; MSFT Swing 1/1 at $497.10; GE QHM 2/2 at $272.71; GOOGL
+  QHM 1/1 at $288.97; NVDA QHM 2/2 at $192.41. All five were `PROTECTED`. The current brake snapshot had
+  `attribution_exact=false`, so the page correctly rendered the brake unavailable instead of inventing a value.
+- Reproducible verification: `gh pr view 741 --json state,mergeCommit` returned `MERGED`/`5dcc714`; the OCI deploy
+  returned `DEPLOY_OK:5dcc714` and all three services `active`. A read-only `generate_dashboard` broker reconciliation
+  produced the five coverage rows above. Served-HTML checks returned true for tier labels without quantity suffixes,
+  all five stop prices, `Protection & next action`, removal of `Open Orders`, and `Daily brake status unavailable`.
+  OCI Python 3.10 validation passed 97 focused/adjacent tests and the 131-file suite had zero new failing files.
+  `venv/bin/python3 -c "import config; print(config.FOREVER6_ENABLED)"` returned `False`.
+  A direct served-HTML/broker-adapter check returned `POSITION_TIER_BADGE_QTY_SUFFIX_MATCHES []` and
+  `OWNED_LOTS 5 PROTECTED 5 MISMATCHES []`.
+  Exact command outputs are preserved in `logs/deploy_evidence/dashboard_protection_2026-10-23.txt`.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** run the full-path pre-market F6 simulation and prepare Rafael's
+one-page enablement decision. Do not enable F6.
 
 ## ⏩ LATEST (2026-10-21, OpenAI Codex signed) — F6 common-stock-only boundary, F6 OFF
 
