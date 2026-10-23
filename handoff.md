@@ -8,7 +8,7 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-23, OpenAI Codex signed) — held OCO stop display correction
+## ⏩ LATEST (2026-10-23, OpenAI Codex signed) — held OCO stop display correction live (#743)
 
 - Live Alpaca proof showed the AMZN Day short had a six-share buy stop at `$250.25`, but Alpaca reports the
   inactive stop child of that live OCO pair as `held`; the dashboard previously ignored that lifecycle state and
@@ -18,6 +18,9 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   unknown parents, and canceling OCO groups remain non-protective, so the correction cannot hide a real gap.
 - This changes read-only HTML classification only. It does not submit, cancel, replace, size, or route an order.
   Design and tests: `logs/design_records/dashboard_held_stop_status_2026-10-23.md`.
+- PR #743 passed CI, merged at `6ae9110`, and deployed with all three OCI services active. After restart, startup
+  reconciliation completed with zero QHM errors, and the served AMZN row changed from `Day: MISSING` to
+  `Day: $250.25 (6 sh)` while the broker OCO remained `new` with its stop child `held`.
 
 **⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** finish the approved full-path pre-market F6 simulation and prepare
 Rafael's one-page enablement decision. Do not enable F6.
