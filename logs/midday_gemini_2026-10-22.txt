@@ -1,0 +1,38 @@
+Midday Gemini Audit — 2026-10-22
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The session shows signs of systematic entry-blocking due to high MRI and news-monitor penalties, alongside a potential logic discrepancy in the `ledger_sync` reporting.
+
+### PERFORMANCE AUDIT
+- **Integrity**: The single closed trade (SMCI) shows an entry of $33.36 and exit of $33.77. The P&L is reported as $-0.41. 
+- **P&L Sign Check**: For a long position, $33.77 - $33.36 = +$0.41. The reported P&L of $-0.41$ is mathematically inverted (a profit recorded as a loss).
+- **Correlation**: Insufficient data for statistical significance, but the bot is currently in a "fail-closed" state for most entries due to MRI/News constraints.
+
+### ENTRY QUALITY
+- **Constraint Saturation**: The bot is effectively paralyzed by `MRI=HIGH` and `CURRENTS ALERT` / `MARKETAUX` penalties. While this protects capital, the "fail-closed" behavior on `DRAM` and the `BV-5` block indicate the strategy is currently unable to find entries that satisfy the confluence requirements under the current market regime.
+
+### EXIT QUALITY
+- **No issues**: The only exit (SMCI) was a partial exit; no stop-loss or target-hit anomalies were observed in the logs.
+
+### MRI ALIGNMENT
+- **Alignment**: The bot is correctly identifying the `MRI=HIGH` (78/100) and `CRITICAL` levels and is responding by applying size floors (0.55x) and blocking new entries (`BV-5` block). The alignment is functioning as designed to mitigate risk during high-volatility/stressed regimes.
+
+### LOG ANOMALIES
+- **Ledger Sync**: `ledger_sync` reports `[UBER] net=-72.0`. Given the bot's $2.5K paper account and the typical share sizes for the other symbols (1.0–4.0), a net position of -72.0 shares in UBER is a significant outlier that warrants investigation for potential data entry error or ghost position tracking.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | HIGH | P&L Sign Inversion | SMCI trade**: The closed trade for SMCI shows a profit ($33.77 > $33.36) but records a negative P&L ($-0.41). This indicates a sign-flip error in the P&L calculation module for long positions.
+- **EXECUTION BUG | MEDIUM | Ledger Sync Outlier | UBER position**: The `ledger_sync` log reports a net position of -72.0 for UBER, which is inconsistent with the scale of other positions and the account size. This suggests a potential tracking error in the `QuarterlyHoldManager` or `ledger_sync` module.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Investigate and patch the P&L calculation logic in the trade-matching engine to correct the sign-flip error observed in the SMCI trade.
+2. **EXECUTION**: Audit the `ledger_sync` module to determine why UBER is reporting a -72.0 net position; verify if this is a ghost position or a calculation error.
+3. **ALPHA**: Review the `MRI` and `News` penalty thresholds; the current "fail-closed" state is preventing all trading, which may be overly restrictive given the `NORMAL` volatility regime (VIX 19.2).

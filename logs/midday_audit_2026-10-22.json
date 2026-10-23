@@ -1,0 +1,268 @@
+{
+  "audit_date": "2026-10-22",
+  "run_ts": "2026-10-22T10:30:02.349014-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 1,
+    "partial_count": 1,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "PLTR",
+      "AVGO",
+      "SMCI",
+      "META"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "HIGH": 26,
+      "CRITICAL": 2
+    },
+    "last_score": 78,
+    "last_level": "HIGH"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 42,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-22 15:26:40,994 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-22 15:26:40,996 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-22 15:33:54,706 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-22 15:33:54,709 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-22 15:40:18,093 WARNING ledger_sync ledger_sync wall-time 16.1s (fills=813 orders=3168)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -0.4100000000000037,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -0.4100000000000037,
+    "best": {
+      "symbol": "SMCI",
+      "pnl": -0.4100000000000037,
+      "entry_price": 33.36,
+      "exit_price": 33.77,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 33.76,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "SMCI",
+      "pnl": -0.4100000000000037,
+      "entry_price": 33.36,
+      "exit_price": 33.77,
+      "size": 1.0,
+      "exit_event": "partial_exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 33.76,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "SMCI",
+        "pnl": -0.4100000000000037,
+        "entry_price": 33.36,
+        "exit_price": 33.77,
+        "size": 1.0,
+        "exit_event": "partial_exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 33.76,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "AVGO": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 149,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "11:00-11:00"
+        ],
+        "uncovered_windows_pt": [
+          "08:00-08:00"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "META": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 29,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "13:00-13:00"
+        ],
+        "uncovered_windows_pt": [
+          "10:00-10:00"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "PLTR": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 170,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:40-10:40"
+        ],
+        "uncovered_windows_pt": [
+          "07:40-07:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "SMCI": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 36,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "11:16-11:16"
+        ],
+        "uncovered_windows_pt": [
+          "08:16-08:16"
+        ],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-22",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 7,
+    "symbols": [
+      "AVGO",
+      "META",
+      "PLTR",
+      "SMCI"
+    ],
+    "by_symbol": {
+      "META": {
+        "buy": 0,
+        "sell": 0
+      },
+      "SMCI": {
+        "buy": 2,
+        "sell": 0
+      },
+      "AVGO": {
+        "buy": 0,
+        "sell": 0
+      },
+      "PLTR": {
+        "buy": 0,
+        "sell": 0
+      }
+    }
+  }
+}
