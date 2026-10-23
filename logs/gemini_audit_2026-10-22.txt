@@ -1,0 +1,132 @@
+Nightly Gemini Audit — 2026-10-22
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['config.py', 'execution/forever_hold_manager.py', 'execution/instrument_policy.py', 'execution/swing_breakout_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+All open positions were verified COVERED by broker stops (0m unprotected). The bot successfully blocked new entries under `MRI=HIGH` (score 79) and QHM cap checks. However, ledger synchronization latency is high (16.2s wall-time), and news feed keyword false-positives are triggering full risk gating.
+
+---
+
+### LOG ANOMALIES
+- **News Monitor False-Positive Regime Shock**: At `19:52:54` and `20:02:38`, news monitor triggered on retail shopping news ("Malls have something online shopping can't provide", "Free Pink Bag Shopping Event") matching keyword `'ppi'` (substring of "shopping"). This inflated `news_alerts` count (31 alerts / 35 pts), pushing `MRI` to 79 (`HIGH`), activating `BV-5: MRI=HIGH` entry lockouts across the system.
+- **Ledger Sync Latency Spike**: `ledger_sync wall-time 16.2s (fills=816 orders=3171)` logged multiple times (`19:20:18`, `19:40:17`, `20:00:18`). Order/fill iteration without pagination bounds is degrading cycle latency.
+- **DRAM Missing Daily Data**: Repeated warning `[DRAM] No daily data — long/short entry blocked (fail-closed)` (`19:20:23`, `19:29:08`, `19:37:40`, `19:54:07`, `20:01:32`). DRAM data feed fails safely, but generates redundant noise.
+- **Pre-Heal EOD P&L Drift Telemetry**: `EOD P&L DRIFT: Alpaca=$-53.11 tracker=$0.00 drift=$-53.11` logged at `20:02:53`. Per invariant guidelines, this is expected pre-heal dual-compute self-check telemetry before the 8:30pm ET ledger heal (`pnl_unreconciled=false`).
+
+---
+
+### PERFORMANCE AUDIT
+- **Trade Integrity & Math (Last 10 Events Analyzed)**:
+  - `2026-10-21T06:50:27` DRAM Short: entry 48.51, exit 49.26 (`protective_stop`), size 26 -> P&L = $(48.51 - 49.26) \times 26 = -\$19.50$. Math exact.
+  - `2026-10-21T09:46:34` TSLA Long: entry 387.465, stop 386.18. Partial exit 2 sh @ 386.02 = $(386.02 - 387.465) \times 2 = -\$2.89$. Final exit 2 sh @ 385.995 = $(385.995 - 387.465) \times 2 = -\$2.94$. Total P&L = $-\$5.83$. Math exact.
+  - `2026-10-21T12:06:30` DRAM Short: entry 48.85, exit 49.0504 (`protective_stop`), size 26 -> P&L = $(48.85 - 49.0504) \times 26 = -\$5.2104 \approx -\$5.21$. Math exact.
+  - `2026-10-22T07:40:37` PLTR Short: entry 198.74, exit 194.97 (`take_profit`), size 1 -> P&L = $198.74 - 194.97 = +\$3.77$. Math exact.
+  - `2026-10-22T08:00:44` AVGO Short: entry 324.285, exit 323.3125 (`eod_force_flat`), size 4 -> P&L = $(324.285 - 323.3125) \times 4 = +\$3.89$. Math exact.
+  - `2026-10-22T08:16:34` SMCI Short: entry 33.36, stop 33.76. Partial exit 1 sh @ 33.77 = $-\$0.41$. Final exit 1 sh @ 33.76 = $-\$0.40$. Total = $-\$0.81$. Math exact.
+  - `2026-10-22T10:00:40` META Short: entry 646.97, exit 640.47 (`take_profit`), size 1 -> P&L = $646.97 - 640.47 = +\$6.50$. Math exact.
+- **Score→Outcome Correlation**: All daytrade entries log `score: 0` because daytrade setups do not consume the 12-point MTF confluence engine.
+- **Stop Rate & Edge**: On 2026-10-22, trades executed 3 wins (PLTR +\$3.77, AVGO +\$3.89, META +\$6.50) and 1 loss (SMCI -\$0.81) for net `pnl_today=13.35`. Win rate = 75%. Profit targets captured clean risk-reward ratios.
+
+---
+
+### TRADE INTEGRITY
+- No zero-P&L anomalies on differing prices.
+- Partial fills handled cleanly: TSLA (2026-10-21) and SMCI (2026-10-22) split tranches accurately across separate JSON event records with correct remaining size calculations.
+- LLY external exit recorded cleanly with `price_pending: true` on `2026-10-16T22:19:10` via QHM external close tracker.
+
+---
+
+### MODIFIED FILE FINDINGS
+
+#### 1. `config.py`
+- Removed DRAM and EWY from `FOREVER6_UNIVERSE` (retaining common stocks only) and created `SWING_BREAKOUT_F6_RESERVED_SYMBOLS`.
+- Validation and formatting match system invariants. No logic flaws found.
+
+#### 2. `execution/forever_hold_manager.py`
+- In `ForeverHoldManager._startup_reconcile()`:
+  - Lines 390–401: Added validation for pending F6 orders against `instrument_policy(sym)`. Fails closed if non-equity or unclassified.
+  - Lines 413–418: Added ledger scan check verifying `policy.kind == "equity"`.
+- Implementation is robust and enforces non-equity rejection cleanly.
+
+#### 3. `execution/instrument_policy.py`
+- Implements frozen dataclass `InstrumentPolicy` and registry `INSTRUMENT_POLICIES`.
+- `f6_symbol_eligible` (lines 142–170): Correctly strips and validates against both `FOREVER6_UNIVERSE` and tactical/leveraged product dictionaries.
+- `f6_live_asset_eligible` (lines 109–140): Checks Alpaca asset attributes (`status == "active"`, `tradable is True`, `asset_class == "us_equity"`, and rejects name substring matches for leveraged tokens). No defects found.
+
+#### 4. `execution/swing_breakout_manager.py`
+- Lines 515–526:
+```python
+qhm |= {"DRAM", "EWY"}
+qhm |= {
+    str(x).strip().upper()
+    for x in (_cfg("FOREVER6_UNIVERSE", []) or [])
+    if str(x).strip()
+}
+qhm |= {
+    str(x).strip().upper()
+    for x in (_cfg("SWING_BREAKOUT_F6_RESERVED_SYMBOLS", []) or [])
+    if str(x).strip()
+}
+```
+- Correctly merges active F6 symbols and reserved symbols to prevent wash-trade order collisions. State parsing is fail-closed.
+
+---
+
+### P5 STATUS
+- **P5-C1**: UNTOUCHED (Not touched in last 24h)
+- **P5-C2**: UNTOUCHED (Not touched in last 24h)
+- **P5-H1**: OBSOLETE (PDT permanently deleted)
+- **P5-H2**: UNTOUCHED (No fill price crosstalk observed)
+- **P5-H3**: UNTOUCHED (No 404 order drops logged)
+- **P5-H4**: UNTOUCHED
+- **P5-H5**: FIXED (Previously verified)
+- **P5-M1**: UNTOUCHED
+- **P5-M2**: UNTOUCHED
+- **P5-M3**: UNTOUCHED
+- **P5-L1**: UNTOUCHED
+- **P5-L2**: UNTOUCHED
+- **P5-L3**: UNTOUCHED
+
+---
+
+### NEW BUGS FOUND
+
+1. **ALPHA ISSUE | MEDIUM | `news_monitor` (Exact line in `news_monitor.py`)**
+   - **Context**: Substring keyword matching for macro indicators.
+   - **Failure Condition**: Keyword `'ppi'` matched inside common words such as `"shopping"` in general news headlines ("Malls have something online shopping can't provide", "Free Pink Bag Shopping Event").
+   - **Trace**: News scanner searches `if kw in text.lower()`. The token `'ppi'` appears inside `sho[ppi]ng`. Each match adds an alert and applies a base penalty of 100%, inflating `news_alerts` count to 31 and triggering 35 points in Macro Risk Index (`macro_risk_index.py`), pushing MRI into `HIGH` (score 79) and shutting down trading entries via `BV-5`.
+   - **Impact**: Premature macroeconomic lockout halting valid trading entries.
+
+2. **INFRASTRUCTURE | LOW | `ledger_sync.py`**
+   - **Context**: `ledger_sync` cycle execution time.
+   - **Failure Condition**: `orders=3171` and `fills=816` iterated without temporal filtering or status bounds.
+   - **Trace**: Cumulative paper account order history has grown past 3,100 orders. `ledger_sync` sync loop executes in 16.2s wall-clock time, causing log warnings and stalling cycle evaluation intervals.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Fix `news_monitor` regex word boundary matching**: Update `news_monitor` to match keywords using word boundaries (`\bppi\b` via `re.search`) rather than substring containment (`in`), preventing `"shopping"` from triggering inflation-indicator alerts.
+2. **Optimize `ledger_sync` order retrieval**: Add `until` or `limit` parameters to order syncing in `ledger_sync.py` (or paginate only open/recent orders rather than the entire 3,171-order history) to bring sync wall-time under 2.0s.
+3. **Mute or backfill DRAM daily data**: DRAM generates repetitive fail-closed log warnings during confluence loops; investigate data provider bar availability or remove from active watchlist if delisted/inactive.
+================================================================================
+BROKER GROUND TRUTH (2026-10-22, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AVGO   COVERED                  owners=day exposed=298m no-broker-stop=0m [08:00-08:00, 12:58-12:58] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  META   COVERED                  owners=day exposed=141m no-broker-stop=0m [10:00-10:00] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   COVERED                  owners=day exposed=306m no-broker-stop=0m [07:40-07:40] rejected_stop_orders=0
+  SMCI   COVERED                  owners=day exposed=36m no-broker-stop=0m [08:16-08:16] rejected_stop_orders=0
