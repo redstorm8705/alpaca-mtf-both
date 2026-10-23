@@ -10,11 +10,14 @@ import logging
 import math
 import os
 import requests  # type: ignore[import-untyped]
+import tempfile
+import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+from queue import Empty, Full, Queue
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
@@ -38,7 +41,14 @@ _ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
 _KILL_STATE_FILE = (
     Path(__file__).resolve().parent.parent / "data" / "state" / "kill_switch_state.json"
 )
+_KILL_SNAPSHOT_FILE = (
+    Path(__file__).resolve().parent.parent / "logs" / "kill_switch_snapshot.json"
+)
 _KILL_STATE_SCHEMA_VERSION = 2
+_KILL_SNAPSHOT_SCHEMA_VERSION = 1
+_KILL_SNAPSHOT_QUEUE: Queue = Queue(maxsize=1)
+_KILL_SNAPSHOT_WORKER: threading.Thread | None = None
+_KILL_SNAPSHOT_WORKER_LOCK = threading.Lock()
 
 
 class KillVerdictCause(str, Enum):
@@ -258,6 +268,132 @@ def _save_kill_state(
             )
         except Exception:
             pass  # logger/alerts broken; persistence failure must not break the trading loop
+
+
+def _write_kill_snapshot(payload: dict) -> None:
+    """Atomically write one prepared operator snapshot; never raise."""
+    tmp: Path | None = None
+    try:
+        _KILL_SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=_KILL_SNAPSHOT_FILE.parent,
+            prefix=f".{_KILL_SNAPSHOT_FILE.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp = Path(handle.name)
+            json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(_KILL_SNAPSHOT_FILE)
+    except Exception as exc:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            logger.warning(
+                "kill-switch operator snapshot write failed — verdict unchanged: %s",
+                exc,
+            )
+        except Exception:
+            pass
+
+
+def _kill_snapshot_worker() -> None:
+    """Serialize snapshots away from the trading decision thread."""
+    while True:
+        payload = _KILL_SNAPSHOT_QUEUE.get()
+        try:
+            _write_kill_snapshot(payload)
+        finally:
+            _KILL_SNAPSHOT_QUEUE.task_done()
+
+
+def _ensure_kill_snapshot_worker() -> None:
+    global _KILL_SNAPSHOT_WORKER
+    with _KILL_SNAPSHOT_WORKER_LOCK:
+        if _KILL_SNAPSHOT_WORKER is None or not _KILL_SNAPSHOT_WORKER.is_alive():
+            _KILL_SNAPSHOT_WORKER = threading.Thread(
+                target=_kill_snapshot_worker,
+                name="kill-snapshot-writer",
+                daemon=True,
+            )
+            _KILL_SNAPSHOT_WORKER.start()
+
+
+def _publish_kill_snapshot(
+    *,
+    trading_pnl: float,
+    daily_start_value: float,
+    attribution_exact: bool,
+    killed: bool,
+) -> None:
+    """Queue the already-computed verdict for read-only operator surfaces.
+
+    Queueing is non-blocking and never participates in the verdict. When checks
+    arrive faster than disk I/O, only the newest pending snapshot is retained.
+    """
+    try:
+        pnl = float(trading_pnl)
+        start = float(daily_start_value)
+        limit_pct = float(config.MAX_DAILY_LOSS_PCT)
+        if (
+            not all(math.isfinite(value) for value in (pnl, start, limit_pct))
+            or start <= 0
+            or not 0 < limit_pct < 1
+            or not isinstance(attribution_exact, bool)
+            or not isinstance(killed, bool)
+        ):
+            raise ValueError("invalid kill-switch snapshot inputs")
+        limit_usd = start * limit_pct
+        consumed_fraction = abs(min(pnl, 0.0)) / limit_usd
+        consumed_pct = consumed_fraction * 100.0
+        now_utc = datetime.now(timezone.utc)
+        scan_minutes = max(
+            float(config.SCAN_INTERVAL_INTRADAY),
+            float(config.DAYTRADE_SCAN_INTERVAL_MIN),
+        )
+        payload = {
+            "schema": _KILL_SNAPSHOT_SCHEMA_VERSION,
+            "generated_at_utc": now_utc.isoformat(),
+            "session_date_et": now_utc.astimezone(_ET).strftime("%Y-%m-%d"),
+            "max_age_seconds": (
+                scan_minutes * 60.0
+                + scan_minutes * 60.0
+                + scan_minutes * 60.0
+            ),
+            "trading_pnl": pnl,
+            "daily_start_value": start,
+            "limit_pct": limit_pct,
+            "limit_usd": limit_usd,
+            "consumed_pct": consumed_pct,
+            "attribution_exact": attribution_exact,
+            "killed": killed,
+            "included_tiers": ["day", "swing"],
+            "excluded_held_tiers": ["qhm", "forever_6"],
+        }
+        try:
+            _KILL_SNAPSHOT_QUEUE.put_nowait(payload)
+        except Full:
+            try:
+                _KILL_SNAPSHOT_QUEUE.get_nowait()
+                _KILL_SNAPSHOT_QUEUE.task_done()
+            except Empty:
+                pass
+            _KILL_SNAPSHOT_QUEUE.put_nowait(payload)
+        _ensure_kill_snapshot_worker()
+    except Exception as exc:
+        try:
+            logger.warning(
+                "kill-switch operator snapshot queue failed — verdict unchanged: %s",
+                exc,
+            )
+        except Exception:
+            pass
 
 
 def _in_rth_now() -> bool:
@@ -1047,7 +1183,8 @@ class RiskManager:
             intraday_equity_pnl = self.equity_pnl - self._buy_and_hold_intraday_pl()
         self.last_kill_measure = intraday_equity_pnl   # accurate alert basis (vs the misleading realized $0)
         loss_pct = intraday_equity_pnl / self.daily_start_value
-        if loss_pct <= -config.MAX_DAILY_LOSS_PCT:
+        _would_kill = loss_pct <= -config.MAX_DAILY_LOSS_PCT
+        if _would_kill:
             logger.critical(
                 f"KILL SWITCH TRIGGERED: intraday trading loss (excl QHM/F6 buy&hold) {loss_pct:.2%} "
                 f"exceeds limit {config.MAX_DAILY_LOSS_PCT:.2%} (intraday P&L "
@@ -1069,6 +1206,14 @@ class RiskManager:
                 loss_pct=loss_pct,
                 attribution_exact=_pos_ok,
             )
+        _publish_kill_snapshot(
+            trading_pnl=intraday_equity_pnl,
+            daily_start_value=self.daily_start_value,
+            attribution_exact=(
+                _pos_ok and bool(getattr(config, "OWNERSHIP_GUARD_ENFORCE", False))
+            ),
+            killed=self.killed,
+        )
         return self.killed
 
     def can_open_position(self) -> bool:
