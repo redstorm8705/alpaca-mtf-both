@@ -72,8 +72,10 @@ def primary_nav(active: str, prefix: str = "") -> str:
     return '<nav class="global-nav" aria-label="Primary">' + "".join(links) + "</nav>"
 
 
-def tier_badges(tiers: list[tuple[str, float]]) -> str:
-    """Render exact ownership-ledger tier quantities; never guess a missing tier."""
+def tier_badges(
+    tiers: list[tuple[str, float]], *, show_qty: bool = True
+) -> str:
+    """Render exact ownership-ledger tiers; optionally omit redundant quantities."""
     if not tiers:
         tiers = [("unattributed", 0.0)]
     out = []
@@ -84,7 +86,7 @@ def tier_badges(tiers: list[tuple[str, float]]) -> str:
             tier_key = "unattributed"
         label = TIER_LABELS[tier_key]
         color = TIER_COLORS[tier_key]
-        qty_text = f" {abs(qty):g}" if qty else ""
+        qty_text = f" {abs(qty):g}" if show_qty and qty else ""
         out.append(
             f'<span class="tier-badge" style="color:{color};border-color:{color}55;'
             f'background:{color}12">{escape(label)}{qty_text}</span>'

@@ -20,16 +20,18 @@ import sys
 import json
 import logging
 import math
+import config as bot_config
 from html import escape
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 from reporting.metrics import compute_lifetime_stats, _net_deposits
 from reporting.html_ui import (
     PRIMARY_NAV_CSS, TIER_COLORS, TIER_LABELS, normalize_tier_mapping,
     primary_nav, tier_badges,
 )
-from tier_names import TIER_IDS
+from tier_names import TIER_IDS, canonical_tier
 from ui_tokens import LIVE_CLOCK_HTML
 
 # Load .env explicitly so API keys are available whether this module is
@@ -55,6 +57,7 @@ ET  = ZoneInfo("America/New_York")
 PT  = ZoneInfo("America/Los_Angeles")
 ROOT = Path(__file__).parent.resolve()
 LOG_DIR = ROOT / "logs"
+_ALPACA_OPEN_ORDER_PAGE_SIZE = 500  # Alpaca Trading API maximum page size.
 
 logger = logging.getLogger("generate_dashboard")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
@@ -107,6 +110,155 @@ def _load_market_news():
 
 def _load_gex_snapshot():
     return _load_json(LOG_DIR / "gex_snapshot.json", {})
+
+
+def _load_durable_kill_state(limit_pct: float) -> dict:
+    """Return today's exact durable trading-loss latch, or no usable state."""
+    state = _load_json(ROOT / "data" / "state" / "kill_switch_state.json", {})
+    try:
+        evaluated = datetime.fromisoformat(str(state["evaluated_at"]))
+        trading_pnl = float(state["trading_pnl"])
+        daily_start = float(state["daily_start_value"])
+        loss_pct = float(state["loss_pct"])
+        session_date = datetime.now(ET).date().isoformat()
+        if (
+            not isinstance(state, dict)
+            or state.get("schema_version") != 2
+            or state.get("session_date_et") != session_date
+            or evaluated.tzinfo is None
+            or evaluated.astimezone(ET).date().isoformat() != session_date
+            or state.get("killed") is not True
+            or state.get("halt_entries") is not True
+            or state.get("cause") != "GENUINE_TRADING_LOSS"
+            or state.get("attribution_exact") is not True
+            or not all(math.isfinite(value) for value in (
+                trading_pnl, daily_start, loss_pct,
+            ))
+            or daily_start <= 0
+            or trading_pnl / daily_start != loss_pct
+            or loss_pct > -limit_pct
+        ):
+            return {}
+        return state
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return {}
+
+
+def _durable_kill_matches(snapshot: dict, state: dict | None = None) -> bool:
+    """Prove a killed snapshot matches today's durable trading-loss latch."""
+    state = state or {}
+    if not state or snapshot.get("killed") is not True:
+        return False
+    try:
+        pairs = (
+            (state["trading_pnl"], snapshot["trading_pnl"]),
+            (state["daily_start_value"], snapshot["daily_start_value"]),
+        )
+        return all(
+            math.isfinite(float(left))
+            and math.isfinite(float(right))
+            and math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=1e-9)
+            for left, right in pairs
+        )
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _load_kill_switch_snapshot() -> dict:
+    """Strict read of the risk engine's exact, current-session display snapshot."""
+    data = _load_json(LOG_DIR / "kill_switch_snapshot.json", {})
+    if not isinstance(data, dict) or data.get("schema") != 1:
+        return {}
+    try:
+        generated = datetime.fromisoformat(
+            str(data["generated_at_utc"]).replace("Z", "+00:00")
+        )
+        if generated.tzinfo is None:
+            return {}
+        now_utc = datetime.now(ZoneInfo("UTC"))
+        session_date_et = generated.astimezone(ET).date().isoformat()
+        max_age_seconds = float(data["max_age_seconds"])
+        scan_minutes = max(
+            float(bot_config.SCAN_INTERVAL_INTRADAY),
+            float(bot_config.DAYTRADE_SCAN_INTERVAL_MIN),
+        )
+        expected_max_age_seconds = (
+            scan_minutes * 60.0
+            + scan_minutes * 60.0
+            + scan_minutes * 60.0
+        )
+        age_seconds = (now_utc - generated.astimezone(ZoneInfo("UTC"))).total_seconds()
+        if (
+            session_date_et != datetime.now(ET).date().isoformat()
+            or data.get("session_date_et") != session_date_et
+            or not math.isfinite(max_age_seconds)
+            or max_age_seconds <= 0
+            or not math.isclose(
+                max_age_seconds,
+                expected_max_age_seconds,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+            or age_seconds < 0
+        ):
+            return {}
+        raw_numbers = [
+            data["trading_pnl"],
+            data["daily_start_value"],
+            data["limit_pct"],
+            data["limit_usd"],
+            data["consumed_pct"],
+        ]
+        if any(isinstance(value, bool) for value in raw_numbers):
+            return {}
+        trading_pnl, daily_start, limit_pct, limit_usd, consumed_pct = map(
+            float, raw_numbers
+        )
+        if (
+            not all(math.isfinite(value) for value in (
+                trading_pnl, daily_start, limit_pct, limit_usd, consumed_pct
+            ))
+            or daily_start <= 0
+            or not 0 < limit_pct < 1
+            or limit_usd <= 0
+            or consumed_pct < 0
+            or data.get("attribution_exact") is not True
+            or not isinstance(data.get("killed"), bool)
+            or data.get("included_tiers") != ["day", "swing"]
+            or data.get("excluded_held_tiers") != ["qhm", "forever_6"]
+        ):
+            return {}
+        expected_limit = daily_start * limit_pct
+        expected_consumed = abs(min(trading_pnl, 0.0)) / expected_limit * 100.0
+        if not math.isclose(limit_usd, expected_limit, rel_tol=1e-12, abs_tol=1e-9):
+            return {}
+        if not math.isclose(
+            consumed_pct, expected_consumed, rel_tol=1e-12, abs_tol=1e-9
+        ):
+            return {}
+        expected_killed = trading_pnl / daily_start <= -limit_pct
+        if data["killed"] is not expected_killed:
+            return {}
+        durable_kill = _load_durable_kill_state(limit_pct)
+        durable_match = _durable_kill_matches(data, durable_kill)
+        if (
+            (durable_kill and not durable_match)
+            or (age_seconds > max_age_seconds and not durable_match)
+        ):
+            return {}
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return {}
+    clean = dict(data)
+    clean.update({
+        "generated_at": generated,
+        "trading_pnl": trading_pnl,
+        "daily_start_value": daily_start,
+        "limit_pct": limit_pct,
+        "limit_usd": limit_usd,
+        "consumed_pct": consumed_pct,
+        "stale_trigger_snapshot": age_seconds > max_age_seconds,
+    })
+    return clean
 
 
 def _load_edge_snapshot() -> dict:
@@ -197,6 +349,134 @@ def _canonical_position_tiers(rec: object, net_qty: float) -> list[tuple[str, fl
     return active
 
 
+def _order_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _remaining_order_qty(order: dict) -> float | None:
+    qty = _order_number(order.get("qty"))
+    filled = _order_number(order.get("filled_qty"))
+    if qty is None or filled is None or qty <= 0 or filled < 0 or filled > qty:
+        return None
+    remaining = qty - filled
+    return remaining if remaining > 0 else None
+
+
+def _order_tier(order: dict) -> str | None:
+    try:
+        from execution.ownership_guard import tier_of_coid
+
+        legacy = tier_of_coid(order.get("client_order_id"))
+        if legacy is None:
+            legacy = tier_of_coid(order.get("owner_client_order_id"))
+        return canonical_tier(legacy) if legacy else None
+    except (ImportError, TypeError, ValueError):
+        return None
+
+
+def _position_protection(
+    position: dict,
+    tiers: list[tuple[str, float]],
+    orders: list[dict],
+    *,
+    orders_available: bool,
+) -> list[dict]:
+    """Join one broker position's owned tier lots to its live reducing orders."""
+    symbol = str(position.get("symbol") or "").upper()
+    side = str(position.get("side") or "").lower()
+    current = _order_number(position.get("current_price"))
+    reducing_side = "sell" if side == "long" else ("buy" if side == "short" else "")
+    stop_types = {"stop", "stop_limit", "trailing_stop"}
+    protective_statuses = {"accepted", "new", "partially_filled"}
+    relevant: dict[str, list[dict]] = {}
+    if orders_available and reducing_side:
+        for order in orders:
+            if (
+                str(order.get("symbol") or "").upper() != symbol
+                or str(order.get("side") or "").lower() != reducing_side
+                or str(order.get("status") or "").lower() not in protective_statuses
+            ):
+                continue
+            owner = _order_tier(order)
+            if owner:
+                relevant.setdefault(owner, []).append(order)
+
+    facts = []
+    for tier, tier_qty in tiers:
+        owned = abs(float(tier_qty))
+        tier_orders = relevant.get(tier, [])
+        stop_orders = [
+            order for order in tier_orders
+            if str(order.get("type") or "").lower() in stop_types
+            and _remaining_order_qty(order) is not None
+            and (_order_number(order.get("stop_price")) or 0.0) > 0
+        ]
+        stop_details = sorted(
+            (
+                float(order["stop_price"]),
+                float(_remaining_order_qty(order) or 0.0),
+            )
+            for order in stop_orders
+        )
+        stop_qty = sum(qty for _price, qty in stop_details)
+        targets = sorted(
+            (
+                float(order["limit_price"]),
+                float(_remaining_order_qty(order) or 0.0),
+            )
+            for order in tier_orders
+            if str(order.get("type") or "").lower() == "limit"
+            and _remaining_order_qty(order) is not None
+            and (_order_number(order.get("limit_price")) or 0.0) > 0
+        )
+        breached = bool(stop_details) and (
+            any(price >= current for price, _qty in stop_details)
+            if side == "long" and current is not None and current > 0
+            else any(price <= current for price, _qty in stop_details)
+            if side == "short" and current is not None and current > 0
+            else False
+        )
+        if not orders_available or current is None or current <= 0:
+            status = "UNAVAILABLE"
+        elif tier == "unattributed":
+            status = "UNATTRIBUTED"
+        elif breached:
+            status = "BREACHED"
+        elif stop_qty == 0:
+            status = "MISSING"
+        elif stop_qty < owned:
+            status = "PARTIAL"
+        elif stop_qty > owned:
+            status = "OVER-COVERED"
+        else:
+            status = "PROTECTED"
+        distance = None
+        if current and current > 0 and len(stop_details) == 1:
+            stop_price = stop_details[0][0]
+            distance = (
+                (current - stop_price) / current * 100.0
+                if side == "long"
+                else (stop_price - current) / current * 100.0
+            )
+        facts.append({
+            "symbol": symbol,
+            "tier": tier,
+            "owned_qty": owned,
+            "stop_qty": stop_qty,
+            "stops": stop_details,
+            "targets": targets,
+            "distance_pct": distance,
+            "status": status,
+        })
+    return facts
+
+
 def _compute_spy_levels() -> dict:
     """SPY GEX regime/flip (from gex_snapshot.json) + floor-trader pivot S/R from
     the last completed SPY daily bar (Alpaca Data API, T1). Standalone + fail-soft:
@@ -279,6 +559,7 @@ def _load_alpaca():
             "equity": 0, "cash": 0, "buying_power": 0, "last_equity": 0,
             "status": "unknown", "shorting": False,
             "positions": [], "orders":[],
+            "orders_available": False,
         }
     try:
         import certifi as _cert
@@ -297,7 +578,40 @@ def _load_alpaca():
     try:
         acct  = _get("/v2/account")
         raw_p = _get("/v2/positions")
-        raw_o = _get("/v2/orders?status=open&limit=50")
+        raw_o = _get(
+            f"/v2/orders?status=open&limit={_ALPACA_OPEN_ORDER_PAGE_SIZE}&nested=true"
+        )
+
+        def _flatten_orders(items):
+            flattened = []
+            seen = set()
+            pending = (
+                [(order, None) for order in items]
+                if isinstance(items, list) else []
+            )
+            while pending:
+                order, inherited_coid = pending.pop(0)
+                if not isinstance(order, dict):
+                    continue
+                order_id = str(order.get("id") or "")
+                if not order_id or order_id in seen:
+                    continue
+                seen.add(order_id)
+                display_order = dict(order)
+                display_order["owner_client_order_id"] = inherited_coid
+                flattened.append(display_order)
+                own_coid = order.get("client_order_id")
+                try:
+                    from execution.ownership_guard import tier_of_coid
+                    owner_coid = own_coid if tier_of_coid(own_coid) else inherited_coid
+                except (ImportError, TypeError, ValueError):
+                    owner_coid = inherited_coid
+                legs = order.get("legs")
+                if isinstance(legs, list):
+                    pending.extend((leg, owner_coid) for leg in legs)
+            return flattened
+
+        flat_o = _flatten_orders(raw_o)
         return {
             "equity":       float(acct.get("equity", 0) or 0),
             "last_equity":  float(acct.get("last_equity", 0) or 0),
@@ -323,15 +637,26 @@ def _load_alpaca():
             ],
             "orders":[
                 {
+                    "id":           o.get("id", ""),
                     "symbol":       o.get("symbol", "?"),
                     "side":         o.get("side", "?"),
                     "qty":          o.get("qty", "?"),
+                    "filled_qty":   o.get("filled_qty"),
                     "type":         o.get("type") or o.get("order_type", "unknown"),
                     "status":       o.get("status", "?"),
+                    "stop_price":   o.get("stop_price"),
+                    "limit_price":  o.get("limit_price"),
+                    "order_class":  o.get("order_class", ""),
+                    "client_order_id": o.get("client_order_id", ""),
+                    "owner_client_order_id": o.get("owner_client_order_id"),
                     "submitted_at": o.get("submitted_at", ""),
                 }
-                for o in raw_o[:15]
+                for o in flat_o
             ],
+            "orders_available": (
+                isinstance(raw_o, list)
+                and len(raw_o) < _ALPACA_OPEN_ORDER_PAGE_SIZE
+            ),
             "error": None,
         }
     except Exception as e:
@@ -340,7 +665,7 @@ def _load_alpaca():
             "error": str(e), "equity": 0, "last_equity": 0,
             "cash": 0, "buying_power": 0,
             "status": "unknown", "shorting": False,
-            "positions": [], "orders": [],
+            "positions": [], "orders": [], "orders_available": False,
         }
 
 
@@ -433,6 +758,7 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
     orders   = alpaca.get("orders",[])
     edge_snapshot = _load_edge_snapshot()
     ownership_positions = _load_ownership_positions()
+    kill_snapshot = _load_kill_switch_snapshot()
 
     # All-time P&L — Alpaca authoritative via compute_lifetime_stats(equity=equity).
     # Pass equity already fetched above so we skip the second Alpaca API call.
@@ -626,19 +952,51 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
         '  </div>'
     )
 
-    # Kill switch gauge — read from config so paper profile (15%) matches BoD-3 runtime override
-    try:
-        import config as _cfg
-        max_loss_pct = getattr(_cfg, "MAX_DAILY_LOSS_PCT", 0.05)
-    except Exception as e:
-        logger.warning(f"Config import failed — kill switch display using fallback 5%: {e}")
-        max_loss_pct = 0.05
-    ks_limit     = equity * max_loss_pct
-    ks_used_pct  = min(abs(today_pnl) / max(ks_limit, 1) * 100, 100) if today_pnl < 0 else 0
-    ks_col       = "#ff3b30" if ks_used_pct >= 80 else ("#ffd60a" if ks_used_pct >= 50 else "#30d158")
+    # The risk engine owns this calculation.  The dashboard only renders its
+    # validated current-session snapshot; it never imports a profile default or
+    # recreates tier attribution in this separate writer process.
+    ks_available = bool(kill_snapshot)
+    if ks_available:
+        max_loss_pct = float(kill_snapshot["limit_pct"])
+        ks_limit = float(kill_snapshot["limit_usd"])
+        ks_trading_pnl = float(kill_snapshot["trading_pnl"])
+        ks_used_pct = float(kill_snapshot["consumed_pct"])
+        ks_fill_pct = min(ks_used_pct, 100.0)
+        ks_asof = kill_snapshot["generated_at"].astimezone(PT).strftime("%-I:%M:%S %p PT")
+        ks_col = (
+            "#ff3b30" if kill_snapshot["killed"] or ks_used_pct >= 80
+            else ("#ffd60a" if ks_used_pct >= 50 else "#30d158")
+        )
+        ks_prefix = "Daily brake TRIGGERED — " if kill_snapshot["killed"] else ""
+        ks_title = (
+            f"{ks_prefix}Day + Swing loss vs {max_loss_pct:.0%} daily brake "
+            f"(QHM + F6 held shares excluded)"
+        )
+        if kill_snapshot["stale_trigger_snapshot"]:
+            ks_value = (
+                f"Trigger-time loss ${ks_trading_pnl:+,.2f} of ${ks_limit:,.2f} · "
+                f"{ks_used_pct:.1f}% used · {ks_asof} · current loss unavailable"
+            )
+        else:
+            ks_value = (
+                f"${ks_trading_pnl:+,.2f} of ${ks_limit:,.2f} · "
+                f"{ks_used_pct:.1f}% used · {ks_asof}"
+            )
+    else:
+        max_loss_pct = 0.0
+        ks_limit = 0.0
+        ks_trading_pnl = 0.0
+        ks_used_pct = 0.0
+        ks_fill_pct = 0.0
+        ks_col = "#ff9f0a"
+        ks_title = "Daily brake status unavailable"
+        ks_value = "Risk snapshot missing, stale, inexact, or malformed"
 
     # Build open positions rows
     pos_rows = ""
+    protection_rows = ""
+    protection_issues = 0
+    orders_available = alpaca.get("orders_available") is True
     _open_tier_symbols: dict[str, set[str]] = {k: set() for k in TIER_LABELS}
     _open_tier_qty: dict[str, float] = {k: 0.0 for k in TIER_LABELS}
 
@@ -680,20 +1038,64 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
             for _tier, _tier_qty in _tier_rows:
                 _open_tier_symbols.setdefault(_tier, set()).add(sym)
                 _open_tier_qty[_tier] = _open_tier_qty.get(_tier, 0.0) + abs(_tier_qty)
-            _tier_html = tier_badges(_tier_rows)
-            # QHM/Forever-6 holds keep their protective stop in quarterly_holds.json (stop_price),
-            # NOT in trade_log["open"] — so read it there, else a real live stop renders as "—".
-            _stop_val = td.get("stop")
-            if not _stop_val and _is_qhm:
-                # isinstance guard: a corrupt quarterly_holds.json mapping a symbol to a non-dict
-                # must not .get()-crash the whole render (cold-2nd hardening — the page must never
-                # freeze on a malformed state file).
-                _rec = _qh.get(sym)
-                _stop_val = _rec.get("stop_price") if isinstance(_rec, dict) else None
-            try:
-                stop_str = f"${float(_stop_val):.2f}" if _stop_val else "—"
-            except (TypeError, ValueError):
-                stop_str = "—"
+            _tier_html = tier_badges(_tier_rows, show_qty=False)
+            _protection = _position_protection(
+                p, _tier_rows, orders, orders_available=orders_available
+            )
+            _stop_parts = []
+            for fact in _protection:
+                _status = fact["status"]
+                _status_col = {
+                    "PROTECTED": "#30d158",
+                    "PARTIAL": "#ffd60a",
+                    "MISSING": "#ff3b30",
+                    "OVER-COVERED": "#ff9f0a",
+                    "BREACHED": "#ff3b30",
+                    "UNAVAILABLE": "#ff9f0a",
+                    "UNATTRIBUTED": "#ff9f0a",
+                }[_status]
+                _stop_text = " + ".join(
+                    f"${stop_px:.2f} ({stop_qty:g} sh)"
+                    for stop_px, stop_qty in fact["stops"]
+                ) or _status
+                _coverage = f'{fact["stop_qty"]:g}/{fact["owned_qty"]:g} protected'
+                _distance = fact["distance_pct"]
+                _distance_text = "—" if _distance is None else f"{_distance:.1f}%"
+                _targets = " + ".join(
+                    f"${limit_px:.2f} ({limit_qty:g} sh)"
+                    for limit_px, limit_qty in fact["targets"]
+                )
+                if _status == "MISSING":
+                    _action = "Place broker stop now"
+                elif _status == "PARTIAL":
+                    _action = f'Protect {fact["owned_qty"] - fact["stop_qty"]:g} remaining sh'
+                elif _status == "OVER-COVERED":
+                    _action = "Resolve excess stop coverage"
+                elif _status == "BREACHED":
+                    _action = "Stop breached · verify broker fill now"
+                elif _status in {"UNAVAILABLE", "UNATTRIBUTED"}:
+                    _action = "Verify ownership + broker orders"
+                elif _targets:
+                    _action = f"Profit exit {_targets}"
+                else:
+                    _action = "Stop active · no resting target"
+                if _status != "PROTECTED":
+                    protection_issues += 1
+                _stop_parts.append(
+                    f'<div style="color:{_status_col};white-space:nowrap">'
+                    f'{escape(TIER_LABELS[fact["tier"]])}: {_stop_text}</div>'
+                )
+                protection_rows += f"""
+                <tr>
+                  <td style="color:#e2e4ee;font-weight:700">{escape(sym)}</td>
+                  <td>{tier_badges([(fact["tier"], 0.0)], show_qty=False)}</td>
+                  <td style="color:{_status_col};font-weight:700">{_status}</td>
+                  <td style="color:#ffd60a">{_stop_text}</td>
+                  <td>{_coverage}</td>
+                  <td>{_distance_text}</td>
+                  <td style="color:{_status_col}">{_action}</td>
+                </tr>"""
+            stop_str = "".join(_stop_parts)
             # Overnight-held soft-exit (~entry−0.5×ATR) + live breach count, non-QHM only.
             # be_mult is dynamic [0.25,0.65] in exit_logic; 0.5 is the representative midpoint
             # (RIVN's actual), labelled "~". Exact per-scan threshold persist = queued follow-up.
@@ -726,12 +1128,13 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
               <td>${price:.2f}</td>
               <td style="color:#b8bdd4">${entry_price:.2f}</td>
               <td style="color:{ucol};font-weight:700">{sign}${abs(upnl):.2f}</td>
-              <td style="color:#ffd60a">{stop_str}{_soft_html}</td>
+              <td>{stop_str}{_soft_html}</td>
               <td style="color:#30d158">{target_str}</td>
               <td style="color:#b8bdd4">{score_str}</td>
             </tr>"""
     else:
         pos_rows = '<tr><td colspan="10" style="color:#3a5068;text-align:center;padding:20px">No open positions</td></tr>'
+        protection_rows = '<tr><td colspan="7" style="color:#3a5068;text-align:center;padding:20px">No positions to protect</td></tr>'
 
     _tier_cards = []
     _edge_by_tier = edge_snapshot.get("by_tier", {})
@@ -759,21 +1162,6 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
         f'<small>edge snapshot {str(_edge_asof)}</small></div>'
         f'<div class="tier-grid">{"".join(_tier_cards)}</div></section>'
     )
-
-    order_rows = ""
-    if orders:
-        for o in orders[:10]:
-            side_col = "#30d158" if o["side"] in ("buy", "long") else "#ff3b30"
-            order_rows += f"""
-            <tr>
-              <td style="color:#e2e4ee;font-weight:700">{o['symbol']}</td>
-              <td style="color:{side_col}">{o['side'].upper()}</td>
-              <td>{o['qty']}</td>
-              <td style="color:#b8bdd4">{o['type']}</td>
-              <td style="color:#b8bdd4">{o['status']}</td>
-            </tr>"""
-    else:
-        order_rows = '<tr><td colspan="5" style="color:#3a5068;text-align:center;padding:20px">No open orders</td></tr>'
 
     _risk_labels = {"HIGH_RISK": "HIGH RISK", "CAUTION": "CAUTION", "MONITOR": "MONITOR"}
     news_rows = ""
@@ -978,7 +1366,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
   <div class="kpi">
     <div class="kpi-lbl">Open Positions</div>
     <div class="kpi-val" style="color:var(--accent)">{len(open_pos)}</div>
-    <div class="kpi-sub">{len(orders)} order(s) · BP: ${bp:,.0f}</div>
+    <div class="kpi-sub">{protection_issues} protection issue{'s' if protection_issues != 1 else ''} · BP: ${bp:,.0f}</div>
   </div>
   <div class="kpi">
     <div class="kpi-lbl">Completed Edge</div>
@@ -1001,11 +1389,11 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
 <!-- Kill switch bar -->
 <div class="ks-bar-wrap">
   <div class="ks-lbl">
-    <span>Daily Loss vs Kill Switch ({max_loss_pct:.0%} limit = ${-ks_limit:,.2f})</span>
-    <span style="color:{ks_col}">{ks_used_pct:.1f}% consumed</span>
+    <span>{ks_title}</span>
+    <span style="color:{ks_col}">{ks_value}</span>
   </div>
   <div class="ks-track">
-    <div class="ks-fill" style="width:{ks_used_pct:.1f}%;background:{ks_col}"></div>
+    <div class="ks-fill" style="width:{ks_fill_pct:.1f}%;background:{ks_col}"></div>
   </div>
 </div>
 
@@ -1025,14 +1413,15 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     </table>
 
     <div class="ph" style="margin-top:1px">
-      <span class="pt">Open Orders</span>
-      <span class="pm">{len(orders)} pending</span>
+      <span class="pt">Protection &amp; next action</span>
+      <span class="pm" style="color:{'#30d158' if protection_issues == 0 else '#ff9f0a'}">{protection_issues} issue{'s' if protection_issues != 1 else ''}</span>
     </div>
     <table>
       <thead><tr>
-        <th>Symbol</th><th>Side</th><th>Qty</th><th>Type</th><th>Status</th>
+        <th>Symbol</th><th>Tier</th><th>Status</th><th>Broker stop</th>
+        <th>Coverage</th><th>Distance</th><th>Next action</th>
       </tr></thead>
-      <tbody>{order_rows}</tbody>
+      <tbody>{protection_rows}</tbody>
     </table>
   </div>
 
@@ -1065,7 +1454,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
         <tr><td style="color:var(--dim)">SPY Event</td><td><span style="color:{spy_col};font-weight:700">{spy_label}</span></td></tr>
         <tr><td style="color:var(--dim)">Scans to Clear</td><td>{spy_scans}</td></tr>
         <tr><td style="color:var(--dim)">SPY Move</td><td style="color:{'#00ff88' if spy_mag >= 0 else '#ff3b5c'}">{spy_mag:+.2f}%</td></tr>
-        <tr><td style="color:var(--dim)">Kill Switch</td><td style="color:{ks_col}">{ks_used_pct:.1f}% used</td></tr>
+        <tr><td style="color:var(--dim)">Daily Brake</td><td style="color:{ks_col}">{ks_value}</td></tr>
         <tr style="border-top:1px solid #1a2530">
           <td style="color:var(--dim)">MRI Score</td>
           <td><span style="color:{mri_col};font-weight:700">{mri_score}/100</span></td>
