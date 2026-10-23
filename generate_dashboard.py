@@ -393,14 +393,30 @@ def _position_protection(
     current = _order_number(position.get("current_price"))
     reducing_side = "sell" if side == "long" else ("buy" if side == "short" else "")
     stop_types = {"stop", "stop_limit", "trailing_stop"}
-    protective_statuses = {"accepted", "new", "partially_filled"}
+    # Alpaca reports the inactive child of a live OCO exit pair as HELD. It is
+    # still the broker-native protective leg (2026-10-23 AMZN:
+    # six-share BUY stop at $250.25).  Exact parent tier, reducing side, stop
+    # type, price, and remaining quantity checks below still apply.
+    protective_statuses = {"accepted", "new", "held", "partially_filled"}
     relevant: dict[str, list[dict]] = {}
     if orders_available and reducing_side:
         for order in orders:
+            status = str(order.get("status") or "").lower()
+            # HELD has two materially different meanings. An OCO stop is a
+            # live alternative exit for an existing position (the sibling
+            # limit is NEW); a bracket-entry stop is conditional on an entry
+            # that may not have filled.  Count only the broker-proven OCO case.
+            owner_status = str(order.get("owner_status") or "").lower()
+            held_oco = status == "held" and str(
+                order.get("owner_order_class") or order.get("order_class") or ""
+            ).lower() == "oco" and owner_status in {
+                "accepted", "new", "partially_filled",
+            }
             if (
                 str(order.get("symbol") or "").upper() != symbol
                 or str(order.get("side") or "").lower() != reducing_side
-                or str(order.get("status") or "").lower() not in protective_statuses
+                or status not in protective_statuses
+                or (status == "held" and not held_oco)
             ):
                 continue
             owner = _order_tier(order)
@@ -599,6 +615,12 @@ def _load_alpaca():
                 seen.add(order_id)
                 display_order = dict(order)
                 display_order["owner_client_order_id"] = inherited_coid
+                display_order["owner_order_class"] = (
+                    order.get("order_class") if inherited_coid else None
+                )
+                display_order["owner_status"] = (
+                    order.get("status") if inherited_coid else None
+                )
                 flattened.append(display_order)
                 own_coid = order.get("client_order_id")
                 try:
@@ -608,7 +630,15 @@ def _load_alpaca():
                     owner_coid = inherited_coid
                 legs = order.get("legs")
                 if isinstance(legs, list):
-                    pending.extend((leg, owner_coid) for leg in legs)
+                    parent_class = order.get("order_class")
+                    for leg in legs:
+                        if isinstance(leg, dict):
+                            leg = {
+                                **leg,
+                                "_owner_order_class": parent_class,
+                                "_owner_status": order.get("status"),
+                            }
+                        pending.append((leg, owner_coid))
             return flattened
 
         flat_o = _flatten_orders(raw_o)
@@ -649,6 +679,10 @@ def _load_alpaca():
                     "order_class":  o.get("order_class", ""),
                     "client_order_id": o.get("client_order_id", ""),
                     "owner_client_order_id": o.get("owner_client_order_id"),
+                    "owner_order_class": (
+                        o.get("_owner_order_class") or o.get("owner_order_class")
+                    ),
+                    "owner_status": o.get("_owner_status") or o.get("owner_status"),
                     "submitted_at": o.get("submitted_at", ""),
                 }
                 for o in flat_o

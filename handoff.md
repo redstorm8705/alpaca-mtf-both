@@ -8,7 +8,21 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-23, OpenAI Codex signed) — dashboard protection truth live (#741)
+## ⏩ LATEST (2026-10-23, OpenAI Codex signed) — held OCO stop display correction
+
+- Live Alpaca proof showed the AMZN Day short had a six-share buy stop at `$250.25`, but Alpaca reports the
+  inactive stop child of that live OCO pair as `held`; the dashboard previously ignored that lifecycle state and
+  falsely displayed `MISSING`.
+- The dashboard now carries the parent order class and state into nested children. A `held` stop counts only when
+  its tagged owner is an active OCO exit group (`accepted`, `new`, or `partially_filled`). Unfilled bracket entries,
+  unknown parents, and canceling OCO groups remain non-protective, so the correction cannot hide a real gap.
+- This changes read-only HTML classification only. It does not submit, cancel, replace, size, or route an order.
+  Design and tests: `logs/design_records/dashboard_held_stop_status_2026-10-23.md`.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** finish the approved full-path pre-market F6 simulation and prepare
+Rafael's one-page enablement decision. Do not enable F6.
+
+## ⏩ PRIOR (2026-10-23, OpenAI Codex signed) — dashboard protection truth live (#741)
 
 - Owner-approved `DASH-PROTECT-1022` is deployed at OCI commit `5dcc714`. The position table now shows canonical
   tier names without repeating share counts and joins current owned tier lots to live Alpaca stop orders.
