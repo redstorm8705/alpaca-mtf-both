@@ -138,6 +138,96 @@ def test_oco_stop_leg_inherits_immutable_parent_tier_identity():
     assert fact["stops"] == [(328.7, 1.0)]
 
 
+def test_held_short_oco_stop_is_live_protection() -> None:
+    child = _order(
+        symbol="AMZN",
+        side="buy",
+        qty="6",
+        status="held",
+        stop_price="250.25",
+        client_order_id="broker-generated-uuid",
+        owner_client_order_id="DT-AMZN-b-1792762826715-a815daf7",
+        owner_order_class="oco",
+        owner_status="new",
+    )
+    fact = dashboard._position_protection(
+        _position(
+            symbol="AMZN",
+            side="short",
+            qty=-6.0,
+            current_price=249.19,
+            avg_entry_price=247.56,
+        ),
+        [("day", -6.0)],
+        [child],
+        orders_available=True,
+    )[0]
+    assert fact["status"] == "PROTECTED"
+    assert fact["stops"] == [(250.25, 6.0)]
+    assert round(fact["distance_pct"], 2) == 0.43
+
+
+def test_held_order_still_requires_reducing_side_and_parent_tier() -> None:
+    short = _position(symbol="AMZN", side="short", qty=-6.0, current_price=249.19)
+    wrong_side = _order(
+        symbol="AMZN", side="sell", qty="6", status="held", stop_price="250.25",
+        owner_client_order_id="DT-AMZN-b-1792762826715-a815daf7",
+        owner_order_class="oco",
+        owner_status="new",
+    )
+    unowned = _order(
+        symbol="AMZN", side="buy", qty="6", status="held", stop_price="250.25",
+        client_order_id="broker-generated-uuid", owner_client_order_id=None,
+        owner_order_class="oco",
+        owner_status="new",
+    )
+    for candidate in (wrong_side, unowned):
+        fact = dashboard._position_protection(
+            short, [("day", -6.0)], [candidate], orders_available=True
+        )[0]
+        assert fact["status"] == "MISSING"
+        assert fact["stops"] == []
+
+
+def test_held_unfilled_bracket_child_is_not_counted_as_protection() -> None:
+    inactive_child = _order(
+        symbol="AAPL",
+        side="sell",
+        status="held",
+        owner_client_order_id="DT-AAPL-b-unfilled-entry",
+        owner_order_class="bracket",
+        owner_status="new",
+    )
+    fact = dashboard._position_protection(
+        _position(), [("day", 1.0)], [inactive_child], orders_available=True
+    )[0]
+    assert fact["status"] == "MISSING"
+    assert fact["stops"] == []
+
+
+def test_held_oco_stop_with_canceling_parent_is_not_counted() -> None:
+    canceling_child = _order(
+        symbol="AMZN",
+        side="buy",
+        qty="6",
+        status="held",
+        stop_price="250.25",
+        owner_client_order_id="DT-AMZN-b-1792762826715-a815daf7",
+        owner_order_class="oco",
+        owner_status="pending_cancel",
+    )
+    fact = dashboard._position_protection(
+        _position(
+            symbol="AMZN", side="short", qty=-6.0, current_price=249.19
+        ),
+        [("day", -6.0)],
+        [canceling_child],
+        orders_available=True,
+    )[0]
+    assert fact["status"] == "MISSING"
+    assert fact["stops"] == []
+
+
 def test_kill_snapshot_publisher_records_runtime_profile_without_changing_verdict(
     tmp_path: Path,
 ):
