@@ -1,0 +1,40 @@
+Midday Gemini Audit — 2026-10-23
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   Unmanaged residual position | GE (1 share)
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Integrity:** No closed trades recorded in `CLOSED TRADE DETAILS`. Alpaca fills show 1 Buy for GE.
+*   **P&L:** Total P&L is $0.00. The ledger sync confirms 48 positions, but the `unmanaged_positions` warning indicates a residual 1-share position in GE that the bot is failing to reconcile or close.
+*   **Correlation:** N/A (no closed trades).
+
+### ENTRY QUALITY
+*   **Findings:** The bot is currently in a "STRESSED" MRI state (score 50). While the bot correctly applied a 0.70x size floor, the high number of signals filtered by the ORB gate (11 signals found, 0 entries taken) suggests the current market regime is highly restrictive, which is appropriate for the "STRESSED" MRI level.
+
+### EXIT QUALITY
+*   **Findings:** The bot is failing to manage the residual 1-share position in GE. This is a persistent state issue as evidenced by the repeated `[unmanaged-position] [GE] still unmanaged` warning in the logs.
+
+### MRI ALIGNMENT
+*   **Findings:** The bot correctly identified the "STRESSED" regime (score 50) and applied the 0.70x size floor. The logic is functioning as intended under current market conditions.
+
+### LOG ANOMALIES
+*   `[unmanaged-position] [GE] still unmanaged: residual 1 (paged)`: This warning persists across cycles, indicating a failure in the position management/cleanup logic for GE.
+*   `ledger_sync wall-time 16.9s`: This is a high wall-time for a ledger sync, potentially indicating a bottleneck in the reconciliation process given the 3,178 orders processed.
+
+### NEW BUGS / CONCERNS
+*   **CATEGORY:** EXECUTION BUG
+*   **SEVERITY:** MEDIUM
+*   **Description:** Residual position in GE is not being cleared or managed. The bot identifies it as "unmanaged" but takes no corrective action to flatten the 1-share residual.
+*   **Exact Condition:** Occurs during the `execution.unmanaged_positions` check in the main loop.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Investigate the `execution.unmanaged_positions` module to determine why the 1-share residual in GE is not being force-closed or reconciled.
+2.  **INFRASTRUCTURE:** Monitor `ledger_sync` wall-time; if it continues to exceed 15s, consider optimizing the order-history lookup or increasing the `watchdog_headroom` threshold.
+3.  **ALPHA:** Maintain the current restrictive ORB gating while the MRI remains in the "STRESSED" state.

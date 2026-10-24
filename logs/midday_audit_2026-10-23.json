@@ -1,0 +1,178 @@
+{
+  "audit_date": "2026-10-23",
+  "run_ts": "2026-10-23T10:30:01.925411-07:00",
+  "entry_analysis": {
+    "entry_count": 1,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AMZN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 24,
+    "levels": {
+      "STRESSED": 24
+    },
+    "last_score": 50,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 47,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-23 15:57:09,678 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-23 15:57:09,681 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-23 16:00:21,493 WARNING ledger_sync ledger_sync wall-time 19.9s (fills=821 orders=3171)",
+      "2026-10-23 16:04:23,497 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-23 16:04:23,500 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "AMZN": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 230,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:40-09:40"
+        ],
+        "uncovered_windows_pt": [
+          "06:40-06:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "NAKED",
+        "owners": [
+          "other",
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 78,
+        "lapsed_min": 0,
+        "uncovered_at_close": true,
+        "uncovered_windows_et": [
+          "12:04-12:04",
+          "12:12-13:30"
+        ],
+        "uncovered_windows_pt": [
+          "09:04-09:04",
+          "09:12-10:30"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-23",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "GE NAKED (broker ground truth) \u2014 STILL UNCOVERED at the window end",
+        "detail": "GE: no broker stop for 78m of 240m held (09:04-09:04, 09:12-10:30 PT); owners other/qhm"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "AMZN",
+      "GE"
+    ],
+    "by_symbol": {
+      "GE": {
+        "buy": 1,
+        "sell": 0
+      },
+      "AMZN": {
+        "buy": 0,
+        "sell": 0
+      }
+    }
+  }
+}
