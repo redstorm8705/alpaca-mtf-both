@@ -805,6 +805,13 @@ class SharedApprovalTests(Base):
         self.owner_says("Approve oci reset 1017. Thanks, great work.")
         self.assertTrue(self.approved())
 
+    def test_go_ahead_follow_up_still_approves(self):
+        # owner 2026-10-24: 'APPROVE QHM ADD 1023. Lets continue' was dropped as a terse hedge
+        for text in ("APPROVE OCI RESET 1017. Lets continue", "Approve oci reset 1017. Let's keep going.",
+                     "approve oci-reset 1017. proceed", "Approve OCI reset 1017. Move on."):
+            self.owner_says(text)
+            self.assertTrue(self.approved(), text)
+
     def test_more_launch_forms_blocked(self):
         for cmd in ("/usr/bin/env claude -p < /tmp/m", "eval claude -p < /tmp/m", "exec -a x claude -p < /tmp/m",
                     "find /tmp -name m -exec claude -p {} \\;", "tmux new -d 'claude -p < /tmp/m'", "screen -dm claude -p",
