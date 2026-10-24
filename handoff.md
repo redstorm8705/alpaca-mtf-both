@@ -17,7 +17,13 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - Design, replay and required questions: `logs/design_records/track_a_edge_sizing_2026-10-23.md`;
   replay code and rows in `logs/replays/track_a_edge_stop_level_*_2026-10-23.*`. No code written.
 
-**⏩ EXACT NEXT ACTION (Claude):** on owner approval of TRACK-A-EDGE-1023, implement it in `_wired_entry`
+- KILL-ATTR-1023 (kill switch counts Day + Swing only, by exact shares; dashboard gauge restored) aligned 4/4,
+  awaiting owner approval: `logs/design_records/kill_switch_tier_attribution_2026-10-23.md`.
+- Owner 2026-10-23 on TRACK-A-EDGE-1023: keep Track A's size; fix what it gets wrong first (RIDE has no follow-through,
+  FADE stops sit inside 5-minute noise); re-evaluate size after about one month.
+
+**⏩ EXACT NEXT ACTION (Claude):** on owner approval of KILL-ATTR-1023, implement it in execution/risk_manager.py
+through the full gate. Then Track A logic designs (no size cut). Superseded:, implement it in `_wired_entry`
 (execution/day_trade_manager.py) through the full gate. The nightly-audit full-read change (AUDIT-FULLREAD-1020) is
 still uncommitted in the day-tier-close-card worktree.
 
