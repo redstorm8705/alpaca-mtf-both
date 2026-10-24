@@ -8,16 +8,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-24, Claude signed) — SAFE-1024 gated and ready, waiting on the owner's typed approval
+## ⏩ LATEST (2026-10-24, Claude signed) — SAFE-1024 deployed (#758, 6ef1202), deployed-unexercised
 
-- SAFE-1024 (design `logs/design_records/position_read_unknown_not_flat_2026-10-24.md`, branch `claude/safe-1024`,
-  staged in the day-tier-close-card worktree): a raised broker position read is now "unknown" (retry), never "flat" or
-  "full size", in Day flatten_position / _force_flat_one, exit_logic _submit_new_stop and the signal-exit GTC defer
-  (that one booked an external close on a read error). Plus the late entry-fill heal: shares a pending-cancel Day
-  entry fills after the stop was sized are closed from the ENTRY ORDER's fill. Found by external QA (Meta Muse) and
-  confirmed at source. Board (Harris + Taleb masked-loss), Gro, GAI aligned; Gro+GAI preship APPROVE on the exact
-  files; cold-2nd + adversarial PASS. The commit stops ONLY at the owner-approval gate: the owner types
-  `approve safe 1024`, then commit + push + OCI pull + restart.
+- SAFE-1024 (design `logs/design_records/position_read_unknown_not_flat_2026-10-24.md`): a raised broker position read
+  is now "unknown" (retry), never "flat" or "full size", in Day flatten_position / _force_flat_one, exit_logic
+  _submit_new_stop and the signal-exit GTC defer (that one booked an external close on a read error). Plus the late
+  entry-fill heal (shares a pending-cancel Day entry fills after the stop was sized are closed from the ENTRY ORDER's
+  fill) and FIFO fill paging by page_token (after_id ignored by Alpaca -> 100+ fill day looped forever). Found by
+  external QA (Meta Muse) and confirmed at source. Owner-signed 10/24; merged #758; OCI DEPLOY_OK, services active,
+  dashboard 200, imports verified. Weekend: first exercised in Monday 10/26's session (log tag `change=safe-1024`).
 - TA-FOLLOW-1024 (Track A early exit): owner withdrew support 10/24 (never cut a trade in profit). His version replayed
   walk-forward on 27 Track A trades: -$99.37 -> -$92.24 (not material) -> NOT shipped. WIP saved in the scratchpad patch;
   design record kept, marked not adopted.
@@ -25,8 +24,9 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - Issue #756 (QHM PENDING_EXIT only re-checked at startup) handed to Codex. Issue #736: FIFO fallback lot file holds
   31/35 phantom symbols + after_id pagination ignored by Alpaca (P2; reported P&L unaffected — pnl_ledger authoritative).
 
-**⏩ EXACT NEXT ACTION (Claude):** (1) on the owner's `approve safe 1024`: commit `claude/safe-1024`, PR, merge, OCI
-`git pull --ff-only` + restart, post-live audit; (2) post-live audit of #753 after Monday 10/26; (3) Track A logic
+**⏩ EXACT NEXT ACTION (Claude):** (1) post-live audits of #758 (SAFE-1024) and #753 (KILL-ATTR) after Monday
+10/26's session (`record_post_live.py`); (2) Master Brain is at its 50-source cap — the owner frees old project-state
+sources, then push current state; (3) Track A logic
 (RIDE follow-through) — a new idea is needed that does not cut winning trades; (4) QHM / Swing owner designs.
 
 ## PREVIOUS (2026-10-24, Claude signed) — KILL-ATTR-1023 live (#753): 7% kill = Day + Swing only, by exact shares
