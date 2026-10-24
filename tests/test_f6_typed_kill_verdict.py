@@ -88,7 +88,13 @@ def test_trip_persists_typed_loss_evidence(monkeypatch) -> None:
     save = mock.Mock()
     monkeypatch.setattr(rm, "_save_kill_state", save)
     risk = rm.RiskManager(925.0, 1000.0)
-    monkeypatch.setattr(risk, "_intraday_trading_pnl", lambda: (-75.0, True))
+
+    def _exact_measure():
+        # KILL-ATTR-1023 T1: "exact" only when every symbol was proven.
+        risk._kill_attr = {"exact": True}
+        return -75.0, True
+
+    monkeypatch.setattr(risk, "_intraday_trading_pnl", _exact_measure)
 
     assert risk.check_kill_switch() is True
     save.assert_called_once_with(
@@ -100,6 +106,24 @@ def test_trip_persists_typed_loss_evidence(monkeypatch) -> None:
         loss_pct=-0.075,
         attribution_exact=True,
     )
+
+
+def test_trip_on_unproven_measure_is_not_typed_exact(monkeypatch) -> None:
+    """KILL-ATTR-1023 T1: a trip measured with an unproven symbol persists
+    attribution_exact=False, so it never counts as GENUINE loss for F6."""
+    monkeypatch.setattr(rm, "_load_kill_state", lambda: {})
+    save = mock.Mock()
+    monkeypatch.setattr(rm, "_save_kill_state", save)
+    risk = rm.RiskManager(925.0, 1000.0)
+
+    def _unproven_measure():
+        risk._kill_attr = {"exact": False, "unproven": {"GE": {}}}
+        return -75.0, True
+
+    monkeypatch.setattr(risk, "_intraday_trading_pnl", _unproven_measure)
+
+    assert risk.check_kill_switch() is True
+    assert save.call_args.kwargs["attribution_exact"] is False
 
 
 def test_atomic_state_writer_emits_versioned_verdict(tmp_path, monkeypatch) -> None:
