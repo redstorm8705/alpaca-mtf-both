@@ -610,6 +610,23 @@ def _tier_for_fill_order(
     return _validated_tier(order_facts)
 
 
+_KILL_ATTR_LAST_LOGGED: dict = {"signature": None}
+
+
+def _log_kill_attr(attr: dict) -> None:
+    """KILL-ATTR-1023 F4: log the attribution mode and every unproven symbol (both numbers and the one used) whenever
+    it changes, not on every check. Never raises."""
+    try:
+        signature = json.dumps(attr, sort_keys=True, default=str)
+        if signature == _KILL_ATTR_LAST_LOGGED["signature"]:
+            return
+        _KILL_ATTR_LAST_LOGGED["signature"] = signature
+        logger.info("kill-switch attribution exact=%s unproven=%s [change=kill-attr-1023]",
+                    attr.get("exact"), attr.get("unproven"))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("kill-switch attribution log failed: %s", e)
+
+
 def _today_fills() -> "tuple[tuple, bool]":
     """Today's fills as ``(symbol, side, qty, price, tier)`` plus an ok flag.
 
@@ -725,6 +742,8 @@ class RiskManager:
         # The intraday-loss figure the kill actually evaluated (position-based when available, else
         # the equity-fallback). Exposed so the alert reports the REAL tripping number, not realized $0.
         self.last_kill_measure  = 0.0
+        # KILL-ATTR-1023: per-check attribution detail (exact flag, unproven symbols, ledger_unreadable)
+        self._kill_attr: dict = {}
         # BUG-ADV-1: restore killed=True if same calendar day (survives os.execv)
         _ks = _load_kill_state()
         _today_et = datetime.now(_ET).strftime("%Y-%m-%d")
@@ -846,6 +865,231 @@ class RiskManager:
             )
             return None
 
+    def _ledger_attribution(
+        self, broker_qty: "dict[str, float]"
+    ) -> "tuple[dict[str, tuple[float, float, bool]], set[str]] | None":
+        """KILL-ATTR-1023 (owner approval 2026-10-23; logs/design_records/kill_switch_tier_attribution_2026-10-23.md):
+        per-symbol QHM + F6 share counts from the ownership ledger for the flag-off kill measure.
+
+        Returns ({symbol: (qhm, f6, has_negative_claim)} for every row the ledger proves, {unproven symbols}), or None
+        when the ledger file itself cannot be read (F3: the caller raises and new entries pause for that check). A row
+        is proven only when every claim is a whole share, the four tiers are present, claims sum to the ledger net, drift
+        is 0, QHM/F6 are non-negative and the ledger net equals the broker's current net quantity. Never raises."""
+        try:
+            from execution.ownership_guard import _QTY_EPS, load_ledger
+            from tier_names import canonical_tier
+
+            ledger = load_ledger()
+        except Exception as e:  # noqa: BLE001 — unreadable ledger is F3, not a fallback
+            logger.warning("kill-switch ownership ledger unreadable (%s) [change=kill-attr-1023]", e)
+            return None
+        proven: dict[str, tuple[float, float, bool]] = {}
+        unproven: set[str] = set()
+        for raw_symbol, row in (ledger.get("positions") or {}).items():
+            symbol = str(raw_symbol).upper()
+            try:
+                if not isinstance(row, dict) or not isinstance(row.get("tiers"), dict):
+                    raise ValueError("malformed ownership row")
+
+                def _whole(value: Any) -> float:
+                    if isinstance(value, bool):
+                        raise ValueError("Boolean quantity")
+                    parsed = float(value)
+                    if not math.isfinite(parsed) or not parsed.is_integer():
+                        raise ValueError("not a whole-share quantity")
+                    return parsed
+
+                drift = _whole(row.get("drift"))
+                ledger_net = _whole(row.get("alpaca_net_qty"))
+                claims: dict[str, float] = {}
+                for raw_tier, claim in row["tiers"].items():
+                    if not isinstance(claim, dict):
+                        raise ValueError("malformed claim")
+                    canonical = canonical_tier(raw_tier)
+                    if canonical in claims:
+                        raise ValueError("duplicate canonical tier")
+                    claims[canonical] = _whole(claim.get("qty"))
+                if set(claims) != {"day", "swing", "qhm", "forever_6"}:
+                    raise ValueError("incomplete ownership claims")
+                qhm, f6 = claims["qhm"], claims["forever_6"]
+                if (
+                    abs(drift) > _QTY_EPS
+                    or abs(sum(claims.values()) - ledger_net) > _QTY_EPS
+                    or qhm < 0.0
+                    or f6 < 0.0
+                    or abs(ledger_net - broker_qty.get(symbol, 0.0)) > _QTY_EPS
+                ):
+                    unproven.add(symbol)
+                    continue
+                proven[symbol] = (qhm, f6, any(v < 0.0 for v in claims.values()))
+            except (TypeError, ValueError):
+                unproven.add(symbol)
+        return proven, unproven
+
+    def _intraday_trading_pnl_tiered(self, fills: tuple, positions: list) -> "tuple[float, bool]":
+        """KILL-ATTR-1023 flag-off measure: Day + Swing intraday P&L only, by exact shares.
+
+        Per symbol (design F1/F2):
+          * proven by the ledger (and, when it holds QHM/F6 shares, no untagged fill today and no negative claim on the
+            row — L1): open leg on broker qty minus the exact QHM + F6 shares; QHM/F6-tagged fills skipped.
+          * unproven: excluded when the broker qty equals the QHM state's own count and no Day- or Swing-tagged fill
+            exists today on it; otherwise the MORE NEGATIVE of state-based (broker minus QHM state count, protected
+            fills skipped) and count-all (every share and fill). No QHM state count, or an F6 claim -> count-all.
+        Sets self._kill_attr (exact flag, per-symbol detail, ledger_unreadable). Returns (pnl, ok); ok=False degrades as
+        the enforced path does (the caller raises when the ledger itself was unreadable). Never raises."""
+        from collections import defaultdict
+        self._kill_attr = {"exact": False, "ledger_unreadable": False, "unproven": {}}
+        try:
+            broker_qty: dict[str, float] = {}
+            current: dict[str, float] = {}
+            prior_close: dict[str, float] = {}
+            for p in positions:
+                sym = str(p.get("symbol") or "").upper()
+                if not sym:
+                    continue
+                raw_qty = p.get("qty")
+                if isinstance(raw_qty, bool):
+                    return 0.0, False
+                qty = float(raw_qty)
+                cur = float(p.get("current_price"))
+                if not (math.isfinite(qty) and qty != 0.0 and qty.is_integer() and math.isfinite(cur)):
+                    return 0.0, False
+                broker_qty[sym] = qty
+                current[sym] = cur
+                ld = p.get("lastday_price")
+                if ld is not None:
+                    pc = float(ld)
+                    if not math.isfinite(pc):
+                        return 0.0, False
+                    prior_close[sym] = pc
+            attribution = self._ledger_attribution(broker_qty)
+            if attribution is None:
+                self._kill_attr["ledger_unreadable"] = True
+                return 0.0, False
+            proven, unproven = attribution
+            try:
+                from execution.quarterly_hold_manager import get_quarterly_hold_quantities
+                qhm_state: "dict[str, int] | None" = {
+                    str(k).upper(): int(v) for k, v in (get_quarterly_hold_quantities() or {}).items()
+                }
+            except Exception as e:  # noqa: BLE001 — unreadable QHM state -> count-all for unproven names
+                logger.warning("kill-switch QHM state unreadable (%s) — unproven names count every share", e)
+                qhm_state = None
+
+            # Per-symbol fill aggregates: every fill, and fills without the protected QHM/F6 tag.
+            agg: "dict[str, defaultdict[str, float]]" = {
+                k: defaultdict(float) for k in ("bc", "bq", "sc", "sq", "bc_x", "bq_x", "sc_x", "sq_x")}
+            untagged: set[str] = set()
+            untagged_reducing: set[str] = set()   # untagged sell: a Day/Swing bracket or OCO child-leg exit, never an owner add
+            active_fill: set[str] = set()
+            for sym, side, q, px, tier in fills:
+                buy = side in ("buy", "buy_to_cover")
+                cash_key, qty_key = ("bc", "bq") if buy else ("sc", "sq")
+                agg[cash_key][sym] += q * px
+                agg[qty_key][sym] += q
+                if tier not in ("qhm", "forever6"):
+                    agg[cash_key + "_x"][sym] += q * px
+                    agg[qty_key + "_x"][sym] += q
+                if tier is None:
+                    untagged.add(sym)
+                    if not buy:
+                        untagged_reducing.add(sym)
+                elif tier in ("daytrade", "intraday"):
+                    active_fill.add(sym)
+
+            def _fill_pnl(sym: str, suffix: str) -> "float | None":
+                bc, bq = agg["bc" + suffix][sym], agg["bq" + suffix][sym]
+                sc, sq = agg["sc" + suffix][sym], agg["sq" + suffix][sym]
+                if not (bq or sq):
+                    return 0.0
+                pc = prior_close.get(sym)
+                if pc is not None:
+                    return (pc * bq - bc) + (sc - pc * sq)
+                if abs(bq - sq) < 1e-9:  # PROV:eps-zero-int-qty (float exact-zero on integer share sums)
+                    return sc - bc
+                return None   # a held-over lot fully closed today, prior close unknown -> degrade
+
+            def _leg(sym: str, qty: float, suffix: str) -> "float | None":
+                fp = _fill_pnl(sym, suffix)
+                if fp is None:
+                    return None
+                if not qty:
+                    return fp
+                pc = prior_close.get(sym)
+                if pc is None:
+                    return None
+                return (current[sym] - pc) * qty + fp
+
+            symbols = set(broker_qty) | set(agg["bq"]) | set(agg["sq"]) | unproven
+            total = 0.0
+            exact = True
+            for sym in sorted(symbols):
+                qty_all = broker_qty.get(sym, 0.0)
+                row = proven.get(sym)
+                state_qty = (qhm_state or {}).get(sym)
+                if row is not None:
+                    qhm, f6, negative = row
+                    protected = qhm + f6
+                    # L1: unproven when it holds protected shares and had an untagged fill today or a negative claim,
+                    # or when QHM's own count disagrees with the ledger's QHM claim (an untagged exit the replay booked
+                    # to the wrong tier — the board's GOOGL input).
+                    state_disagrees = qhm_state is not None and abs((state_qty or 0) - qhm) > 1e-9  # PROV:eps-zero-int-qty
+                    if not (state_disagrees or (protected > 0.0 and (sym in untagged or negative))):
+                        pnl = _leg(sym, qty_all - protected, "_x")
+                        if pnl is None:
+                            return 0.0, False
+                        total += pnl
+                        continue
+                    f6_claim = f6 > 0.0
+                elif state_qty is None and sym not in unproven:
+                    # No ledger row and no QHM count: no protected shares to remove — count every share.
+                    pnl = _leg(sym, qty_all, "")
+                    if pnl is None:
+                        return 0.0, False
+                    total += pnl
+                    continue
+                else:
+                    f6_claim = False
+                # Unproven symbol (F2).
+                exact = False
+                count_all = _leg(sym, qty_all, "")
+                if count_all is None:
+                    return 0.0, False
+                # Exclude only when every share is QHM's by its own count and nothing today could be a Day/Swing fill: no
+                # tagged Day/Swing fill and no untagged SELL (bracket/OCO child legs carry no tier tag, so a leftover lot's
+                # stop-out arrives untagged; the owner's manual adds are untagged BUYS and still allow exclusion).
+                if (qhm_state is not None and state_qty is not None and not f6_claim
+                        and abs(qty_all - state_qty) < 1e-9  # PROV:eps-zero-int-qty
+                        and sym not in active_fill and sym not in untagged_reducing):
+                    used, rule = 0.0, "excluded (all shares QHM, no Day/Swing fill today)"
+                    state_based = None
+                elif qhm_state is None or state_qty is None or f6_claim:
+                    used, rule, state_based = count_all, "count-all", None
+                else:
+                    state_based = _leg(sym, qty_all - state_qty, "_x")
+                    if state_based is None:
+                        # Not priceable (no prior close: the broker holds none of a stale QHM count) -> count-all, so a
+                        # stale record cannot keep every check degraded all day; a same-day QHM-tagged gain may not offset
+                        # a Day/Swing loss, so the fills without QHM/F6 tags are taken when they are more negative.
+                        fills_x = _fill_pnl(sym, "_x")
+                        used = count_all if fills_x is None else min(count_all, fills_x)
+                        rule = "count-all (state-based not priceable)"
+                    else:
+                        used = min(state_based, count_all)
+                        rule = "more negative of state-based and count-all"
+                total += used
+                self._kill_attr["unproven"][sym] = {
+                    "state_based": None if state_based is None else round(state_based, 2),
+                    "count_all": round(count_all, 2), "used": round(used, 2), "rule": rule}
+            if not math.isfinite(total):
+                return 0.0, False
+            self._kill_attr["exact"] = exact
+            _log_kill_attr(self._kill_attr)
+            return round(total, 2), True
+        except Exception as e:  # RC-3
+            logger.warning("kill-switch tiered intraday P&L failed (%s) — degrading [change=kill-attr-1023]", e)
+            return 0.0, False
+
     def _buy_and_hold_intraday_pl(self) -> float:
         """QHM UNION Forever-6 buy-and-hold positions' TODAY-ONLY unrealized P&L (Alpaca
         `unrealized_intraday_pl`, measured from prior close — the SAME start-of-day datum as
@@ -899,6 +1143,16 @@ class RiskManager:
             positions = resp.json()
             if not isinstance(positions, list):
                 return 0.0
+            # KILL-ATTR-1023 T2: with the guard off, remove only the ledger-proven QHM + F6 shares of a symbol (the
+            # whole position only when the ledger cannot prove it), so this fallback cannot hide a co-held Day lot.
+            proven_rows: dict = {}
+            if protected_qty is None:
+                try:
+                    _bq = {str(p.get("symbol") or "").upper(): float(p.get("qty")) for p in positions}
+                    _attr = self._ledger_attribution(_bq)
+                    proven_rows = _attr[0] if _attr is not None else {}
+                except (TypeError, ValueError):
+                    proven_rows = {}
             total = 0.0
             n_excl = 0
             for p in positions:
@@ -906,7 +1160,10 @@ class RiskManager:
                 if symbol in excluded:
                     n_excl += 1
                     try:
-                        if protected_qty is None:
+                        if protected_qty is None and symbol in proven_rows:
+                            _qhm, _f6, _neg = proven_rows[symbol]
+                            total += (float(p.get("current_price")) - float(p.get("lastday_price"))) * (_qhm + _f6)
+                        elif protected_qty is None:
                             total += float(p.get("unrealized_intraday_pl", 0.0) or 0.0)
                         else:
                             # Account equity contains today's mark-to-market on
@@ -981,8 +1238,7 @@ class RiskManager:
                     return 0.0, False
                 excluded = set(protected_qty)
             else:
-                from execution.quarterly_hold_manager import get_quarterly_hold_symbols
-                excluded = set(get_quarterly_hold_symbols() or [])
+                excluded = set()   # flag off: _intraday_trading_pnl_tiered attributes per symbol (KILL-ATTR-1023)
             api_key = os.getenv("ALPACA_API_KEY", "")
             secret = os.getenv("ALPACA_SECRET_KEY", "")
             if not api_key or not secret:
@@ -1000,6 +1256,10 @@ class RiskManager:
             positions = resp.json()
             if not isinstance(positions, list):
                 return 0.0, False
+            if not exact_protected:
+                # KILL-ATTR-1023: with the ownership guard off, measure Day + Swing by exact ledger shares per symbol
+                # instead of dropping every QHM-held symbol (which hid an open Day lot in a QHM name).
+                return self._intraday_trading_pnl_tiered(fills, positions)
             # OPEN leg: today's move on current ACTIVE holdings (Alpaca prior-close-relative field,
             # signed for shorts), after subtracting exact protected quantity; also capture prior close
             # per still-open symbol for the fill terms. One pass over positions.
@@ -1155,7 +1415,16 @@ class RiskManager:
         # from prior close) instead of `equity − last_equity`, which false-tripped overnight on a stale
         # last_equity carrying the LLY/GEV buy-and-hold drawdown. This measure has NO last_equity
         # dependence, so it is valid 24/7.
+        self._kill_attr = {}
         _pos_pnl, _pos_ok = self._intraday_trading_pnl()
+        _enforced = bool(getattr(config, "OWNERSHIP_GUARD_ENFORCE", False))
+        # KILL-ATTR-1023 T1: "exact" = Day + Swing measured by proven per-tier shares (enforced path, or the flag-off
+        # tiered path with no unproven symbol). Only an exact measure feeds the dashboard gauge and the typed verdict.
+        _attr_exact = _pos_ok and (_enforced or self._kill_attr.get("exact") is True)
+        if not _pos_ok and self._kill_attr.get("ledger_unreadable"):
+            # F3: the ownership ledger itself is unreadable -> entries pause for this check (run_cycle and run_day_tier
+            # turn this into an entries-only block; exits keep running; nothing latches).
+            raise RuntimeError("kill-switch ownership ledger unreadable [change=kill-attr-1023]")
         if _pos_ok:
             intraday_equity_pnl = _pos_pnl
         else:
@@ -1204,14 +1473,12 @@ class RiskManager:
                 trading_pnl=intraday_equity_pnl,
                 daily_start_value=self.daily_start_value,
                 loss_pct=loss_pct,
-                attribution_exact=_pos_ok,
+                attribution_exact=_attr_exact,
             )
         _publish_kill_snapshot(
             trading_pnl=intraday_equity_pnl,
             daily_start_value=self.daily_start_value,
-            attribution_exact=(
-                _pos_ok and bool(getattr(config, "OWNERSHIP_GUARD_ENFORCE", False))
-            ),
+            attribution_exact=_attr_exact,
             killed=self.killed,
         )
         return self.killed
