@@ -8,7 +8,23 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-23, OpenAI Codex signed) — held OCO stop display correction live (#743)
+## ⏩ LATEST (2026-10-24, Claude signed) — KILL-ATTR-1023 live (#753): 7% kill = Day + Swing only, by exact shares
+
+- Deployed at `23519e2` (DEPLOY_OK, services active, dashboard 200). First live log line `kill-switch attribution
+  exact=False unproven={'GE': ... 'excluded ...'} [change=kill-attr-1023]` (GE: the owner's untagged manual buy today).
+- Design + review trail: `logs/design_records/kill_switch_tier_attribution_2026-10-23.md`; `logs/tb_audit_log.md`.
+- Owner decisions 2026-10-23: TRACK-A-EDGE-1023 (Track A size cut) NOT adopted — keep Track A's size, fix its logic first
+  (RIDE: no follow-through, ~0.3R best move, 2R target never reached; FADE: stops inside 5-minute noise), re-evaluate in
+  about a month. Stop-beyond-level replayed and rejected 5/5. Records: `logs/design_records/track_a_edge_sizing_2026-10-23.md`.
+- Codex owns QHM-ADD-1023 (owner manual QHM buys adopted, stop resized) — the owner must re-type its approval.
+
+**⏩ EXACT NEXT ACTION (Claude):** (1) post-live audit of #753 after Monday 10/26's session (gauge should show a number
+on a day without a manual QHM trade); (2) Track A logic designs through the gate (no size cut); (3) QHM design (check
+average-down room before entry, 25% cap, conviction over-weight with others held under); (4) Swing owner design
+(top 50 / top-10 priority, 10 slots, breakout must be recovered); (5) parked AUDIT-FULLREAD-1020 (nightly audit reads
+every changed file in full) — uncommitted in the day-tier-close-card worktree.
+
+## ⏩ PRIOR (2026-10-23, OpenAI Codex signed) — held OCO stop display correction live (#743)
 
 - Live Alpaca proof showed the AMZN Day short had a six-share buy stop at `$250.25`, but Alpaca reports the
   inactive stop child of that live OCO pair as `held`; the dashboard previously ignored that lifecycle state and
