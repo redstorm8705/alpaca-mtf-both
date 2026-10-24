@@ -1349,12 +1349,15 @@ def flatten_position(symbol: str, qty: int, position_side: str, *, entry_price: 
     if qty < 1:
         return True
     try:
-        # Read the live position ONCE — for the flatten-time mark AND the net-side/qty guard.
-        pos = None
+        # Read the live position ONCE — for the flatten-time mark AND the net-side/qty guard. None = a confirmed 404
+        # (flat); a RAISE is an unreadable position, never "flat" (SAFE-1024: a read error must not mark an open lot
+        # closed — the caller keeps it open and retries).
         try:
             pos = broker.get_open_position(symbol)
-        except Exception:
-            pos = None
+        except Exception as _re:  # noqa: BLE001
+            _page(f"[{symbol}] day-tier flatten: position UNREADABLE ({_re!r}) — not closed this tick; "
+                  f"{qty} sh may be OPEN, retrying. ({reason}) [change=safe-1024]")
+            return False
         if pos is None:
             return True  # already flat — nothing to close
         # NET-SIDE / QTY GUARD (masked-loss D on the FLATTEN path): partial_close infers the close
@@ -1550,8 +1553,9 @@ def _force_flat_one(tgt: dict, reason: str, confirm_cancel: bool,
         return True, False
     try:
         pos = broker.get_open_position(sym)
-    except Exception:
-        pos = None
+    except Exception as _re:  # noqa: BLE001 — unreadable is unknown, never "flat" (SAFE-1024): retry
+        logger.warning("[%s] day-tier force-flat: position unreadable (%s) — retrying [change=safe-1024]", sym, _re)
+        return False, False
     if pos is None:
         return True, False
     held = abs(int(float(getattr(pos, "qty", 0) or 0)))
@@ -2955,8 +2959,11 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             broker.cancel_open_orders_for_symbol(symbol, only_tier="daytrade")  # stop further fills
         except Exception as _ce:  # noqa: BLE001
             logger.warning("[%s] day-tier entry remainder cancel raised: %s", symbol, _ce)
-        if not _await_entry_terminal(entry_order_id):
+        _entry_unterminal = not _await_entry_terminal(entry_order_id)
+        if _entry_unterminal:
             # The order is still live (pending cancel): shares can fill after the stop is sized to today's count.
+            # SAFE-1024 item 5: the record is marked; each tick's reconcile re-reads this ENTRY ORDER and closes any
+            # shares it fills beyond the recorded quantity (_heal_late_entry_fills).
             _page(f"[{symbol}] day-tier entry order {entry_order_id} not confirmed terminal after the cancel — the "
                   f"stop covers the shares filled so far; a late fill could be UNPROTECTED. Manual check.")
         fq, fp = _final_fill(entry_order_id)
@@ -2969,6 +2976,9 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if not got_fill and fq < 1:
             # Nothing filled (and the cancel caught any late fill) → clean abort, no position.
             state[key]["state"] = "unfilled_cancelled"
+            if _entry_unterminal:
+                # Still pending-cancel with nothing filled: a late fill would be a whole unrecorded lot (SAFE-1024).
+                state[key].update(entry_unterminal=True, unterminal_recorded_qty=0)
             _save_state(state)
             logger.warning("[%s] day-tier entry never filled — cancelled resting entry", symbol)
             return False
@@ -3012,6 +3022,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                                data_source="daytrade", tier="daytrade", direction=direction,
                                trade_id=entry_coid, stop=stop_px)
         state[key].update(state="filled", fill_qty=filled_qty_i, fill_px=fill_px)
+        if _entry_unterminal:
+            state[key].update(entry_unterminal=True, unterminal_recorded_qty=filled_qty_i)
         _save_state(state)
 
         if cohold and bracket_tp is not None:
@@ -4195,6 +4207,138 @@ def _closed_in_log(trade_id: str) -> bool:
         return False
 
 
+def _late_close_adopt(symbol: str, close_side: str, qty: int, since: datetime) -> "tuple[bool, str]":
+    """A late-share close was started (marker written before submit) but its order id was never recorded (a crash
+    between submit and save). Find that order: a DT-tagged order on `close_side` for `qty` created after `since`, open or
+    closed. (readable, order_id or ""). Unreadable -> (False, "") — the caller sends nothing."""
+    from execution import broker
+    from execution.ownership_guard import tier_of_coid
+    closed = _closed_orders_since(symbol, since)
+    opened = broker.get_open_orders(symbol)
+    if closed is None or opened is None:
+        return False, ""
+    for o in list(closed) + [o for o in opened
+                             if getattr(o, "created_at", None) is not None and o.created_at > since]:
+        try:
+            if (tier_of_coid(getattr(o, "client_order_id", None)) == "daytrade"
+                    and _enum_text(getattr(o, "side", None)) == close_side
+                    and int(float(getattr(o, "qty", 0) or 0)) == qty):
+                return True, str(getattr(o, "id", "") or "")
+        except (TypeError, ValueError):
+            continue
+    return True, ""
+
+
+def _heal_late_entry_fills(allow_trade: bool) -> dict:
+    """SAFE-1024 item 5 (external QA D2/D3, board Harris + Taleb, Gro, GAI — option A). An entry order still pending
+    cancel when its stop was sized can fill more shares afterwards; nothing protected or booked them. For each state
+    record marked `entry_unterminal`, re-read the ENTRY ORDER (never the broker net — it can hold Swing/QHM shares):
+    unreadable -> page once, no action; not terminal -> wait; terminal -> late = its filled_qty - the recorded qty;
+    late <= 0 -> clear the mark. Late shares were never approved by sizing (that remainder was cancelled), so during the
+    session they are market-closed for the Day tier — min(late, live same-side net) — with the close order recorded
+    before polling its fill; a crash after submit is recovered by finding that order, never by a second close. After
+    hours: page (an entry is never placed after 3:40, so the order is terminal long before the close). The closed late
+    shares are written to trade_events.jsonl with their Alpaca fill price and P&L (never-mask-a-loss). Never raises."""
+    from execution import broker
+    import trade_logger
+    out = {"checked": 0, "closed": 0, "pending": 0}
+    state = _load_state()
+    for key, rec in list(state.items()):
+        if not (key.startswith("entry::") and isinstance(rec, dict) and rec.get("entry_unterminal")):
+            continue
+        out["checked"] += 1
+        sym, side = str(rec.get("symbol") or ""), str(rec.get("side") or "long")
+        close_side = "sell" if side == "long" else "buy"
+        tag = "[change=safe-1024]"
+
+        def _save(_k=key, **fields):
+            fresh = _load_state()
+            if isinstance(fresh.get(_k), dict):
+                fresh[_k].update(fields)
+                _save_state(fresh)
+
+        try:
+            entry = broker.get_order(str(rec.get("order_id") or ""))
+            if entry is None:
+                _page_once_today(sym, "late_fill_unreadable", f"[{sym}] day-tier entry order unreadable while checking "
+                                 f"for a late fill — no action; shares above the stop may be UNPROTECTED. {tag}")
+                continue
+            if _enum_text(getattr(entry, "status", None)) not in (
+                    "filled", "canceled", "cancelled", "expired", "rejected", "done_for_day"):
+                out["pending"] += 1
+                continue
+            filled = int(float(getattr(entry, "filled_qty", 0) or 0))
+            fill_px = float(getattr(entry, "filled_avg_price", 0) or 0)
+            late = filled - int(rec.get("unterminal_recorded_qty") or 0) - int(rec.get("late_closed_qty") or 0)
+            if late < 1 and not rec.get("late_close_order_id") and not rec.get("late_close_started"):
+                _save(entry_unterminal=False)
+                continue
+            oid = str(rec.get("late_close_order_id") or "")
+            if not oid and rec.get("late_close_started"):
+                started = datetime.fromisoformat(str(rec["late_close_started"]))
+                readable, oid = _late_close_adopt(sym, close_side, int(rec.get("late_close_qty") or 0), started)
+                if not readable:
+                    _page_once_today(sym, "late_fill_adopt", f"[{sym}] day-tier late-share close may have been sent "
+                                     f"but its order cannot be read — no second close; manual check. {tag}")
+                    continue
+                _save(late_close_order_id=oid, late_close_started="" if not oid else rec["late_close_started"])
+                if not oid:
+                    continue   # nothing was sent: the next tick starts a fresh close
+            if oid:
+                order = broker.get_order(oid)
+                if order is None:
+                    continue
+                cq = int(float(getattr(order, "filled_qty", 0) or 0))
+                status = _enum_text(getattr(order, "status", None))
+                if status not in ("filled", "canceled", "cancelled", "expired", "rejected", "done_for_day"):
+                    continue   # the close is still working
+                cpx = float(getattr(order, "filled_avg_price", 0) or 0)
+                if cq >= 1:
+                    pnl = round((cpx - fill_px) * cq if side == "long" else (fill_px - cpx) * cq, 2)
+                    trade_logger.log_event("late_fill_close", symbol=sym, price=cpx, size=cq,
+                                           data_source="daytrade", tier="daytrade", direction=side,
+                                           trade_id=str(rec.get("coid") or ""), entry_price=fill_px,
+                                           realized_pnl=pnl, entry_order_id=str(rec.get("order_id") or ""),
+                                           close_order_id=oid)
+                    logger.warning("[%s] day-tier late-fill: closed %d late share(s) @ %.4f (entry %.4f, P&L %.2f) %s",
+                                   sym, cq, cpx, fill_px, pnl, tag)
+                    out["closed"] += cq
+                _save(late_closed_qty=int(rec.get("late_closed_qty") or 0) + cq, late_close_order_id="",
+                      late_close_started="", late_close_qty=0)
+                continue
+            if not allow_trade:
+                _page_once_today(sym, "late_fill_ah", f"[{sym}] day-tier entry filled {late} share(s) above its stop "
+                                 f"after the market closed — UNPROTECTED; close them manually. {tag}")
+                continue
+            try:
+                pos = broker.get_open_position(sym)
+            except Exception as e:  # noqa: BLE001 — unknown, retry next tick
+                logger.warning("[%s] late-fill heal: position unreadable (%s) — retry %s", sym, e, tag)
+                continue
+            net = abs(int(float(getattr(pos, "qty", 0) or 0))) if pos is not None else 0
+            if pos is None or (getattr(pos, "side", None) == "long") != (side == "long") or net < 1:
+                _page_once_today(sym, "late_fill_net", f"[{sym}] day-tier entry filled {late} late share(s) but the "
+                                 f"live position no longer holds them on our side — nothing closed; manual check. {tag}")
+                _save(entry_unterminal=False)
+                continue
+            qty = min(late, net)
+            _save(late_close_started=datetime.now(timezone.utc).isoformat(), late_close_qty=qty)
+            order = broker.partial_close_position(sym, qty, tier="daytrade", _return_order=True, position_side=side)
+            new_oid = str(getattr(order, "id", "") or "")
+            if not new_oid:
+                # The submit may still have reached Alpaca (a failure after the send): the start marker stays, so the
+                # next tick first looks for that order (_late_close_adopt) and only resends when none exists.
+                _page_once_today(sym, "late_fill_close_failed", f"[{sym}] day-tier late-fill close of {qty} share(s) "
+                                 f"was not confirmed accepted — they may be UNPROTECTED; retrying next tick. {tag}")
+                continue
+            _save(late_close_order_id=new_oid)
+            logger.warning("[%s] day-tier late-fill: entry %s filled %d share(s) above the recorded lot — closing %d "
+                           "(order %s) %s", sym, rec.get("order_id"), late, qty, new_oid, tag)
+        except Exception as e:  # noqa: BLE001 — one record never blocks the others
+            logger.error("[%s] late-fill heal raised: %s", sym, e)
+    return out
+
+
 def reconcile_open_state(allow_flatten: bool = True) -> dict:
     """Per-tick reconcile — called at the TOP of each runner tick, BEFORE entries. The runner is a
     2-3 min cron, so every tick is a fresh process; this is the board-named go-live gate that ensures
@@ -4215,8 +4359,12 @@ def reconcile_open_state(allow_flatten: bool = True) -> dict:
     if not _enabled():
         return {"enabled": False}
     from execution import broker
-    summary = {"checked": 0, "flattened": 0, "protected": 0, "unreadable": 0, "cleared": 0}
+    summary: dict = {"checked": 0, "flattened": 0, "protected": 0, "unreadable": 0, "cleared": 0}
     _clear_resolved_markers()   # HALT-1019: an exit booked since the last tick lifts its block now
+    try:
+        summary["late_fill"] = _heal_late_entry_fills(allow_trade=allow_flatten)
+    except Exception as e:  # noqa: BLE001 — the heal never blocks the reconcile below
+        logger.error("day-tier late-fill heal raised: %s", e)
     try:
         targets = _flatten_targets()  # log ∪ state(filled/protected/fill_unverified)
         state = _load_state()

@@ -63,7 +63,13 @@ def _fill_et_date(ts_str: str) -> str:
 def _fetch_alpaca_fills_for_date(date_str: str) -> list:
     """
     Fetch all FILL activities from Alpaca for a given ET calendar date.
-    Paginates with after_id (not page_token — confirmed correct Apr 2026 audit).
+    Paginates with page_token = the last activity id. SAFE-1024 item 6:
+    Alpaca IGNORES after_id and returns page 1 again (verified live
+    2026-10-14 and 2026-10-24), so a 100+ fill day looped forever inside
+    write_eod_summary on the trading thread. A page that does not advance
+    now raises (the caller falls back and pages, as for any fetch
+    failure); a boundary row returned twice is counted once. Same paging
+    as execution/fill_notifications.py.
     Retries 3x with exponential backoff on network error.
     Client-side filters to target ET date.
     """
@@ -81,19 +87,18 @@ def _fetch_alpaca_fills_for_date(date_str: str) -> list:
     }
 
     all_fills: list = []
-    after_id: "str | None" = None
+    page_token: "str | None" = None
 
     while True:
-        # Always anchor to ET day window; after_id added for pagination
-        # (does not conflict)
+        # Always anchor to the ET day window; page_token advances the page.
         params = {
             "direction": "asc",
             "page_size": "100",
             "after":     et_start.isoformat(),
             "until":     et_end.isoformat(),
         }
-        if after_id:
-            params["after_id"] = after_id
+        if page_token:
+            params["page_token"] = page_token
 
         url      = (
             f"{_ALPACA_PAPER_BASE}/v2/account/activities/FILL?"
@@ -127,11 +132,20 @@ def _fetch_alpaca_fills_for_date(date_str: str) -> list:
         if len(page_fills) < 100:
             break  # last page
 
-        after_id = page_fills[-1]["id"]
+        next_token = str(page_fills[-1].get("id") or "")
+        if not next_token or next_token == page_token:
+            raise RuntimeError(
+                "Alpaca FILL pagination did not advance [change=safe-1024]"
+            )
+        page_token = next_token
 
-    # Client-side filter: keep only fills on the target ET date
+    # A boundary row returned on two pages is counted once; then keep
+    # only fills on the target ET date.
+    unique: dict = {}
+    for f in all_fills:
+        unique[str(f.get("id") or "") or f"anon:{len(unique)}"] = f
     return [
-        f for f in all_fills
+        f for f in unique.values()
         if _fill_et_date(f.get("transaction_time", "")) == date_str
     ]
 

@@ -337,8 +337,11 @@ def _submit_new_stop(symbol: str, trade: dict, tracker, px: float, qty: int, dir
     try:
         pos = get_open_position(symbol)
     except Exception as _pe:
-        pos = None
-        logger.warning(f"[{symbol}] stop sizing: position read failed ({_pe}) — using tracker qty {qty}")
+        # SAFE-1024: an unreadable position cannot cap the stop to the live same-side shares, so no stop is sent
+        # (an uncapped tracker qty could exceed the shares held); the caller marks _stop_sync_pending and retries.
+        logger.warning(f"[{symbol}] stop sizing: position read failed ({_pe}) — no stop sent, retry "
+                       f"[change=safe-1024]")
+        return False
     else:
         if pos is None:
             return True                   # nothing left to protect — the exit path owns it
@@ -2030,13 +2033,18 @@ def check_exits(
                     )
                 else:
                     _defer_pos: object | None = None
+                    _defer_read_ok = False
                     try:
                         _defer_pos = get_open_position(symbol)
+                        _defer_read_ok = True
                     except Exception as _dpe:
+                        # SAFE-1024: an unreadable position is unknown, not "closed" — never book an external close
+                        # (which drops a live trade from the tracker) on a read error; the defer retries next cycle.
                         logger.warning(
-                            f"[{symbol}] Defer GTC pos check failed: {_dpe}"
+                            f"[{symbol}] Defer GTC pos check failed: {_dpe} — not treated as closed "
+                            f"[change=safe-1024]"
                         )
-                    if _defer_pos is None and symbol in tracker.open_trades:
+                    if _defer_read_ok and _defer_pos is None and symbol in tracker.open_trades:
                         logger.warning(
                             f"[{symbol}] GTC stop executed during signal defer "
                             f"(cycle {_sig_defer}) — recording external close."
