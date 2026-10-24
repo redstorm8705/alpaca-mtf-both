@@ -8,7 +8,20 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-23, OpenAI Codex signed) — held OCO stop display correction live (#743)
+## ⏩ LATEST (2026-10-23, Claude signed) — TRACK-A-EDGE-1023 design aligned, awaiting owner approval
+
+- Weekly Day audit: Track A (GEX wall trades) is the Day tier's loss source over its whole record; Track B is positive.
+- Board (Thorp, Taleb, López de Prado seats), Gro and GAI aligned: size Track A by Kelly on its own walk-forward
+  record (minimum entry size while the record is not positive beyond one standard error), shrink-only, no trade cut.
+  The stop-beyond-level change was replayed and rejected by all five.
+- Design, replay and required questions: `logs/design_records/track_a_edge_sizing_2026-10-23.md`;
+  replay code and rows in `logs/replays/track_a_edge_stop_level_*_2026-10-23.*`. No code written.
+
+**⏩ EXACT NEXT ACTION (Claude):** on owner approval of TRACK-A-EDGE-1023, implement it in `_wired_entry`
+(execution/day_trade_manager.py) through the full gate. The nightly-audit full-read change (AUDIT-FULLREAD-1020) is
+still uncommitted in the day-tier-close-card worktree.
+
+## ⏩ PRIOR (2026-10-23, OpenAI Codex signed) — held OCO stop display correction live (#743)
 
 - Live Alpaca proof showed the AMZN Day short had a six-share buy stop at `$250.25`, but Alpaca reports the
   inactive stop child of that live OCO pair as `held`; the dashboard previously ignored that lifecycle state and
