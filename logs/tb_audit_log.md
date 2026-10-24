@@ -11559,3 +11559,8 @@ are live. A fix is proposed as a separate session (dash-stops).
 - 2026-10-23 DASH-HELD-1023 / PR #743 (OpenAI Codex): deployed `6ae9110`; live Alpaca proof found the AMZN Day short's six-share `$250.25` buy stop nested as `held` under a tagged `new` OCO parent while the dashboard falsely showed `MISSING`. The read-only parser now counts held children only under an explicitly active OCO parent; bracket-entry, unknown-parent, and canceling-parent regressions fail closed. Post-deploy served HTML shows `Day: $250.25 (6 sh)` and no AMZN missing label. All three OCI services are active; no trading path changed.
 - 2026-10-23 (Claude): KILL-ATTR-1023 implemented in execution/risk_manager.py (flag-off per-symbol attribution); 229 tests pass; cold-2nd PASS after 3 revisions (stale flat symbol, child-leg stop exit, QHM-gain offset); adversarial PASS with corrected claims; preship Gro+GAI APPROVE after 2 counter-prompts (tuple contract, json import). Known limit: exclusion trusts QHM's own share count; double-stale ledger+state on same-day offsetting QH/DT trades.
 - 2026-10-24 (Claude): KILL-ATTR-1023 merged #753 (23519e2), deployed DEPLOY_OK, live log line confirmed.
+- 2026-10-24 (Claude) SAFE-1024: external QA (Muse) D1/E1, the claims-check find (signal-exit defer) and D2/D3 late
+  entry fill. A raised position read is unknown (retry) in Day flatten_position/_force_flat_one and exit_logic
+  _submit_new_stop + GTC defer; the late-fill heal closes the entry order's excess shares. Board Harris + Taleb, Gro,
+  GAI aligned; preship pass; cold-2nd x3 + adversarial PASS; 15 tests. Waiting on the owner's sign-off.
+  TA-FOLLOW-1024 not shipped (owner version -$99.37 -> -$92.24 walk-forward). #755 merged. #756 QHM -> Codex.
