@@ -69,7 +69,9 @@ _RETRACT = re.compile(r"(?im)\b(never\s*mind|scratch\s+that|on\s+second\s+though
                       r"|once))\b"
                       r"|^\W*no\W*$")
 _COURTESY_WORDS = {"thanks", "thank", "you", "ty", "please", "great", "good", "nice", "perfect", "awesome", "cheers",
-                   "ship", "it", "go", "ahead", "work", "job", "well", "done", "excellent", "approved", "ok", "okay", "yes"}
+                   "ship", "it", "go", "ahead", "work", "job", "well", "done", "excellent", "approved", "ok", "okay", "yes",
+                   # go-ahead follow-ups are not a hedge ('APPROVE QHM ADD 1023. Lets continue', owner 2026-10-24)
+                   "lets", "let", "s", "us", "continue", "proceed", "keep", "going", "move", "on", "carry", "next"}
 _SEP = r"[\s \-‐-―_.,:;/]+"
 
 
