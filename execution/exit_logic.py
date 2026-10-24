@@ -347,9 +347,17 @@ def _submit_new_stop(symbol: str, trade: dict, tracker, px: float, qty: int, dir
             return True                   # nothing left to protect — the exit path owns it
         try:
             _pq = float(pos.qty)
-            _pside = str(getattr(getattr(pos, "side", ""), "value", getattr(pos, "side", ""))).lower()
+            _pside = str(getattr(getattr(pos, "side", ""), "value", getattr(pos, "side", ""))).lower().split(".")[-1]
+            if _pside not in ("long", "short"):
+                _pside = ""
             if (_pside or ("short" if _pq < 0 else "long")) == direction:
                 qty = min(qty, int(abs(_pq)))
+            else:
+                # AUDIT-1025: the live net is on the OTHER side, so this trade's shares are not readable from it; a
+                # stop sized to the trade would trade the wrong way. Nothing is sent; the caller retries.
+                logger.warning(f"[{symbol}] stop sizing: live net is {_pside or 'opposite'} for a {direction} "
+                               f"trade — no stop sent, retry [change=audit-1025]")
+                return False
         except (TypeError, ValueError):
             pass
     if qty < 1:
@@ -1105,7 +1113,16 @@ def check_partial_exits(tracker: "PortfolioTracker", kelly: "KellySizer", risk: 
                     elif _rp == "none":
                         try:
                             _pos_q = get_open_position(symbol)
-                            if _pos_q is not None and int(float(_pos_q.qty)) < _new_rem:
+                            # AUDIT-1025 (external QA EX-3): clamp only to a SAME-side net — an opposite net (a
+                            # co-held tier outweighing this trade) is not this trade's share count; the stop path
+                            # below refuses it and retries.
+                            _pq_side = str(getattr(getattr(_pos_q, "side", ""), "value",
+                                                   getattr(_pos_q, "side", ""))).lower().split(".")[-1] \
+                                if _pos_q is not None else ""
+                            if _pq_side not in ("long", "short"):
+                                _pq_side = ""
+                            if (_pos_q is not None and (_pq_side or ("short" if float(_pos_q.qty) < 0 else "long"))
+                                    == direction and abs(int(float(_pos_q.qty))) < _new_rem):
                                 logger.error("[%s] qty mismatch: bot=%d Alpaca=%s — clamping to Alpaca value",
                                              symbol, _new_rem, _pos_q.qty)
                                 _new_rem = abs(int(float(_pos_q.qty)))

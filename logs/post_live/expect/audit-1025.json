@@ -1,0 +1,20 @@
+{
+  "change": "audit-1025",
+  "tier": 1,
+  "paths": [
+    "execution/exit_logic.py",
+    "execution/orphan_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change=audit-1025"
+    }
+  ],
+  "baseline_exempt_reason": "The tagged lines fire only on a skipped orphan stop, an opposite-side net, a fill with no average price or a held/unknown orphan stop outcome, which may not occur in the first session; normal paths are covered by tests/test_audit_1025.py and the exit-logic suite.",
+  "expected_rate": "rare: only on mismatch or missing-price paths",
+  "window_sessions": 1,
+  "window_reason": "Error/mismatch-path change; the first full session proves the normal reconcile and stop paths are unchanged.",
+  "reversal": "a position left without a stop it had before, a QHM or other-tier stop cancelled by orphan reconcile, or P&L booked at $0 or entry price without the unverified flag",
+  "verification": "tests/test_audit_1025.py"
+}

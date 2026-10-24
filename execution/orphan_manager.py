@@ -35,6 +35,8 @@ from alerts import alert_gtc_failed, send_slack
 from data.fetcher import fetch_bars
 from data.premarket import calculate_atr
 from execution.broker import (
+    PROTECTION_ALREADY_HELD,
+    PROTECTION_UNKNOWN,
     cancel_order,
     get_open_position,
     get_open_orders,
@@ -409,10 +411,26 @@ def cancel_and_reconcile_gtc_stops(
 
         if "filled" in status:
             # GTC stop triggered overnight — close the tracker record
-            fill_price = float(
-                order.filled_avg_price or trade.get("entry_price", 0)
-            )
-            if not order.filled_avg_price:
+            _gtc_fill = float(order.filled_avg_price or 0)
+            if _gtc_fill <= 0:
+                # AUDIT-1025 (external QA OR-4): the order carries no average
+                # price — recover the real close fill from Alpaca's fills
+                # before any fallback (fills-only P&L).
+                try:
+                    from execution.fill_helpers import (
+                        fetch_actual_fill_price_or_none as _fill_or_none,
+                    )
+                    _gtc_fill = float(_fill_or_none(symbol, trade) or 0)
+                except Exception as _gf_err:
+                    logger.warning(
+                        f"[{symbol}] GTC fill recovery failed: {_gf_err}"
+                    )
+                    _gtc_fill = 0.0
+            if _gtc_fill <= 0:
+                # Still unknown: flag it so Kelly/TQI never learn from it.
+                trade["_fill_unverified"] = True
+            fill_price = float(_gtc_fill or trade.get("entry_price", 0))
+            if _gtc_fill <= 0:
                 logger.critical(
                     f"[{symbol}] GTC overnight fill price UNVERIFIED — "
                     f"no filled_avg_price from Alpaca. Using entry_price "
@@ -661,6 +679,16 @@ def cancel_and_reconcile_gtc_stops(
             _pstatus = str(_pord.status).lower()
             if "filled" in _pstatus:
                 _fill_px  = float(_pord.filled_avg_price or 0)
+                if _fill_px <= 0:
+                    # AUDIT-1025 (external QA OR-3): no Alpaca fill price yet —
+                    # never bank P&L at $0 (fills-only P&L). Keep the key; the
+                    # next pass books it once the price settles.
+                    logger.critical(
+                        f"[{_sym}] GTC partial {_tk} filled but has no average "
+                        f"fill price yet — not booked, retrying "
+                        f"[change=audit-1025]"
+                    )
+                    continue
                 # Explicit None check — preserves 0 as "no fills yet".
                 # Falsy `or` would short-circuit to order qty on zero-fill,
                 # adopting the full order size as a phantom position.
@@ -1517,9 +1545,39 @@ def reconcile_positions(
                     f"adoption skipped (API failure)."
                 )
                 raise RuntimeError("get_open_orders API failure")
+            from execution.ownership_guard import tier_of_coid as _adopt_tier
+            _want_side = "sell" if _direction == "long" else "buy"
+
+            def _ev(x) -> str:
+                return str(getattr(x, "value", x) or "").lower()
             for _eord in _existing_orders:
                 _etype = str(getattr(_eord, "type", "")).lower()
                 _etif  = str(getattr(_eord, "time_in_force", "")).lower()
+                # AUDIT-1025 (external QA OR-1): adopt only a stop on THIS
+                # position's protective side, still working, for no more than
+                # its shares, and this tier's or untagged — never another
+                # tier's stop, a wrong-side stop or a pending-cancel one. (A
+                # smaller same-tier stop is still adopted: on a co-held symbol
+                # the net is larger than this tier's shares.)
+                try:
+                    _e_qty = abs(int(float(getattr(_eord, "qty", 0) or 0)))
+                    _e_tier = _adopt_tier(getattr(_eord, "client_order_id", None))
+                    _eligible = (
+                        _ev(getattr(_eord, "side", "")).split(".")[-1]
+                        == _want_side
+                        and 0 < _e_qty <= abs(int(_qty))
+                        and "cancel" not in _ev(getattr(_eord, "status", ""))
+                        and _e_tier in ("intraday", None)
+                    )
+                except (TypeError, ValueError):
+                    _eligible = False
+                if "stop" in _etype and not _eligible:
+                    logger.warning(
+                        f"[{sym}] Orphan stop {getattr(_eord, 'id', '?')} NOT "
+                        f"adopted — side/qty/status/tier does not match the "
+                        f"{_qty}-share {_direction} position [change=audit-1025]"
+                    )
+                    continue
                 if "stop" in _etype:
                     if "gtc" in _etif:
                         tracker.open_trades[sym]["gtc_stop_order_id"] = (
@@ -1601,11 +1659,24 @@ def reconcile_positions(
                         _o_guard_blocked = True
                 _orph_gtc_ord = (
                     None if _o_guard_blocked
+                    # AUDIT-1025: never cancel another order to make room (a
+                    # QHM/other-tier stop on the symbol must survive).
                     else submit_gtc_stop_order(
-                        sym, _qty, _orph_gtc_side, _orph_stop
+                        sym, _qty, _orph_gtc_side, _orph_stop,
+                        allow_cancel_blocking=False,
                     )
                 )
-                if _orph_gtc_ord:
+                if _orph_gtc_ord is PROTECTION_ALREADY_HELD:
+                    logger.warning(
+                        f"[{sym}] Orphan stop not placed — a live reducing "
+                        f"order already holds the shares [change=audit-1025]"
+                    )
+                elif _orph_gtc_ord is PROTECTION_UNKNOWN:
+                    logger.critical(
+                        f"[{sym}] Orphan stop outcome UNKNOWN — verify the "
+                        f"position is protected [change=audit-1025]"
+                    )
+                elif _orph_gtc_ord:
                     tracker.open_trades[sym]["gtc_stop_order_id"] = str(
                         _orph_gtc_ord.id  # type: ignore[attr-defined]
                     )
