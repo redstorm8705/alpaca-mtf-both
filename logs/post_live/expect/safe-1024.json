@@ -1,0 +1,21 @@
+{
+  "change": "safe-1024",
+  "tier": 1,
+  "paths": [
+    "execution/day_trade_manager.py",
+    "execution/exit_logic.py",
+    "execution/fifo_pnl.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/day_tier_runner_cron.log",
+      "pattern": "change=safe-1024"
+    }
+  ],
+  "baseline_exempt_reason": "The tagged lines fire only on a broker position-read error, which may not happen in the first session; the normal paths are proven unchanged by the reconcile log continuing every tick and by tests/test_position_read_unknown.py.",
+  "expected_rate": "the error path fires only on a broker position-read error (rare); the proof is that the Day-tier reconcile keeps running every tick after the deploy with no new exception",
+  "window_sessions": 1,
+  "window_reason": "An error-path change: the first full session proves the normal paths are unchanged; the unknown branch is proven by tests/test_position_read_unknown.py.",
+  "reversal": "a lot reported closed while Alpaca still holds it, an EOD exit that stops retrying a lot, or a stop sized above the live position",
+  "verification": "tests/test_position_read_unknown.py"
+}
