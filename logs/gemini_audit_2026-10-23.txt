@@ -1,0 +1,60 @@
+Nightly Gemini Audit — 2026-10-23
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['generate_dashboard.py', 'reporting/html_ui.py', 'execution/risk_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution/risk_manager.py | `_in_rth_now()` logic allows `intraday_equity_pnl` to be calculated using `self.equity_pnl - self._buy_and_hold_intraday_pl()` during RTH, but the `BROKER GROUND TRUTH` shows `GE` as `NAKED` (105m exposure) while the bot is actively managing other positions. The `GE` position is not being protected by the `RiskManager` logic, and the `NAKED` status indicates a failure in the stop-protection lifecycle for non-core/QHM positions.
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **[DRAM] No daily data — long/short entry blocked (fail-closed)**: This warning repeats consistently throughout the log (e.g., 19:26:52, 19:34:04, 19:43:54, 20:00:03). The bot is attempting to trade `DRAM` despite missing daily data, which is a persistent failure in the data pipeline for this symbol.
+* **ledger_sync wall-time 17.8s / 16.1s**: These sync times are significantly high (approaching the 20s timeout), indicating the `ledger_sync` process is struggling with the order/fill volume.
+* **EOD P&L DRIFT: Alpaca=$-3.26 tracker=$0.00**: While the header notes this is pre-heal, the drift is non-zero and the tracker shows $0.00, suggesting the tracker is failing to ingest the `AMZN` fills correctly before the EOD snapshot.
+
+### PERFORMANCE AUDIT
+* **AMZN (2026-10-23)**: Entry 247.56 (short), Exit 248.1033 (avg). P&L: -3.26. The P&L sign is correct for a short loss.
+* **Stop Rate**: The bot has a high frequency of `protective_stop` exits in the `TRADE EVENTS` (DRAM, TSLA, SMCI, DRAM). The win rate (34.6%) combined with the profit factor (0.83) indicates the strategy is currently underperforming its edge.
+* **R:R Analysis**: The `AMZN` trade (short) had a stop at 250.25 (distance ~1.08%). The exit was forced at EOD. The bot is failing to capture the 2.5x ATR target, frequently getting stopped out or forced flat.
+
+### TRADE INTEGRITY
+* **AMZN (2026-10-23)**: The `EOD SNAPSHOT` shows 4 separate fills for `AMZN` (short) at 247.56, all exiting at 248.10/248.11. The `realized_pnl` of -3.26 matches the sum of these fills. Integrity is maintained for this specific trade, but the tracker's failure to show $0.00 in the main snapshot is a concern.
+
+### MODIFIED FILE FINDINGS
+* **execution/risk_manager.py**:
+    * The new `_publish_kill_snapshot` function uses `_KILL_SNAPSHOT_QUEUE.put_nowait(payload)`. If the queue is full, it performs a `get_nowait()` to clear it. This is a safe, non-blocking pattern, but it relies on `config.MAX_DAILY_LOSS_PCT` being defined.
+    * **Bug**: In `check_kill_switch`, the variable `_would_kill` is calculated but the `_publish_kill_snapshot` is called *after* the `if _would_kill` block. If `_would_kill` is true, the snapshot is published with `killed=True`. However, if `_in_rth_now()` is false, the function returns `self.killed` early, potentially skipping the `_publish_kill_snapshot` call, leading to a stale snapshot on the dashboard.
+* **generate_dashboard.py**:
+    * The new `_position_protection` function correctly identifies `HELD` orders as OCO stops. However, it relies on `tier_of_coid` from `execution.ownership_guard`. If `ownership_guard` fails to map a `client_order_id`, the position is marked `UNATTRIBUTED`. This is a robust fallback, but it may lead to "MISSING" stop alerts for correctly protected positions if the COID mapping is lost.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED
+* **P5-C2**: UNTOUCHED
+* **P5-H2**: UNTOUCHED
+* **P5-H3**: UNTOUCHED
+* **P5-H4**: UNTOUCHED
+* **P5-M1**: UNTOUCHED
+* **P5-M2**: UNTOUCHED
+* **P5-M3**: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | HIGH | execution/risk_manager.py | Stale kill-switch snapshot | If `check_kill_switch` returns early due to `not _in_rth_now()`, the operator dashboard will not receive the updated `killed` status, potentially showing a "healthy" state when the bot is actually in a latched `killed=True` state.**
+* **INFRASTRUCTURE | MEDIUM | execution/risk_manager.py | `_in_rth_now` logic gap | The function uses `datetime.now(_ET)` which is correct, but the `GE` position is marked `NAKED` in the broker ground truth. The `RiskManager` does not appear to be enforcing stop-protection on non-core/QHM positions, leaving them exposed.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Immediate**: Investigate why `GE` is `NAKED` and why `RiskManager` is not applying stop-protection to non-core/QHM positions.
+2. **High**: Update `check_kill_switch` in `execution/risk_manager.py` to ensure `_publish_kill_snapshot` is called even if the function returns early due to the RTH gate.
+3. **Medium**: Resolve the `DRAM` data feed issue; the bot is repeatedly attempting to trade a symbol for which it has no daily data, causing unnecessary log noise and potential execution errors.
+4. **Low**: Increase `_ALPACA_OPEN_ORDER_PAGE_SIZE` or implement pagination in `generate_dashboard.py` if the number of open orders exceeds 500, as the current implementation may miss protective stops.
+================================================================================
+BROKER GROUND TRUTH (2026-10-23, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AMZN   COVERED                  owners=day exposed=378m no-broker-stop=0m [06:40-06:40, 12:58-12:58] rejected_stop_orders=0
+  GE     NAKED                    owners=other/qhm exposed=390m no-broker-stop=105m [09:04-09:04, 09:12-10:56] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
