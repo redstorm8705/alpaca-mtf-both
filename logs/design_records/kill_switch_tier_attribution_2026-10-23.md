@@ -52,18 +52,18 @@ Q2: Trade count unchanged except a kill trips when Day/Swing truly lose 7% (coul
     co-held day; never later).
 Q3: Reuses the existing exact path; no new mechanism.
 Q4: Existing #741 snapshot/gauge, ownership ledger (ownership_ledger_design_2026-07-10.md), KillVerdict causes.
-Q5: No new number.
+Q5: No new number: the 7% limit, the ledger checks and the QHM state are existing; the fallback uses measured quantities.
 Q6: Exposes the flag coupling (one switch for order-blocking and for measurement); forward pass: per-tier kill
     reporting on the dashboard (Day vs Swing split).
 Q7: Feeds the dashboard gauge and the post-market card; fails to today's legacy measure.
 Q8: Probe output above; code lines quoted from origin/main.
 Q9: Replay today identical; expected effect only on co-held days; wrong if a kill trips on a day Day+Swing were not
     down 7% (check: trading_pnl in the kill state vs Alpaca fills).
-Q10: N/A.
+Q10: No edge is held back; this is a safety-measure correction, not a signal.
 Q11: Kill switch = safety envelope; can only make the kill MORE accurate; masked-loss seat reviews.
 Q12: Touches the 7% kill measurement only; never widens it (fallback = today).
 Q13: Ledger unreadable/drifted -> today's legacy measure, logged; gauge "unavailable".
-Q14: Not a shadow.
+Q14: Not a shadow: live on approval; the gauge shows the live measure.
 Q15: Kill state and snapshot carry trading_pnl, attribution_exact and the fallback reason.
 Q16: `change=kill-attr-1023` log line each cycle when exact; post-live replay on the first session.
 Q17: Read-only OCI probe (this record) and the first live snapshot showing attribution_exact=true.
@@ -73,15 +73,22 @@ Q20: Prompts neutral; board + Gro + GAI.
 Q21: Tests mock positions/fills/ledger; no broker call.
 Q22: Read-only OCI probe done.
 Q23: Unit tests + OCI probe before ship.
-Q24: N/A. Q25: N/A.
+Q24: No availability claims are made.
+Q25: No market statistics used; quantities and prices come from Alpaca positions and fills.
 Q26: T1 Alpaca positions + fills; ownership ledger (Alpaca-fill replay); fallback legacy.
 Q27: Existing logs/kill_switch_snapshot.json atomic write (unchanged).
 Q28: check_kill_switch on run_cycle and run_day_tier; no new I/O (ledger load already used by the enforced path).
 Q29: P0 owner item (safety measure accuracy).
 Q30: A desk measures loss limits per book; this does it per tier.
-Q31-Q37: N/A (measurement correctness, not an edge).
-Q38: N/A.
-Q39: N/A.
+Q31: Not an edge test; the fallback rule was tried in 3 variants against constructed inputs (legacy, count-all, more-negative-of-two).
+Q32: No look-ahead: the measure uses only today's fills and current positions.
+Q33: Costs are inside real fill prices, which the measure uses directly.
+Q34: Not applicable to a loss measure; it counts actual Day/Swing P&L whatever its source.
+Q35: Tail case: a QHM name moving sharply while unproven can count toward the kill (errs to tripping); worst case is a stop of new entries for the day, exits continue.
+Q36: Works at any account size; per-symbol arithmetic only.
+Q37: Not a statistical edge; proof is exact reconciliation (probe: +$6.77 both ways today).
+Q38: Not a strategy; no decay. Reversal: any day the kill P&L differs from the Alpaca-fill per-tier split beyond rounding.
+Q39: Not a sizing change; P&L is from Alpaca fills and positions.
 Q40: Outcome: kill measure = Day + Swing P&L exactly; check: daily compare of trading_pnl vs Alpaca fills split by
      ledger tier (weekly report).
 Q41: Split the dashboard gauge into Day and Swing lines.
