@@ -531,8 +531,18 @@ def record(root: str, aid: str, user_text: str, identity: str, transcript_path: 
         gaps = [f"(required_questions unavailable: {exc})"]
     if gaps:
         return f"APPROVE {aid}: NOT recorded — its design record does not answer required questions {gaps}."
+    try:
+        with open(found[0], "rb") as fh:
+            body = fh.read()
+    except OSError as exc:
+        return f"APPROVE {aid}: NOT recorded — its design record is unreadable ({exc})."
+    numbers = parse_owner_numbers(body.decode("utf-8", "replace"))
+    if numbers is None:
+        return f"APPROVE {aid}: NOT recorded — its 'Owner numbers:' line is malformed."
     rec = {"id": aid, "status": "APPROVED", "design_record": found[0], "covers": found[1],
            "covers_sha256": covers_sha(found[1]),
+           # OWNER-NUMBERS-1025: the approval binds the record's exact text and the owner numbers it lists
+           "record_sha256": hashlib.sha256(body).hexdigest(), "owner_numbers": [list(n) for n in numbers],
            "prompt_sha256": hashlib.sha256(user_text.encode("utf-8")).hexdigest(),
            "message_identity": identity, "mode": mode,
            "agent_sha256": hashlib.sha256(agent_text.encode("utf-8")).hexdigest(),
@@ -543,6 +553,100 @@ def record(root: str, aid: str, user_text: str, identity: str, transcript_path: 
     _write(root, rec)
     return (f"Owner approval recorded: {aid} covers {len(found[1])} path(s); fingerprint {covers_sha(found[1])[:16]}. "
             f"Tell the owner in one line; 'reject {aid}' undoes it.")
+
+
+_OWNER_LINE = re.compile(r"^Owner numbers:[ \t]*(.*)$", re.M)
+_OWNER_ITEM = re.compile(r"^(\S+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(-?\d+(?:\.\d+)?)$")
+
+
+def parse_owner_numbers(text: str) -> "list | None":
+    """OWNER-NUMBERS-1025: [(file, NAME, value)] from a design record's single 'Owner numbers:' line
+    (`<file> <NAME>=<number>; ...`); [] when the record has none; None when it is malformed or appears twice (the
+    caller then records / waives nothing)."""
+    lines = _OWNER_LINE.findall(text or "")
+    if not lines:
+        return []
+    if len(lines) != 1:
+        return None
+    out = []
+    for item in (x.strip() for x in lines[0].split(";")):
+        if not item:
+            continue
+        m = _OWNER_ITEM.match(item)
+        if not m:
+            return None
+        out.append((m.group(1), m.group(2), float(m.group(3))))
+    return out or None
+
+
+def _is_codex_transcript(path: str) -> bool:
+    """True for a Codex session file. Codex has no write-protecting hook on its own session files, so its approvals
+    never authorise an owner number (board Schneier, OWNER-NUMBERS-1025)."""
+    try:
+        codex = os.path.realpath(os.path.join(transcript_home(), ".codex"))
+        return os.path.realpath(path).startswith(codex + os.sep)
+    except Exception:
+        return True                                   # cannot tell -> treat as not authorising (fail closed)
+
+
+def owner_numbers_allowed(root: str, relpath: str) -> dict:
+    """OWNER-NUMBERS-1025, local commit hook: {NAME: (value, approval ID, record sha)} the owner approved for `relpath`.
+    Every condition must hold, re-checked at each call (never cached): an APPROVED record in the shared store that
+    approval_valid() re-proves against the owner's own message in a Claude transcript; it stores the record hash and
+    owner numbers; the design is still declared once (same Covers) and EVERY worktree copy of its record hashes to the
+    stored hash and lists the same numbers; the record covers `relpath`. A name given two different values by two
+    approvals is dropped. Any error -> {} (fail closed)."""
+    out: dict = {}
+    clash: set = set()
+    try:
+        files = sorted(glob.glob(os.path.join(approvals_dir(root), "*.json")))
+    except Exception:
+        return {}
+    for p in files:
+        name = os.path.basename(p)
+        if name.startswith(".") or name.endswith(".rejected.json"):
+            continue
+        try:
+            with open(p) as fh:
+                rec = json.load(fh)
+            if not isinstance(rec, dict):
+                continue
+            aid = rec.get("id") or ""
+            if rec.get("status") != "APPROVED" or name != f"{aid}.json":
+                continue
+            want, nums = rec.get("record_sha256"), rec.get("owner_numbers")
+            if not want or not nums:
+                continue
+            if _is_codex_transcript(rec.get("transcript_path") or "") or not approval_valid(rec, root):
+                continue
+            found = find_design(root, aid)
+            if not found or relpath not in found[1]:
+                continue
+            copies = [path for path, _c, _b in _declarations(root).get(aid) or []]
+            ok = bool(copies)
+            for path in copies:
+                with open(path, "rb") as fh:
+                    body = fh.read()
+                if hashlib.sha256(body).hexdigest() != want:
+                    ok = False
+                    break
+            if not ok:
+                continue
+            parsed = parse_owner_numbers(body.decode("utf-8", "replace"))
+            if parsed is None or sorted(map(tuple, parsed)) != sorted(tuple(n) for n in nums):
+                continue
+            for f, nm, val in parsed:
+                if f != relpath:
+                    continue
+                prev = out.get(nm)
+                if prev is not None and prev[0] != val:
+                    clash.add(nm)
+                out[nm] = (float(val), aid, want)
+        except Exception:
+            continue
+    for nm in clash:
+        out.pop(nm, None)
+    return out
 
 
 def remove(root: str, aid: str, rejected_at: "float | None" = None) -> str:
