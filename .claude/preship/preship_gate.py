@@ -530,7 +530,82 @@ def _added_lines(range_args, relpath):
     return added
 
 
-def _dynamic_ok(relpath, ref, range_args):
+def _owner_root() -> str:
+    """The checkout whose shared owner-approval store the local hook reads (same root owner_approval_gate uses)."""
+    import owner_approval_gate as oag
+    return oag._root()
+
+
+def _ci_records(ref: str) -> list:
+    """CI: the text of every committed design record at the commit named by `ref` ('<commit>:<path>')."""
+    commit = ref.split(":", 1)[0]
+    if not commit:
+        return []
+    ok, out = _git(["ls-tree", "--name-only", f"{commit}:logs/design_records"])
+    if not ok:
+        return []
+    texts = []
+    for name in out.splitlines():
+        if name.endswith(".md"):
+            ok2, body = _git(["show", f"{commit}:logs/design_records/{name}"])
+            if ok2:
+                texts.append(body)
+    return texts
+
+
+def _owner_number_waive(relpath, src, viols, ref, ci=False):
+    """OWNER-NUMBERS-1025 (owner-approved 2026-10-25; board Beck + Schneier, Gro, GAI): (violations left, pass notes).
+    A flagged literal is waived only when its line is one module-level `NAME = <number>` the owner approved for this
+    file (no_static_scan.owner_number_lines decides the line shape).
+      local (ci=False): owner_approval_capture.owner_numbers_allowed — a registered approval re-proved against the
+          owner's own message, bound to the design record's exact bytes.
+      CI (ci=True): no approval store exists on the runner (owner approval is enforced locally, as for every design),
+          so a number is waived only when a committed design record covering this file lists it; two records giving
+          one name different values waive nothing for that name.
+    Any error waives nothing (fail closed)."""
+    if not viols:
+        return viols, []
+    try:
+        import no_static_scan as ns
+        import owner_approval_capture as cap
+        if ci:
+            allowed: dict = {}
+            clash: set = set()
+            for text in _ci_records(ref):
+                aids = re.findall(r"^Approval-ID:\s*(\S+)\s*$", text, re.M)
+                m = re.search(r"^Covers:\s*(.+?)(?:\n\s*\n|\n#)", text, re.M | re.S)
+                covers = [c.strip() for c in re.split(r"[,\n]", m.group(1)) if c.strip()] if m else []
+                nums = cap.parse_owner_numbers(text)
+                if len(aids) != 1 or relpath not in covers or not nums:
+                    continue
+                for f, nm, val in nums:
+                    if f != relpath:
+                        continue
+                    if nm in allowed and allowed[nm][0] != val:
+                        clash.add(nm)
+                    allowed[nm] = (val, aids[0], "committed record")
+            for nm in clash:
+                allowed.pop(nm, None)
+        else:
+            allowed = cap.owner_numbers_allowed(_owner_root(), relpath)
+        lines = ns.owner_number_lines(src, {k: v[0] for k, v in allowed.items()})
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(f"owner-number check unavailable ({type(e).__name__}: {e}) — nothing waived\n")
+        return viols, []
+    left, passed = [], []
+    for v in viols:
+        hit = lines.get((v.line, v.col))        # the approved number itself, never another one on its line
+        if hit and float(v.literal) == hit[1]:
+            val, aid, sha = allowed[hit[0]]
+            passed.append(f"OWNER-NUMBER pass: {aid} {relpath} {hit[0]}={hit[1]:g} (record {str(sha)[:16]})")
+        else:
+            left.append(v)
+    for p in passed:
+        sys.stderr.write(p + "\n")
+    return left, passed
+
+
+def _dynamic_ok(relpath, ref, range_args, ci=False):
     """DYNAMIC-OPTIMAL gate (remediation Gate 1+2, BGGN 2026-08-25; Rafael 2026-08-28
     block-immediately + pairing rule). Blocks a NEW/CHANGED ISOLATED static numeric DECISION
     THRESHOLD in a risk/scoring file unless it is derived from data, PAIRED with a
@@ -562,8 +637,9 @@ def _dynamic_ok(relpath, ref, range_args):
         viols = [v for v in _static_scan(relpath, src) if v.line in added]
     except Exception as e:
         return False, f"FAIL-CLOSED: dynamic scanner raised ({type(e).__name__}: {e})"
+    viols, owner_passes = _owner_number_waive(relpath, src, viols, ref, ci=ci)
     if not viols:
-        return True, "ok"
+        return True, ("ok (" + "; ".join(owner_passes) + ")") if owner_passes else "ok"
     shown = "; ".join(f"L{v.line} `{v.snippet}` (={v.literal})" for v in viols[:5])
     more = f" (+{len(viols) - 5} more)" if len(viols) > 5 else ""
     return False, (

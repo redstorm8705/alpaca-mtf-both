@@ -443,6 +443,49 @@ def scan(path: str, source: str) -> "list[Violation]":
     return uniq
 
 
+def owner_number_lines(source: str, allowed: dict) -> dict:
+    """OWNER-NUMBERS-1025 (owner-approved 2026-10-25): {(line, col): (NAME, value)} — the position of each number in
+    `source` that sets an
+    owner-approved number — and nothing else. A line qualifies only when it is ONE module-level `NAME = <number>`
+    (an optional minus sign), NAME is in `allowed` with a numerically equal value, and NAME is assigned nowhere else in
+    the file and never appears as a string (a profile-override key or setattr/globals name could re-set it). Any
+    expression, parsed string, augmented or second assignment disqualifies it. Callers decide what is `allowed`."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+    counts: dict = {}
+    strings: set = set()
+    for node in ast.walk(tree):
+        # every binding of a name counts: assignment targets, for / with / walrus targets, imports, defs, classes
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            counts[node.id] = counts.get(node.id, 0) + 1
+        elif isinstance(node, ast.alias):
+            nm = node.asname or node.name.split(".")[0]
+            counts[nm] = counts.get(nm, 0) + 1
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            counts[node.name] = counts.get(node.name, 0) + 1
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            strings.add(node.value)
+    out = {}
+    for node in tree.body:                                   # module level only
+        if not (isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)):
+            continue
+        name = node.targets[0].id
+        v = _num_value(node.value)
+        if name not in allowed or v is None or isinstance(v, bool) or counts.get(name) != 1 or name in strings:
+            continue
+        try:
+            if float(v) != float(allowed[name]):
+                continue
+        except (TypeError, ValueError):
+            continue
+        # keyed by the VALUE node's exact position (red-team 2026-10-25: keyed by line alone, `A = 10; B = 10` waived
+        # the unapproved B on the same physical line)
+        out[(node.value.lineno, node.value.col_offset)] = (name, float(v))
+    return out
+
+
 if __name__ == "__main__":
     import sys
     for p in sys.argv[1:]:

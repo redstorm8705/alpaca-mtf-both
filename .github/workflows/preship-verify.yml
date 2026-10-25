@@ -154,7 +154,11 @@ jobs:
               exists, _ = pg._git(["cat-file", "-e", f"{head}:{f}"])
               if not exists:
                   continue  # deleted at HEAD — no blob to scan
-              ok, why = pg._dynamic_ok(f, f"{head}:{f}", [f"{base}..{head}"])
+              # ci=True (OWNER-NUMBERS-1025): an owner number passes only if a committed design record covering the
+              # file lists it; the owner's approval itself is checked by the local hook (no approval store here)
+              ok, why = pg._dynamic_ok(f, f"{head}:{f}", [f"{base}..{head}"], ci=True)
+              if ok and "OWNER-NUMBER" in why:
+                  print(f"{f}: {why}")
               if not ok:
                   fails.append(f"  - {f}: {why}")
           if fails:
@@ -250,6 +254,8 @@ jobs:
           python3 .claude/preship/test_no_assume_gate.py
           # no static-threshold exemptions (Rafael 2026-10-14, permanent): a PROV/STATIC-WAIVER tag must not exempt
           python3 .claude/preship/test_no_static_scan.py
+          # owner-chosen numbers pass only with the owner's approval bound to the exact design text (OWNER-NUMBERS-1025)
+          python3 .claude/preship/test_owner_numbers.py
           # four tier names only — Day / Swing / QHM / F6 (CEO 2026-10-07); fails on a retired name in person-facing text
           python3 tests/test_tier_names.py
           python3 .claude/preship/gai_health.py canary
