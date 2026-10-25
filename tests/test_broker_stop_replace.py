@@ -86,16 +86,50 @@ class TestReplace(Base):
             self.assertEqual(tier_of_coid(new.client_order_id), tier)
             self.assertNotEqual(new.client_order_id, coid)      # fresh id, same tier
 
-    def test_untagged_or_unreadable_prior_sends_no_client_order_id(self):
+    def test_untagged_prior_is_not_replaced(self):
         self.fake.add("A", coid="legacy-untagged")
-        broker.replace_stop_order("UBER", "A", 99.0)
-        self.assertIsNone(self.fake.replace_calls[-1][1].client_order_id)
+        self.assertIsNone(broker.replace_stop_order("UBER", "A", 99.0))
+        self.assertEqual(self.fake.replace_calls, [])
 
     def test_qty_resize_sent_with_price(self):
         self.fake.add("A", qty="5")
         new = broker.replace_stop_order("NVDA", "A", 101.0, qty=3)
         self.assertEqual(self.fake.replace_calls[0][1].qty, 3)
         self.assertEqual(new.qty, "3")
+
+    def test_explicit_replacement_id_is_used_for_same_tier(self):
+        self.fake.add("A", coid="QH-NVDA-s-old-proof")
+        broker.replace_stop_order(
+            "NVDA", "A", 101.0, qty=3,
+            client_order_id="QH-NVDA-s-new-proof",
+        )
+        self.assertEqual(
+            self.fake.replace_calls[0][1].client_order_id,
+            "QH-NVDA-s-new-proof",
+        )
+
+    def test_explicit_replacement_id_cannot_change_tier(self):
+        self.fake.add("A", coid="QH-NVDA-s-old-proof")
+        self.assertIsNone(broker.replace_stop_order(
+            "NVDA", "A", 101.0, qty=3,
+            client_order_id="IN-NVDA-s-new-proof",
+        ))
+        self.assertEqual(self.fake.replace_calls, [])
+
+    def test_explicit_replacement_id_requires_readable_prior(self):
+        self.fake.add("A", coid="QH-NVDA-s-old-proof")
+        with mock.patch.object(broker, "get_order", return_value=None):
+            self.assertIsNone(broker.replace_stop_order(
+                "NVDA", "A", 101.0, qty=3,
+                client_order_id="QH-NVDA-s-new-proof",
+            ))
+        self.assertEqual(self.fake.replace_calls, [])
+
+    def test_default_replacement_also_requires_readable_prior(self):
+        self.fake.add("A", coid="QH-NVDA-s-old-proof")
+        with mock.patch.object(broker, "get_order", return_value=None):
+            self.assertIsNone(broker.replace_stop_order("NVDA", "A", 101.0, qty=3))
+        self.assertEqual(self.fake.replace_calls, [])
 
     def test_refused_leaves_old_stop_in_force(self):
         self.fake.add("A", status="pending_replace")

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import urllib.parse
 import urllib.request
@@ -38,12 +39,27 @@ class SaleProof:
     order_ids: list = field(default_factory=list)
 
 
+@dataclass
+class BuyProof:
+    """Exact terminal owner-buy evidence for one whole-share quantity increase."""
+
+    proven: bool
+    reason: str
+    bought_qty: int = 0
+    order_ids: list = field(default_factory=list)
+    order_qty_by_id: dict = field(default_factory=dict)
+
+
 def _whole(value) -> Optional[int]:
+    # JSON booleans are numbers in Python (True == 1).  Broker quantity
+    # evidence must be an actual finite numeric value, never a boolean.
+    if isinstance(value, bool):
+        return None
     try:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    if number != number or not number.is_integer():
+    if not math.isfinite(number) or not number.is_integer():
         return None
     return int(number)
 
@@ -130,6 +146,78 @@ def evaluate_owner_sale(orders: Optional[list], held_qty: int, broker_qty: int, 
     return SaleProof(True, "sold in the Alpaca app or website", sold, ids)
 
 
+def evaluate_owner_buy(
+    orders: Optional[list], baseline_qty: int, broker_qty: int, since_iso: str
+) -> BuyProof:
+    """Prove a whole-share increase came only from terminal Alpaca app/web buys.
+
+    Unlike the sale proof, a partially-filled order is never accepted: its cumulative
+    ``filled_qty`` may increase later and cannot be used as an immutable replay key.
+    """
+    if orders is None:
+        return BuyProof(False, "order history unreadable")
+    if baseline_qty <= 0 or broker_qty <= baseline_qty:
+        return BuyProof(False, f"no increase to explain (baseline {baseline_qty}, broker {broker_qty})")
+    since = _parse_ts(since_iso)
+    if since is None:
+        return BuyProof(False, "proof window start unreadable")
+    bought = 0
+    ids: list = []
+    qty_by_id: dict = {}
+    for order in orders:
+        if not isinstance(order, dict):
+            return BuyProof(False, "malformed order row")
+        if order.get("_truncated"):
+            return BuyProof(False, f"too many orders on this symbol to check ({_PAGE_SIZE}+)")
+        oid = order.get("id")
+        if not isinstance(oid, str) or not oid.strip() or oid in qty_by_id:
+            return BuyProof(False, "owner-buy order id is missing or duplicated")
+        coid = str(order.get("client_order_id") or "")
+        if "source" in order and order.get("source") is None and _is_bot_identity(coid):
+            logger.critical(
+                "manual_sale_proof TRIPWIRE: bot-tagged order %s has a null source — "
+                "owner-buy proof disabled for this check", oid,
+            )
+            return BuyProof(False, f"bot order {oid} shows no API source (signal untrusted)")
+        filled = _whole(order.get("filled_qty"))
+        submitted = _whole(order.get("qty"))
+        if filled is None or submitted is None:
+            return BuyProof(False, f"unreadable quantity on order {oid}")
+        if filled <= 0:
+            continue
+        filled_at = _parse_ts(order.get("filled_at"))
+        if filled_at is None:
+            return BuyProof(False, f"order {oid} has fills but no fill time")
+        if filled_at <= since:
+            continue
+        side = str(order.get("side") or "").lower()
+        if side != "buy":
+            return BuyProof(False, f"a {side or 'non-buy'} order filled in the window ({oid})")
+        status = str(order.get("status") or "").lower()
+        if status != "filled" or filled != submitted or filled <= 0:
+            return BuyProof(False, f"owner buy {oid} is not terminal and fully filled")
+        if "source" not in order:
+            return BuyProof(False, f"order {oid} has no source field")
+        if order.get("source") is not None:
+            return BuyProof(False, f"order {oid} came from {order.get('source')!r}, not the Alpaca app")
+        if not _UUID_COID.match(coid):
+            return BuyProof(False, f"order {oid} does not have an app-generated order id")
+        bought += filled
+        ids.append(oid)
+        qty_by_id[oid] = filled
+    if not any(
+        isinstance(order, dict)
+        and order.get("source") == "access_key"
+        and _is_bot_identity(order.get("client_order_id") or "")
+        for order in orders
+    ):
+        return BuyProof(False, "no bot order in the window shows the API source tag (signal not confirmed)")
+    expected = broker_qty - baseline_qty
+    if bought != expected:
+        return BuyProof(False, f"app buys total {bought} shares, broker minus baseline is {expected}")
+    return BuyProof(True, "bought in the Alpaca app or website", bought, ids, qty_by_id)
+
+
 def fetch_closed_orders_since(symbol: str, after_iso: str) -> Optional[list]:
     """Raw orders (any status) for `symbol` submitted after `after_iso`, or None on any failure. One bounded request."""
     if not symbol or not after_iso:
@@ -170,3 +258,21 @@ def prove_owner_sale(symbol: str, since_iso: Optional[str], held_qty: int, broke
         return SaleProof(False, "no proof window (shares not verified since this check was deployed)")
     return evaluate_owner_sale(fetch_closed_orders_since(symbol, orders_from_iso or since_iso),
                                held_qty, broker_qty, since_iso)
+
+
+def prove_owner_buy(
+    symbol: str,
+    since_iso: Optional[str],
+    baseline_qty: int,
+    broker_qty: int,
+    orders_from_iso: Optional[str] = None,
+) -> BuyProof:
+    """Fetch and prove an immutable owner-buy delta for an existing whole-share hold."""
+    if not since_iso:
+        return BuyProof(False, "no sole-owner baseline proof window")
+    return evaluate_owner_buy(
+        fetch_closed_orders_since(symbol, orders_from_iso or since_iso),
+        baseline_qty,
+        broker_qty,
+        since_iso,
+    )

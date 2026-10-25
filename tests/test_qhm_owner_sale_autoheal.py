@@ -106,6 +106,9 @@ class ProofRuleTests(TestCase):
     def test_quantity_must_match_exactly(self):
         self.assertFalse(self.ev([_row(filled_qty="1")], held=2, broker=0).proven)
 
+    def test_boolean_fill_quantity_is_not_evidence(self):
+        self.assertFalse(self.ev([_row(filled_qty=True)]).proven)
+
     def test_fill_before_window_is_ignored(self):
         early = _row(id="old", filled_at=(_T0 - timedelta(days=2)).isoformat())
         self.assertTrue(self.ev([early, _row()]).proven)
@@ -279,7 +282,7 @@ class StopFirstTests(TestCase):
         p = _pos(symbol="NVDA", qty_filled=2, qty_total=2)
         m = _manager(position=SimpleNamespace(qty="1", side="long"))
         stop = SimpleNamespace(id="s2", symbol="NVDA", client_order_id="QH-NVDA-s-1", side="sell", type="stop",
-                               status="new", qty="2", filled_qty="0", stop_price="192.41")
+                               status="new", time_in_force="gtc", qty="2", filled_qty="0", stop_price="192.41")
         m._get_open_orders.return_value = [stop]
         calls = []
         g = _fake_guard(ledger_qhm=2.0)
@@ -287,7 +290,7 @@ class StopFirstTests(TestCase):
         b = ModuleType("execution.broker")
         b.replace_stop_order = Mock(side_effect=lambda *a, **k: calls.append("stop") or SimpleNamespace(
             id="s3", symbol="NVDA", client_order_id="QH-NVDA-s-1", side="sell", type="stop", status="new",
-            qty="1", filled_qty="0", stop_price="192.41"))
+            time_in_force="gtc", qty="1", filled_qty="0", stop_price="192.41"))
         rows = [_row(), dict(_BOT, client_order_id="QH-NVDA-b-1-x")]
         with patch.dict("sys.modules", {"execution.ownership_guard": g, "execution.broker": b}), \
                 patch.object(msp, "fetch_closed_orders_since", Mock(return_value=rows)), \

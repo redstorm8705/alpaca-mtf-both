@@ -44,6 +44,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, fields
@@ -66,6 +67,17 @@ logger = logging.getLogger(__name__)
 
 ET = ZoneInfo("America/New_York")    # RC-1
 PT = ZoneInfo("America/Los_Angeles")  # RC-1 — display only
+
+
+def _owner_add_replacement_coid(symbol: str) -> str:
+    """Create one new QH stop identity for a newly-created durable stage.
+
+    Callers persist this value before any broker mutation. Recovery always reads the
+    persisted value; it never reconstructs an ID from the clock after a restart.
+    """
+    epoch_ms = str(time.time_ns())[:len("millisecondid")]
+    unique = uuid.uuid4().hex[:len("owneradd")]
+    return f"QH-{symbol}-s-{epoch_ms}-{unique}"
 
 # Stop parameters — board-approved S48b
 _ATR_PERIOD_WEEKS = 14
@@ -370,6 +382,10 @@ class HoldPosition:
     stop_recovery_intended_qty: Optional[int] = None
     # Owner-sale auto-heal (2026-10-17, design record qhm_owner_sale_autoheal_2026-10-17.md).
     qty_proven_at: Optional[str] = None        # UTC ISO: last time the broker provably held qty_filled
+    owner_add_proven_at: Optional[str] = None  # UTC ISO: sole-QHM broker/ledger baseline
+    owner_add_baseline_qty: Optional[int] = None
+    owner_add_stage: Optional[dict] = None     # fsynced phase journal for a proven owner app/web buy
+    owner_add_blocked_order_ids: list[str] = field(default_factory=list)
     coverage_page_key: Optional[str] = None    # "<ET date>|<reason>;<reason>" stop-coverage pages sent today
     closed_reason: Optional[str] = None        # why the hold closed; "owner_app_sale"/"owner_confirmed" = owner's exit
 
@@ -619,6 +635,10 @@ class QuarterlyHoldManager:
         else:
             for _sym, _pos in list(self._positions.items()):
                 if _pos.state not in (HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE):
+                    continue
+                if self._maybe_owner_buy_adoption(_pos):
+                    _startup_guard_skip.add(_sym)
+                    _startup_blocked.add(_sym)
                     continue
                 if (_pos.stop_recovery_requires_qty_proof
                         or _pos.ambiguous_add_client_order_id):
@@ -895,6 +915,10 @@ class QuarterlyHoldManager:
             for _sym, _pos in list(self._positions.items()):
                 if _pos.state not in (HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE):
                     continue
+                if self._maybe_owner_buy_adoption(_pos):
+                    _guard_skip.add(_sym)
+                    _coverage_blocked.add(_sym)
+                    continue
                 # Special add/cancel recovery has stronger, fill-aware invariants
                 # and remains owned by resubmit_stop_if_needed().
                 if (_pos.stop_recovery_requires_qty_proof
@@ -1047,6 +1071,12 @@ class QuarterlyHoldManager:
                                  HoldState.ACTIVE):
                 continue
             try:
+                if pos.owner_add_stage is not None:
+                    logger.warning(
+                        "QuarterlyHoldManager: %s owner-add recovery is staged — "
+                        "all entry/add mutation remains fenced", symbol,
+                    )
+                    continue
                 if pos.state == HoldState.ACTIVE:
                     # TRANCHES 2-3 (2026-09-28): a tranche-1 fill places the stop and sets ACTIVE, so
                     # the PENDING_ENTRY/AWAITING_FILL branches below never ran tranches 2-3. ACTIVE
@@ -5124,7 +5154,8 @@ class QuarterlyHoldManager:
                 )
                 return None
             from execution.ownership_guard import load_ledger, tier_qty
-            ledger_qty_raw = tier_qty(load_ledger(), pos.symbol, "qhm")
+            _ledger = load_ledger()
+            ledger_qty_raw = tier_qty(_ledger, pos.symbol, "qhm")
             ledger_qty = self._whole_share_qty(ledger_qty_raw)
             if ledger_qty is None or ledger_qty <= 0:
                 return None
@@ -5154,7 +5185,1099 @@ class QuarterlyHoldManager:
         pos.qty_total = live_qty
         pos.updated_at = self._now_et().isoformat()
         pos.qty_proven_at = _read_started   # owner-sale proof window start
+        try:
+            _entry = _ledger.get("positions", {}).get(pos.symbol, {})
+            _tiers = _entry.get("tiers", {})
+            _ledger_total = sum(float(_tiers.get(name, {}).get("qty", 0.0) or 0.0)
+                                for name in ("intraday", "qhm", "forever6", "daytrade"))
+            if (raw_qty == live_qty == ledger_qty
+                    and abs(_ledger_total - float(live_qty)) <= 1e-6
+                    and all(abs(float(_tiers.get(name, {}).get("qty", 0.0) or 0.0)) <= 1e-6
+                            for name in ("intraday", "forever6", "daytrade"))):
+                pos.owner_add_baseline_qty = live_qty
+                pos.owner_add_proven_at = _read_started
+        except (TypeError, ValueError):
+            # Baseline is optional evidence. A malformed ledger never creates it.
+            pass
         return live_qty
+
+    def _owner_add_page(self, pos: HoldPosition, reason: str) -> None:
+        """Persist one-per-day operator evidence while an adoption stays fenced."""
+        stage = pos.owner_add_stage
+        if not isinstance(stage, dict):
+            return
+        today = self._now_et().date().isoformat()
+        logger.critical("QHM %s owner-buy adoption pending: %s", pos.symbol, reason)
+        if stage.get("alert_day") == today:
+            return
+        stage["alert_day"] = today
+        stage["last_reason"] = reason
+        pos.updated_at = self._now_et().isoformat()
+        self._save_state()
+        self._alert(
+            f"🚨 {pos.symbol} (QHM): the bot detected a manual share add but could not safely finish "
+            f"the stop and ownership update ({reason}). The existing staged recovery remains active; "
+            f"check Alpaca before changing orders."
+        )
+
+    @staticmethod
+    def _order_remaining(order: object) -> Optional[int]:
+        qty_raw = getattr(order, "qty", None)
+        if qty_raw is None:
+            return None
+        try:
+            qty = float(qty_raw)
+            filled = float(getattr(order, "filled_qty", 0) or 0)
+        except (TypeError, ValueError):
+            return None
+        if (not math.isfinite(qty) or not qty.is_integer() or qty < 0
+                or not math.isfinite(filled) or not filled.is_integer()
+                or filled < 0 or filled > qty):
+            return None
+        return int(qty - filled)
+
+    def _owner_add_orders(self, symbol: str) -> Optional[list]:
+        book = self._get_open_orders()
+        if book is None:
+            return None
+        return [order for order in book
+                if str(getattr(order, "symbol", "") or "").upper() == symbol.upper()]
+
+    def _contain_owner_add_stage(self, pos: HoldPosition, broker_qty: int, reason: str) -> bool:
+        """Abandon an ambiguous adoption without leaving an oversized QHM sell.
+
+        The happy path is automatic.  Once broker quantity or the order book becomes
+        ambiguous, recovery returns the symbol to the ordinary QHM stop reconciler and
+        leaves the owner share unassigned.  The exact owner order IDs are blocked from
+        automatic retry, so the same evidence cannot oscillate every cycle.
+        """
+        stage = pos.owner_add_stage
+        if not isinstance(stage, dict):
+            return False
+        if "old_stop_price" not in stage:
+            self._owner_add_page(pos, "durable baseline stop price is missing")
+            return False
+        old_stop_raw = stage["old_stop_price"]
+        try:
+            if isinstance(old_stop_raw, bool):
+                raise ValueError("boolean stop price")
+            old_stop_price = float(old_stop_raw)
+        except (TypeError, ValueError):
+            self._owner_add_page(pos, "durable baseline stop price is malformed")
+            return False
+        if not math.isfinite(old_stop_price) or old_stop_price <= 0:
+            self._owner_add_page(pos, "durable baseline stop price is malformed")
+            return False
+        if stage.get("ownership_projection_started") or str(stage.get("phase") or "") in {
+            "OWNERSHIP_COMMITTING", "TERMINAL_OWNERSHIP_COMMITTING",
+        }:
+            self._owner_add_page(
+                pos, "ownership projection may already be durable; containment is refused"
+            )
+            return False
+        stage["phase"] = "ABORTING"
+        stage["containment_reason"] = reason
+        pos.updated_at = self._now_et().isoformat()
+        if not self._save_state():
+            self._owner_add_page(pos, "containment phase did not persist")
+            return False
+        try:
+            live_before = self.broker.get_position(pos.symbol)
+        except Exception as exc:
+            self._owner_add_page(pos, f"pre-containment position unreadable: {exc}")
+            return False
+        book = self._owner_add_orders(pos.symbol)
+        try:
+            live_after = self.broker.get_position(pos.symbol)
+        except Exception as exc:
+            self._owner_add_page(pos, f"post-containment position unreadable: {exc}")
+            return False
+        if book is None:
+            self._owner_add_page(pos, "open orders unreadable during containment")
+            return False
+        def _live_shape(value: object) -> tuple[Optional[int], str]:
+            if value is None:
+                return 0, "flat"
+            qty = self._whole_share_qty(getattr(value, "qty", None))
+            side = str(
+                getattr(getattr(value, "side", ""), "value", None)
+                or getattr(value, "side", "")
+            ).lower()
+            return qty, side
+        before_shape = _live_shape(live_before)
+        after_shape = _live_shape(live_after)
+        if before_shape != after_shape or after_shape[0] is None:
+            self._owner_add_page(pos, "broker position changed during containment proof")
+            return False
+        fresh_broker_qty, broker_side = after_shape
+        assert fresh_broker_qty is not None  # narrowed by the fail-closed proof above
+        # Containment deliberately does not require ``fresh_broker_qty == expected``.
+        # This is the abandonment path reached precisely because the position may have
+        # moved (another owner fill or a stop fill).  It may retain/rebuild protection
+        # only for the proven pre-add ``baseline`` below, bounded by the stable live
+        # position and every foreign sell.  The unassigned remainder stays fenced.
+        if fresh_broker_qty > 0 and broker_side not in ("long", "position_side.long"):
+            self._owner_add_page(pos, "broker position is not long during containment")
+            return False
+        qh_sells: list = []
+        foreign_sell_remaining = 0
+        unreadable_sell = False
+        for order in book:
+            side_raw = getattr(order, "side", "")
+            side = str(getattr(side_raw, "value", side_raw)).lower()
+            remaining = self._order_remaining(order)
+            if side not in ("buy", "sell") and (remaining is None or remaining > 0):
+                unreadable_sell = True
+                continue
+            if remaining is None:
+                if side == "sell":
+                    unreadable_sell = True
+                continue
+            if side != "sell" or remaining <= 0:
+                continue
+            coid = str(getattr(order, "client_order_id", "") or "")
+            if coid.startswith("QH-"):
+                qh_sells.append(order)
+            else:
+                foreign_sell_remaining += remaining
+        # A QHM order is retained only when it is exactly the pre-adoption stop and
+        # aggregate live sells cannot exceed the fresh long broker quantity.
+        baseline = int(stage.get("baseline_qty", 0) or 0)
+        safe_qh = (
+            0 if unreadable_sell else max(0, fresh_broker_qty - foreign_sell_remaining)
+        )
+        keeper = None
+        if len(qh_sells) == 1:
+            shape = self._qh_stop_shape(qh_sells[0], pos)
+            if shape is not None and shape["remaining"] == baseline and baseline <= safe_qh:
+                keeper = shape
+        from execution import broker as broker_api
+        if keeper is None:
+            for order in qh_sells:
+                oid = str(getattr(order, "id", "") or "")
+                if not oid or not broker_api.cancel_stop_confirmed(pos.symbol, oid):
+                    self._owner_add_page(pos, "could not confirm-cancel an ambiguous QHM stop")
+                    return False
+            verify = self._owner_add_orders(pos.symbol)
+            if verify is None or any(
+                str(getattr(order, "client_order_id", "") or "").startswith("QH-")
+                and str(getattr(getattr(order, "side", ""), "value", getattr(order, "side", ""))).lower() == "sell"
+                for order in verify
+            ):
+                self._owner_add_page(pos, "QHM stop cancellation is not confirmed")
+                return False
+            # Re-protect the proven pre-add QHM lot before clearing the transaction.
+            # This stays inside the caller's symbol_order_gate.  A lost submit reply is
+            # recovered by the ordinary idempotent QHM stop helper on this or next run.
+            try:
+                live = self.broker.get_position(pos.symbol)
+            except Exception as exc:
+                self._owner_add_page(pos, f"post-cancel broker position unreadable: {exc}")
+                return False
+            live_qty = 0 if live is None else self._whole_share_qty(getattr(live, "qty", None))
+            live_side = "" if live is None else str(
+                getattr(getattr(live, "side", ""), "value", None)
+                or getattr(live, "side", "")
+            ).lower()
+            fresh = self._owner_add_orders(pos.symbol)
+            try:
+                live_after_book = self.broker.get_position(pos.symbol)
+            except Exception as exc:
+                self._owner_add_page(
+                    pos, f"post-cancel confirming position unreadable: {exc}"
+                )
+                return False
+            confirming_qty = (
+                0 if live_after_book is None
+                else self._whole_share_qty(getattr(live_after_book, "qty", None))
+            )
+            confirming_side = "" if live_after_book is None else str(
+                getattr(getattr(live_after_book, "side", ""), "value", None)
+                or getattr(live_after_book, "side", "")
+            ).lower()
+            if live_qty is None or fresh is None or confirming_qty is None:
+                self._owner_add_page(pos, "post-cancel broker state is unreadable")
+                return False
+            if (live_qty, live_side) != (confirming_qty, confirming_side):
+                self._owner_add_page(
+                    pos, "broker position changed across post-cancel order proof"
+                )
+                return False
+            foreign_remaining = 0
+            for order in fresh:
+                side_raw = getattr(order, "side", "")
+                side = str(getattr(side_raw, "value", side_raw)).lower()
+                remaining = self._order_remaining(order)
+                if side not in ("buy", "sell") and (remaining is None or remaining > 0):
+                    self._owner_add_page(pos, "post-cancel order side is unreadable")
+                    return False
+                if side == "sell" and (remaining is None or remaining > 0):
+                    if remaining is None:
+                        self._owner_add_page(pos, "post-cancel foreign sell is unreadable")
+                        return False
+                    foreign_remaining += remaining
+            if (
+                baseline > 0
+                and live_side in ("long", "position_side.long")
+                and baseline + foreign_remaining <= live_qty
+            ):
+                # pos.stop_price still holds the verified pre-adoption stop. The
+                # tighter candidate exists only inside owner_add_stage until the
+                # enlarged replacement is confirmed, so old_stop_price is exactly
+                # what _qh_stop_shape expects on this abandonment path.
+                old_id = pos.stop_order_id
+                pos.stop_order_id = None
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                recovery = self._recover_or_submit_stop(
+                    pos,
+                    baseline,
+                    "sell",
+                    old_stop_price,
+                )
+                recovered_shape = (
+                    self._qh_stop_shape(recovery, pos) if recovery is not None else None
+                )
+                if recovered_shape is None or recovered_shape["remaining"] != baseline:
+                    pos.stop_order_id = old_id
+                    self._owner_add_page(pos, "baseline QHM stop recovery is unconfirmed")
+                    return False
+                keeper = recovered_shape
+        previous = pos.to_dict()
+        blocked = set(pos.owner_add_blocked_order_ids)
+        blocked.update(str(value) for value in stage.get("order_qty_by_id", {}) if str(value))
+        pos.owner_add_blocked_order_ids = sorted(blocked)
+        pos.owner_add_stage = None
+        if keeper is not None:
+            pos.stop_order_id = keeper["id"]
+            pos.stop_price = keeper["stop_price"]
+            pos.state = HoldState.ACTIVE
+        else:
+            pos.stop_order_id = None
+            pos.state = HoldState.PENDING_STOP_REPLACE
+        pos.updated_at = self._now_et().isoformat()
+        if not self._save_state():
+            self._positions[pos.symbol] = HoldPosition.from_dict(previous)
+            return False
+        self._alert(
+            f"🚨 {pos.symbol} (QHM): automatic assignment of the manual add was abandoned "
+            f"because {reason}. Existing QHM shares remain under ordinary stop recovery; "
+            "the added share remains unassigned for operator review."
+        )
+        return True
+
+    def _finish_owner_add_stage(self, pos: HoldPosition, stop: object) -> bool:
+        stage = pos.owner_add_stage
+        shape = self._qh_stop_shape(stop, pos) if isinstance(stage, dict) else None
+        values = self._owner_add_stage_values(stage, pos.symbol)
+        if not isinstance(stage, dict) or shape is None or values is None:
+            return False
+        expected = values["expected"]
+        baseline = values["baseline"]
+        delta = values["delta"]
+        avg = values["broker_avg"]
+        if shape["remaining"] != expected or round(shape["stop_price"], 2) != round(values["stop_price"], 2):
+            return False
+        if stage.get("phase") != "OWNERSHIP_COMMITTING":
+            stage["phase"] = "OWNERSHIP_COMMITTING"
+            pos.updated_at = self._now_et().isoformat()
+            if not self._save_state():
+                self._owner_add_page(pos, "ownership-commit phase did not persist")
+                return False
+        from execution.ownership_guard import apply_authorized_owner_buy_assignment
+        if not apply_authorized_owner_buy_assignment(
+            symbol=pos.symbol,
+            order_qty_by_id=dict(values["order_qty_by_id"]),
+            filled_qty=delta,
+            baseline_qty=baseline,
+            fresh_net=expected,
+            broker_avg=avg,
+            terminal_stop_fill_qty=0,
+            terminal_stop_id="",
+        ):
+            self._owner_add_page(pos, "owner assignment journal or ledger write failed")
+            return False
+        previous = pos.to_dict()
+        order_ids = sorted(values["order_qty_by_id"])
+        old_stop_id = stage["old_stop_id"]
+        pos.qty_filled = expected
+        pos.qty_total = expected
+        pos.avg_entry_price = avg
+        pos.stop_price = values["stop_price"]
+        pos.stop_order_id = shape["id"]
+        pos.qty_proven_at = datetime.now(timezone.utc).isoformat()
+        pos.owner_add_proven_at = pos.qty_proven_at
+        pos.owner_add_baseline_qty = expected
+        pos.owner_add_stage = None
+        pos.state = HoldState.ACTIVE
+        pos.coverage_page_key = None
+        pos.updated_at = self._now_et().isoformat()
+        if not self._save_state():
+            restored = HoldPosition.from_dict(previous)
+            self._positions[pos.symbol] = restored
+            self._owner_add_page(restored, "QHM state finalization failed")
+            return False
+        try:
+            event = {
+                "ts": datetime.now(PT).isoformat(), "event": "owner_buy_autoheal",
+                "symbol": pos.symbol, "tier": "qhm", "size": delta,
+                "remaining": expected, "avg_entry_price": avg,
+                "owner_order_ids": order_ids, "old_stop_id": old_stop_id,
+                "new_stop_id": shape["id"], "stop_price": pos.stop_price,
+                "data_source": "qhm_owner_app_buy", "score": 0, "mri_level": "N/A",
+            }
+            with open(_ROOT / "logs" / "trade_events.jsonl", "a") as handle:
+                handle.write(json.dumps(event) + "\n")
+        except Exception as exc:
+            logger.warning("QHM %s owner-buy event write failed: %s", pos.symbol, exc)
+        self._alert(
+            f"✅ {pos.symbol} manual buy assigned to QHM: {expected} shares at ${avg:.2f} average; "
+            f"the broker stop now covers all {expected} at ${pos.stop_price:.2f}."
+        )
+        logger.warning(
+            "QHM %s owner-buy adopted: %d→%d avg=%.6f stop=%s→%s @ %.2f orders=%s",
+            pos.symbol, baseline, expected, avg, old_stop_id, shape["id"], pos.stop_price, order_ids,
+        )
+        return True
+
+    def _owner_add_terminal_fill(
+        self, pos: HoldPosition, broker_qty: int, live_position: object
+    ) -> bool:
+        """Commit a staged owner buy when its old/replacement stop filled meanwhile."""
+        stage = pos.owner_add_stage
+        if not isinstance(stage, dict) or broker_qty < 0:
+            return False
+        values = self._owner_add_stage_values(stage, pos.symbol)
+        if values is None:
+            return False
+        expected = values["expected"]
+        baseline = values["baseline"]
+        stop_baseline = values["stop_baseline"]
+        replacement_coid = values["replacement_coid"]
+        old_stop_id = values["old_stop_id"]
+        from execution import broker as broker_api
+
+        # Fixed-size proof: at most the old order, the durable replacement ID,
+        # the existing recovery ID, and one direct replaced_by descendant are
+        # fetched. There is no loop, recursive traversal, or retry in this method.
+        candidates: list[object] = []
+        old = broker_api.get_order(old_stop_id, nested=False)
+        replacement = broker_api.get_order_by_client_order_id(replacement_coid)
+        recovery_coid = str(pos.stop_recovery_client_order_id or "")
+        recovery = (
+            broker_api.get_order_by_client_order_id(recovery_coid)
+            if recovery_coid else None
+        )
+        if replacement is None and old is not None:
+            old_status_raw = getattr(old, "status", "")
+            old_status = str(
+                getattr(old_status_raw, "value", old_status_raw)
+            ).lower().split(".")[-1]
+            replaced_by = str(getattr(old, "replaced_by", "") or "")
+            if old_status == "replaced" or replaced_by:
+                if not replaced_by:
+                    return False
+                descendant = broker_api.get_order(replaced_by, nested=False)
+                if (
+                    descendant is None
+                    or str(getattr(descendant, "client_order_id", "") or "")
+                    != replacement_coid
+                ):
+                    return False
+                replacement = descendant
+        if replacement is not None:
+            candidates.append(replacement)
+        if recovery is not None and all(
+            str(getattr(existing, "id", "") or "")
+            != str(getattr(recovery, "id", "") or "")
+            for existing in candidates
+        ):
+            candidates.append(recovery)
+        for order in candidates:
+            status_raw = getattr(order, "status", "")
+            status = str(getattr(status_raw, "value", status_raw)).lower().split(".")[-1]
+            # A replacement descendant that has itself been replaced is not
+            # terminal proof.  Keep the durable stage and wait for the broker's
+            # open-order book to expose the current leaf on a later cycle; do not
+            # make an unbounded network walk while holding symbol_order_gate.
+            if status == "replaced" and str(getattr(order, "id", "") or "") != old_stop_id:
+                return False
+        if old is not None and all(
+            str(getattr(existing, "id", "") or "")
+            != str(getattr(old, "id", "") or "")
+            for existing in candidates
+        ):
+            candidates.append(old)
+        # Once a replacement exists, both identities must be readable.  Otherwise a
+        # partial fill on the replaced ancestor could be silently discarded.
+        if replacement is not None and old is None:
+            return False
+        terminal_states = {"filled", "canceled", "cancelled", "expired", "replaced"}
+        stopped = 0
+        terminal_ids: list[str] = []
+        for order in candidates:
+            symbol = str(getattr(order, "symbol", "") or "").upper()
+            coid = str(getattr(order, "client_order_id", "") or "")
+            side_raw = getattr(order, "side", "")
+            side = str(getattr(side_raw, "value", side_raw)).lower()
+            type_raw = getattr(order, "type", "")
+            order_type = str(getattr(type_raw, "value", type_raw)).lower()
+            tif_raw = getattr(order, "time_in_force", "")
+            tif = str(getattr(tif_raw, "value", tif_raw)).lower()
+            status_raw = getattr(order, "status", "")
+            status = str(getattr(status_raw, "value", status_raw)).lower()
+            submitted = self._whole_share_qty(getattr(order, "qty", None))
+            filled = self._whole_share_qty(getattr(order, "filled_qty", None))
+            order_id = str(getattr(order, "id", "") or "")
+            expected_submitted = (
+                stop_baseline if order_id == old_stop_id else expected
+            )
+            if (
+                symbol != pos.symbol.upper()
+                or not coid.startswith("QH-")
+                or side != "sell"
+                or "stop" not in order_type
+                or tif != "gtc"
+                or status not in terminal_states
+                or submitted != expected_submitted
+                or filled is None
+                or filled < 0
+                or filled > expected_submitted
+                or (status == "filled" and filled != expected_submitted)
+            ):
+                return False
+            stopped += filled
+            if filled > 0:
+                terminal_ids.append(str(getattr(order, "id", "") or ""))
+        # Aggregate every readable fill across the replaced ancestor and direct
+        # replacement, then require the broker's current net position to equal that
+        # exact projection. This permits split fills without guessing which order
+        # produced the remaining shares; any missing or double-counted fill fails.
+        if not candidates or stopped <= 0 or expected - stopped != broker_qty:
+            return False
+        terminal_id = "+".join(sorted(value for value in terminal_ids if value))
+        if not terminal_id:
+            self._owner_add_page(pos, "terminal stop fill has no durable broker order id")
+            return False
+        try:
+            broker_avg = float(getattr(live_position, "avg_entry_price", 0) or 0)
+        except (TypeError, ValueError):
+            broker_avg = 0.0
+        live_side = str(
+            getattr(getattr(live_position, "side", ""), "value", None)
+            or getattr(live_position, "side", "")
+        ).lower()
+        if broker_qty > 0 and live_side not in ("long", "position_side.long"):
+            return False
+        if broker_qty > 0 and (not math.isfinite(broker_avg) or broker_avg <= 0):
+            self._owner_add_page(pos, "residual broker average cost is unreadable")
+            return False
+        if broker_qty <= 0:
+            broker_avg = values["broker_avg"]
+        if stage.get("phase") != "TERMINAL_OWNERSHIP_COMMITTING":
+            stage["phase"] = "TERMINAL_OWNERSHIP_COMMITTING"
+            pos.updated_at = self._now_et().isoformat()
+            if not self._save_state():
+                self._owner_add_page(pos, "terminal ownership-commit phase did not persist")
+                return False
+        from execution.ownership_guard import apply_authorized_owner_buy_assignment
+        if not apply_authorized_owner_buy_assignment(
+            symbol=pos.symbol,
+            order_qty_by_id=dict(values["order_qty_by_id"]),
+            filled_qty=values["delta"],
+            baseline_qty=baseline,
+            fresh_net=broker_qty,
+            broker_avg=broker_avg,
+            terminal_stop_fill_qty=stopped,
+            terminal_stop_id=terminal_id,
+        ):
+            self._owner_add_page(pos, "terminal stop fill could not be committed to ownership")
+            return False
+        previous = pos.to_dict()
+        pos.qty_filled = broker_qty
+        pos.qty_total = broker_qty
+        pos.avg_entry_price = broker_avg
+        pos.stop_order_id = None
+        pos.owner_add_stage = None
+        pos.owner_add_baseline_qty = broker_qty if broker_qty > 0 else None
+        pos.owner_add_proven_at = datetime.now(timezone.utc).isoformat() if broker_qty > 0 else None
+        pos.qty_proven_at = pos.owner_add_proven_at
+        pos.state = HoldState.PENDING_STOP_REPLACE if broker_qty > 0 else HoldState.CLOSED
+        pos.closed_reason = None if broker_qty > 0 else "qhm_stop_out"
+        pos.updated_at = self._now_et().isoformat()
+        if not self._save_state():
+            restored = HoldPosition.from_dict(previous)
+            self._positions[pos.symbol] = restored
+            self._owner_add_page(restored, "terminal stop-fill state did not persist")
+            return False
+        if broker_qty <= 0:
+            _deregister_symbol(pos.symbol)
+            try:
+                hold_days = 0
+                if pos.entry_day:
+                    hold_days = (
+                        self._now_et().date() - date.fromisoformat(pos.entry_day)
+                    ).days
+                event = {
+                    "ts": datetime.now(PT).isoformat(),
+                    "event": "exit",
+                    "exit_reason": "qhm_stop_out",
+                    "symbol": pos.symbol,
+                    "price": None,
+                    "price_pending": True,
+                    "size": stopped,
+                    "mri_level": "N/A",
+                    "score": 0,
+                    "data_source": "qhm_stop_out",
+                    "hold_days": hold_days,
+                    "pdt_used": 0,
+                    "stop_order_id": terminal_id,
+                }
+                with open(_ROOT / "logs" / "trade_events.jsonl", "a") as handle:
+                    handle.write(json.dumps(event) + "\n")
+            except Exception as exc:
+                logger.warning(
+                    "QuarterlyHoldManager: terminal owner-add exit event failed for %s: %s",
+                    pos.symbol,
+                    exc,
+                )
+        else:
+            stop = self._recover_or_submit_stop(
+                pos, broker_qty, "sell", float(stage["stop_price"])
+            )
+            shape = self._qh_stop_shape(stop, pos) if stop is not None else None
+            if shape is not None and shape["remaining"] == broker_qty:
+                pos.stop_order_id = shape["id"]
+                pos.stop_price = shape["stop_price"]
+                pos.state = HoldState.ACTIVE
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+            else:
+                self._stop_coverage_pending(
+                    pos, "owner-add stop filled and residual replacement is unconfirmed"
+                )
+        self._alert(
+            f"📊 {pos.symbol} manual buy was assigned to QHM, then its QHM stop sold "
+            f"{stopped} share(s); {broker_qty} QHM share(s) remain."
+        )
+        return True
+
+    def _recover_owner_add_stage(self, pos: HoldPosition) -> bool:
+        """Resume a fsynced owner-add transaction. True only when fully committed."""
+        stage = pos.owner_add_stage
+        if not isinstance(stage, dict):
+            return False
+        values = self._owner_add_stage_values(stage, pos.symbol)
+        if values is None:
+            self._owner_add_page(pos, "staged adoption is malformed")
+            return False
+        expected = values["expected"]
+        baseline = values["baseline"]
+        stop_baseline = values["stop_baseline"]
+        candidate = values["stop_price"]
+        replacement_coid = values["replacement_coid"]
+        delta = values["delta"]
+        broker_avg = values["broker_avg"]
+        from execution.order_admission import symbol_order_gate
+        if stage.get("phase") == "ABORTING":
+            # A durable abandon decision is monotonic.  A restart may resume only
+            # containment; it must never fall back into stop expansion/assignment.
+            with symbol_order_gate(pos.symbol):
+                self._contain_owner_add_stage(
+                    pos,
+                    0,
+                    str(
+                        stage.get("containment_reason")
+                        or "interrupted containment"
+                    ),
+                )
+            return False
+        from execution import broker as broker_api
+        with symbol_order_gate(pos.symbol):
+            try:
+                live = self.broker.get_position(pos.symbol)
+            except Exception as exc:
+                self._owner_add_page(pos, f"broker position unreadable: {exc}")
+                return False
+            broker_qty = 0 if live is None else self._whole_share_qty(getattr(live, "qty", None))
+            live_side = "" if live is None else str(
+                getattr(getattr(live, "side", ""), "value", None)
+                or getattr(live, "side", "")
+            ).lower()
+            if broker_qty is None:
+                self._owner_add_page(pos, "broker quantity is not whole-share evidence")
+                return False
+            if broker_qty > 0 and live_side not in ("long", "position_side.long"):
+                self._contain_owner_add_stage(pos, 0, "broker position is no longer long")
+                return False
+            book = self._owner_add_orders(pos.symbol)
+            if book is None:
+                self._owner_add_page(pos, "open orders unreadable")
+                return False
+            qh_sells = [order for order in book
+                        if str(getattr(order, "client_order_id", "") or "").startswith("QH-")
+                        and str(getattr(getattr(order, "side", ""), "value", getattr(order, "side", ""))).lower() == "sell"]
+            foreign = [order for order in book if order not in qh_sells]
+            # A list endpoint that omits a live replacement descendant is not proof
+            # that the descendant vanished.  Resolve the durable replacement identity
+            # directly before any path may cancel/restore stops.  Contradictory list
+            # and direct reads preserve the stage; they never authorize another sell.
+            replacement_terminal_zero = False
+            if str(stage.get("phase") or "") != "STAGED" and not any(
+                str(getattr(order, "client_order_id", "") or "") == replacement_coid
+                for order in qh_sells
+            ):
+                direct = broker_api.get_order_by_client_order_id(replacement_coid)
+                if direct is None:
+                    ancestor = broker_api.get_order(str(stage["old_stop_id"]), nested=False)
+                    replaced_by = "" if ancestor is None else str(
+                        getattr(ancestor, "replaced_by", "") or ""
+                    )
+                    if replaced_by:
+                        descendant = broker_api.get_order(replaced_by, nested=False)
+                        if (
+                            descendant is not None
+                            and str(getattr(descendant, "client_order_id", "") or "")
+                            == replacement_coid
+                        ):
+                            direct = descendant
+                if direct is not None:
+                    status_raw = getattr(direct, "status", "")
+                    direct_status = str(
+                        getattr(status_raw, "value", status_raw)
+                    ).lower().split(".")[-1]
+                    if direct_status == "replaced":
+                        self._owner_add_page(
+                            pos, "replacement descendant changed again; waiting for a fresh broker book"
+                        )
+                        return False
+                    if direct_status not in {
+                        "filled", "canceled", "cancelled", "expired",
+                    }:
+                        self._owner_add_page(
+                            pos, "direct replacement is live but omitted from the open-order book"
+                        )
+                        return False
+                    direct_side_raw = getattr(direct, "side", "")
+                    direct_side = str(
+                        getattr(direct_side_raw, "value", direct_side_raw)
+                    ).lower()
+                    direct_type_raw = getattr(direct, "type", "")
+                    direct_type = str(
+                        getattr(direct_type_raw, "value", direct_type_raw)
+                    ).lower()
+                    direct_tif_raw = getattr(direct, "time_in_force", "")
+                    direct_tif = str(
+                        getattr(direct_tif_raw, "value", direct_tif_raw)
+                    ).lower()
+                    direct_qty = self._whole_share_qty(getattr(direct, "qty", None))
+                    direct_filled = self._whole_share_qty(
+                        getattr(direct, "filled_qty", None)
+                    )
+                    replacement_terminal_zero = (
+                        direct_status in {"canceled", "cancelled", "expired"}
+                        and str(getattr(direct, "symbol", "") or "").upper()
+                        == pos.symbol.upper()
+                        and str(getattr(direct, "client_order_id", "") or "")
+                        == replacement_coid
+                        and direct_side == "sell"
+                        and "stop" in direct_type
+                        and direct_tif == "gtc"
+                        and direct_qty == expected
+                        and direct_filled == 0
+                    )
+            if foreign:
+                committing = bool(stage.get("ownership_projection_started")) or str(
+                    stage.get("phase") or ""
+                ) in {
+                    "OWNERSHIP_COMMITTING", "TERMINAL_OWNERSHIP_COMMITTING",
+                }
+                nonreducing = all(
+                    str(
+                        getattr(
+                            getattr(order, "side", ""),
+                            "value",
+                            getattr(order, "side", ""),
+                        )
+                    ).lower() == "buy"
+                    for order in foreign
+                )
+                if committing and not nonreducing:
+                    self._owner_add_page(
+                        pos, "a foreign live order appeared after ownership commit began"
+                    )
+                    return False
+                if not committing:
+                    self._contain_owner_add_stage(
+                        pos, broker_qty, "a foreign live order appeared during adoption"
+                    )
+                    return False
+            if broker_qty != expected:
+                if broker_qty < expected and self._owner_add_terminal_fill(
+                    pos, broker_qty, live
+                ):
+                    return True
+                self._contain_owner_add_stage(pos, broker_qty, "position moved during manual-add recovery")
+                return False
+            if (
+                stage.get("phase") == "OWNERSHIP_COMMITTING"
+                and not qh_sells
+            ):
+                if not replacement_terminal_zero:
+                    self._owner_add_page(
+                        pos, "verified replacement vanished without exact terminal proof"
+                    )
+                    return False
+                try:
+                    pre_submit = self.broker.get_position(pos.symbol)
+                except Exception as exc:
+                    self._owner_add_page(
+                        pos, f"pre-recovery broker position unreadable: {exc}"
+                    )
+                    return False
+                pre_submit_qty = (
+                    0 if pre_submit is None
+                    else self._whole_share_qty(getattr(pre_submit, "qty", None))
+                )
+                pre_submit_side = "" if pre_submit is None else str(
+                    getattr(getattr(pre_submit, "side", ""), "value", None)
+                    or getattr(pre_submit, "side", "")
+                ).lower()
+                if (
+                    pre_submit_qty != expected
+                    or pre_submit_side not in ("long", "position_side.long")
+                ):
+                    self._owner_add_page(
+                        pos, "position changed before full-stop recovery"
+                    )
+                    return False
+                from execution.ownership_guard import (
+                    apply_authorized_owner_buy_assignment,
+                )
+                if not apply_authorized_owner_buy_assignment(
+                    pos.symbol,
+                    dict(stage["order_qty_by_id"]),
+                    delta,
+                    baseline,
+                    expected,
+                    broker_avg,
+                ):
+                    self._owner_add_page(
+                        pos, "interrupted ownership projection could not be completed"
+                    )
+                    return False
+                pos.stop_order_id = None
+                pos.state = HoldState.PENDING_STOP_REPLACE
+                recovered = self._recover_or_submit_stop(
+                    pos, expected, "sell", candidate,
+                    reject_foreign_reducers=True,
+                )
+                recovered_shape = (
+                    self._qh_stop_shape(recovered, pos)
+                    if recovered is not None else None
+                )
+                if (
+                    recovered_shape is None
+                    or recovered_shape["remaining"] != expected
+                    or round(recovered_shape["stop_price"], 2) != round(candidate, 2)
+                ):
+                    self._owner_add_page(
+                        pos, "full QHM stop recovery after ownership commit is unconfirmed"
+                    )
+                    return False
+                try:
+                    after_recovery = self.broker.get_position(pos.symbol)
+                except Exception as exc:
+                    self._owner_add_page(
+                        pos, f"post-recovery broker position unreadable: {exc}"
+                    )
+                    return False
+                after_recovery_qty = (
+                    0 if after_recovery is None
+                    else self._whole_share_qty(getattr(after_recovery, "qty", None))
+                )
+                after_recovery_side = "" if after_recovery is None else str(
+                    getattr(getattr(after_recovery, "side", ""), "value", None)
+                    or getattr(after_recovery, "side", "")
+                ).lower()
+                if after_recovery_qty is None:
+                    self._owner_add_page(
+                        pos, "post-recovery broker quantity is unreadable"
+                    )
+                    return False
+                if after_recovery_side not in ("long", "position_side.long"):
+                    self._owner_add_page(
+                        pos, "position changed after full-stop recovery"
+                    )
+                    return False
+                if after_recovery_qty > expected:
+                    from execution.manual_sale_proof import prove_owner_buy
+
+                    proof_since = str(stage.get("proof_since") or "")
+                    expanded = prove_owner_buy(
+                        pos.symbol,
+                        proof_since,
+                        baseline,
+                        after_recovery_qty,
+                        orders_from_iso=self._orders_from_iso(pos),
+                    )
+                    old_orders = dict(stage["order_qty_by_id"])
+                    if (
+                        not expanded.proven
+                        or expanded.bought_qty != after_recovery_qty - baseline
+                        or any(
+                            expanded.order_qty_by_id.get(oid) != order_qty
+                            for oid, order_qty in old_orders.items()
+                        )
+                        or set(expanded.order_ids)
+                        & set(pos.owner_add_blocked_order_ids)
+                    ):
+                        self._owner_add_page(
+                            pos,
+                            "position increased after stop recovery without exact owner-buy proof",
+                        )
+                        return False
+                    try:
+                        expanded_avg = float(
+                            getattr(after_recovery, "avg_entry_price", 0) or 0
+                        )
+                    except (TypeError, ValueError):
+                        expanded_avg = 0.0
+                    if not math.isfinite(expanded_avg) or expanded_avg <= 0:
+                        self._owner_add_page(
+                            pos, "expanded owner-buy average is unreadable"
+                        )
+                        return False
+                    previous = pos.to_dict()
+                    pos.owner_add_stage = {
+                        "phase": "STAGED",
+                        "baseline_qty": baseline,
+                        "stop_baseline_qty": expected,
+                        "ownership_projection_started": True,
+                        "committed_qty": expected,
+                        "expected_qty": after_recovery_qty,
+                        "delta_qty": after_recovery_qty - baseline,
+                        "broker_avg": expanded_avg,
+                        "old_stop_id": recovered_shape["id"],
+                        "old_stop_price": recovered_shape["stop_price"],
+                        "stop_price": round(candidate, 2),
+                        "replacement_client_order_id": (
+                            _owner_add_replacement_coid(pos.symbol)
+                        ),
+                        "order_qty_by_id": dict(expanded.order_qty_by_id),
+                        "proof_since": proof_since,
+                        "created_at": stage.get("created_at")
+                        or datetime.now(timezone.utc).isoformat(),
+                    }
+                    pos.stop_order_id = recovered_shape["id"]
+                    pos.stop_price = recovered_shape["stop_price"]
+                    pos.stop_recovery_client_order_id = None
+                    pos.stop_recovery_intended_qty = None
+                    pos.state = HoldState.PENDING_STOP_REPLACE
+                    pos.updated_at = self._now_et().isoformat()
+                    if not self._save_state():
+                        self._positions[pos.symbol] = HoldPosition.from_dict(previous)
+                        self._owner_add_page(
+                            self._positions[pos.symbol],
+                            "expanded owner-buy stage did not persist",
+                        )
+                    return False
+                if after_recovery_qty != expected:
+                    self._owner_add_page(
+                        pos, "position changed after full-stop recovery"
+                    )
+                    return False
+                return self._finish_owner_add_stage(pos, recovered)
+            exact_coids = {replacement_coid}
+            if (
+                stage.get("phase") == "OWNERSHIP_COMMITTING"
+                and pos.stop_recovery_client_order_id
+            ):
+                exact_coids.add(str(pos.stop_recovery_client_order_id))
+            exact = [order for order in qh_sells
+                     if str(getattr(order, "client_order_id", "") or "") in exact_coids
+                     and (self._qh_stop_shape(order, pos) or {}).get("remaining") == expected
+                     and round(float((self._qh_stop_shape(order, pos) or {}).get("stop_price", -1)), 2)
+                     == round(candidate, 2)]
+            if len(qh_sells) == 1 and len(exact) == 1:
+                return self._finish_owner_add_stage(pos, exact[0])
+            old = [order for order in qh_sells
+                   if str(getattr(order, "id", "") or "") == str(stage["old_stop_id"])]
+            if len(qh_sells) != 1 or len(old) != 1:
+                self._contain_owner_add_stage(pos, broker_qty, "replacement descendants are ambiguous")
+                return False
+            old_shape = self._qh_stop_shape(old[0], pos)
+            if old_shape is None or old_shape["remaining"] != stop_baseline:
+                self._contain_owner_add_stage(pos, broker_qty, "baseline stop shape changed")
+                return False
+            stage["phase"] = "PATCH_ATTEMPTED"
+            if not self._save_state():
+                self._owner_add_page(pos, "PATCH phase did not persist")
+                return False
+            replacement = broker_api.replace_stop_order(
+                pos.symbol, old_shape["id"], candidate, qty=expected,
+                client_order_id=replacement_coid,
+            )
+            if replacement is None:
+                self._owner_add_page(pos, "atomic stop replacement is unconfirmed")
+                return False
+            # Always verify from a fresh complete book; never trust only the PATCH response.
+            fresh = self._owner_add_orders(pos.symbol)
+            if fresh is None:
+                self._owner_add_page(pos, "post-PATCH order book unreadable")
+                return False
+            qh_fresh = [order for order in fresh
+                        if str(getattr(order, "client_order_id", "") or "").startswith("QH-")
+                        and str(getattr(getattr(order, "side", ""), "value", getattr(order, "side", ""))).lower() == "sell"]
+            foreign_fresh = [order for order in fresh if order not in qh_fresh]
+            exact_fresh = [order for order in qh_fresh
+                           if str(getattr(order, "client_order_id", "") or "") == replacement_coid
+                           and (self._qh_stop_shape(order, pos) or {}).get("remaining") == expected
+                           and round(float((self._qh_stop_shape(order, pos) or {}).get("stop_price", -1)), 2)
+                           == round(candidate, 2)]
+            try:
+                live_after = self.broker.get_position(pos.symbol)
+                qty_after = 0 if live_after is None else self._whole_share_qty(getattr(live_after, "qty", None))
+                side_after = "" if live_after is None else str(
+                    getattr(getattr(live_after, "side", ""), "value", None)
+                    or getattr(live_after, "side", "")
+                ).lower()
+            except Exception as exc:
+                self._owner_add_page(pos, f"post-PATCH broker position unreadable: {exc}")
+                return False
+            if qty_after is None:
+                self._owner_add_page(pos, "post-PATCH broker quantity is unreadable")
+                return False
+            if qty_after > 0 and side_after not in ("long", "position_side.long"):
+                self._contain_owner_add_stage(pos, 0, "post-PATCH broker position is no longer long")
+                return False
+            if qty_after != expected or foreign_fresh or len(qh_fresh) != 1 or len(exact_fresh) != 1:
+                self._contain_owner_add_stage(
+                    pos, qty_after, "post-PATCH broker/order state changed"
+                )
+                return False
+            return self._finish_owner_add_stage(pos, exact_fresh[0])
+
+    def _maybe_owner_buy_adoption(self, pos: HoldPosition) -> bool:
+        """Detect or recover an owner app/web buy. True fences ordinary QHM work this cycle."""
+        if self.dry_run or pos.direction != "long":
+            return False
+        if pos.owner_add_stage is not None:
+            try:
+                self._recover_owner_add_stage(pos)
+            except Exception as exc:
+                # The durable stage keeps this symbol fenced. A surprise broker or
+                # persistence exception must not abort startup/the per-symbol loop or
+                # let ordinary stop logic run against a half-adopted position.
+                logger.exception(
+                    "QHM %s owner-buy recovery raised; durable fence retained",
+                    pos.symbol,
+                )
+                self._owner_add_page(pos, f"recovery raised: {exc}")
+            return True
+        baseline = pos.owner_add_baseline_qty
+        since = pos.owner_add_proven_at
+        if baseline is None or not since or baseline != pos.qty_filled:
+            return False
+        try:
+            live = self.broker.get_position(pos.symbol)
+            if live is None:
+                return False
+            broker_qty = self._whole_share_qty(getattr(live, "qty", None))
+            side = str(getattr(getattr(live, "side", ""), "value", getattr(live, "side", ""))).lower()
+            avg = float(getattr(live, "avg_entry_price", 0) or 0)
+            current = float(getattr(live, "current_price", 0) or 0)
+            if (broker_qty is None or broker_qty <= baseline
+                    or side not in ("long", "position_side.long")
+                    or not math.isfinite(avg) or avg <= 0
+                    or not math.isfinite(current) or current <= 0):
+                return False
+            from execution.manual_sale_proof import prove_owner_buy
+            proof = prove_owner_buy(
+                pos.symbol, since, baseline, broker_qty,
+                orders_from_iso=self._orders_from_iso(pos),
+            )
+            logger.warning(
+                "QHM %s owner-buy check: proven=%s reason=%s orders=%s",
+                pos.symbol, proof.proven, proof.reason, proof.order_ids,
+            )
+            if not proof.proven:
+                return False
+            if set(proof.order_ids) & set(pos.owner_add_blocked_order_ids):
+                return False
+            from execution.order_admission import symbol_order_gate
+            with symbol_order_gate(pos.symbol):
+                live2 = self.broker.get_position(pos.symbol)
+                qty2 = self._whole_share_qty(getattr(live2, "qty", None)) if live2 is not None else None
+                side2 = "" if live2 is None else str(
+                    getattr(getattr(live2, "side", ""), "value", None)
+                    or getattr(live2, "side", "")
+                ).lower()
+                avg2 = float(getattr(live2, "avg_entry_price", 0) or 0) if live2 is not None else 0.0
+                current2 = float(getattr(live2, "current_price", 0) or 0) if live2 is not None else 0.0
+                if (
+                    qty2 != broker_qty
+                    or side2 not in ("long", "position_side.long")
+                    or not math.isfinite(avg2)
+                    or avg2 <= 0
+                    or avg2 != avg
+                    or not math.isfinite(current2)
+                    or current2 <= 0
+                ):
+                    return False
+                proof2 = prove_owner_buy(
+                    pos.symbol,
+                    since,
+                    baseline,
+                    qty2,
+                    orders_from_iso=self._orders_from_iso(pos),
+                )
+                if (
+                    not proof2.proven
+                    or proof2.bought_qty != proof.bought_qty
+                    or proof2.order_qty_by_id != proof.order_qty_by_id
+                    or set(proof2.order_ids) & set(pos.owner_add_blocked_order_ids)
+                ):
+                    return False
+                proof = proof2
+                orders = self._owner_add_orders(pos.symbol)
+                if orders is None or len(orders) != 1:
+                    return False
+                shape = self._qh_stop_shape(orders[0], pos)
+                if (shape is None or shape["id"] != str(pos.stop_order_id or "")
+                        or shape["remaining"] != baseline):
+                    return False
+                design = self._design_stop_price(pos.symbol, avg2)
+                if design is None:
+                    return False
+                try:
+                    design_price = float(design)
+                except (TypeError, ValueError):
+                    return False
+                if not math.isfinite(design_price) or design_price <= 0:
+                    return False
+                candidate = max(float(shape["stop_price"]), design_price)
+                if not math.isfinite(candidate) or candidate <= 0 or candidate >= current2:
+                    return False
+                replacement_coid = _owner_add_replacement_coid(pos.symbol)
+                pos.owner_add_stage = {
+                    "phase": "STAGED", "baseline_qty": baseline,
+                    "stop_baseline_qty": baseline,
+                    "expected_qty": broker_qty, "delta_qty": broker_qty - baseline,
+                    "broker_avg": avg2, "old_stop_id": shape["id"],
+                    "old_stop_price": shape["stop_price"], "stop_price": round(candidate, 2),
+                    "replacement_client_order_id": replacement_coid,
+                    "order_qty_by_id": dict(proof.order_qty_by_id),
+                    "proof_since": since, "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                pos.updated_at = self._now_et().isoformat()
+                if not self._save_state():
+                    pos.owner_add_stage = None
+                    return False
+            self._recover_owner_add_stage(pos)
+            return True
+        except Exception as exc:
+            logger.warning("QHM %s owner-buy adoption check failed: %s", pos.symbol, exc)
+            return False
 
     @staticmethod
     def _whole_share_qty(value: Any) -> Optional[int]:
@@ -5168,6 +6291,104 @@ class QuarterlyHoldManager:
         if not math.isfinite(number) or not number.is_integer():
             return None
         return int(number)
+
+    @classmethod
+    def _owner_add_stage_values(
+        cls, stage: object, symbol: str
+    ) -> Optional[dict[str, Any]]:
+        """Strictly parse a durable owner-add stage before any broker mutation."""
+        if not isinstance(stage, dict):
+            return None
+        baseline = cls._whole_share_qty(stage.get("baseline_qty"))
+        expected = cls._whole_share_qty(stage.get("expected_qty"))
+        delta = cls._whole_share_qty(stage.get("delta_qty"))
+        stop_baseline = cls._whole_share_qty(
+            stage.get("stop_baseline_qty", baseline)
+        )
+        try:
+            if isinstance(stage.get("broker_avg"), bool):
+                return None
+            broker_avg = float(stage["broker_avg"])
+            if isinstance(stage.get("stop_price"), bool):
+                return None
+            stop_price = float(stage["stop_price"])
+            old_stop_raw = stage["old_stop_price"]
+            if isinstance(old_stop_raw, bool):
+                return None
+            old_stop_price = float(old_stop_raw)
+        except (KeyError, TypeError, ValueError):
+            return None
+        replacement_raw = stage.get("replacement_client_order_id")
+        old_stop_raw = stage.get("old_stop_id")
+        if (
+            not isinstance(replacement_raw, str)
+            or replacement_raw != replacement_raw.strip()
+            or not isinstance(old_stop_raw, str)
+            or old_stop_raw != old_stop_raw.strip()
+        ):
+            return None
+        replacement_coid = replacement_raw
+        old_stop_id = old_stop_raw
+        phase = stage.get("phase")
+        valid_phases = {
+            "STAGED", "PATCH_ATTEMPTED", "OWNERSHIP_COMMITTING",
+            "TERMINAL_OWNERSHIP_COMMITTING", "ABORTING",
+        }
+        expected_coid = re.compile(
+            rf"^QH-{re.escape(str(symbol).upper())}-s-\d{{13}}-[0-9a-f]{{8}}$"
+        )
+        order_qty_by_id = stage.get("order_qty_by_id")
+        strict_order_qty: dict[str, int] = {}
+        if isinstance(order_qty_by_id, dict):
+            for order_id, raw_qty in order_qty_by_id.items():
+                parsed_qty = cls._whole_share_qty(raw_qty)
+                if (
+                    not isinstance(order_id, str)
+                    or not order_id
+                    or order_id != order_id.strip()
+                    or parsed_qty is None
+                    or parsed_qty <= 0
+                ):
+                    return None
+                strict_order_qty[order_id] = parsed_qty
+        if (
+            baseline is None
+            or expected is None
+            or delta is None
+            or stop_baseline is None
+            or baseline <= 0
+            or delta <= 0
+            or expected != baseline + delta
+            or stop_baseline <= 0
+            or stop_baseline > expected
+            or not math.isfinite(broker_avg)
+            or broker_avg <= 0
+            or not math.isfinite(stop_price)
+            or stop_price <= 0
+            or not math.isfinite(old_stop_price)
+            or old_stop_price <= 0
+            or not replacement_coid
+            or not old_stop_id
+            or phase not in valid_phases
+            or expected_coid.fullmatch(replacement_coid) is None
+            or not isinstance(order_qty_by_id, dict)
+            or not order_qty_by_id
+            or len(strict_order_qty) != len(order_qty_by_id)
+            or sum(strict_order_qty.values()) != delta
+        ):
+            return None
+        return {
+            "baseline": baseline,
+            "expected": expected,
+            "delta": delta,
+            "stop_baseline": stop_baseline,
+            "broker_avg": broker_avg,
+            "stop_price": stop_price,
+            "old_stop_price": old_stop_price,
+            "replacement_coid": replacement_coid,
+            "old_stop_id": old_stop_id,
+            "order_qty_by_id": strict_order_qty,
+        }
 
     def _live_covering_qhm_stop(self, pos: HoldPosition, qty: int):
         """Return a confirmed live QHM reducing stop covering qty, else None."""
@@ -5392,6 +6613,8 @@ class QuarterlyHoldManager:
         qty: int,
         side: str,
         stop_price: float,
+        *,
+        reject_foreign_reducers: bool = False,
     ) -> Optional[object]:
         """Recover one exact stop intent or submit it once, broker-idempotently.
 
@@ -5515,7 +6738,8 @@ class QuarterlyHoldManager:
                 # The consumed intent is durably retired.  Re-enter once to
                 # persist a new ID and protect the proven residual quantity.
                 return self._recover_or_submit_stop(
-                    pos, residual_qty, side, stop_price
+                    pos, residual_qty, side, stop_price,
+                    reject_foreign_reducers=reject_foreign_reducers,
                 )
             shape = self._qh_stop_shape(recovered, pos)
             if (shape is None or not shape["id"]
@@ -5551,6 +6775,20 @@ class QuarterlyHoldManager:
                 pos, "QH stop appeared before recovery submit"
             )
             return None
+        if reject_foreign_reducers:
+            nonreducing_side = "buy" if side == "sell" else "sell"
+            for order in fresh_book:
+                if str(getattr(order, "symbol", "") or "").upper() != pos.symbol.upper():
+                    continue
+                side_raw = getattr(order, "side", "")
+                order_side = str(getattr(side_raw, "value", side_raw)).lower()
+                remaining = self._order_remaining(order)
+                if (remaining is None or remaining > 0) and order_side != nonreducing_side:
+                    self._stop_coverage_pending(
+                        pos,
+                        "foreign reducing or unreadable order appeared before recovery submit",
+                    )
+                    return None
         try:
             return self._dispatcher.submit_gtc_stop(
                 self.broker, pos.symbol, qty, side, stop_price,
@@ -5574,6 +6812,8 @@ class QuarterlyHoldManager:
         order_type = str(getattr(type_raw, "value", type_raw)).lower()
         status_raw = getattr(order, "status", "")
         status = str(getattr(status_raw, "value", status_raw)).lower()
+        tif_raw = getattr(order, "time_in_force", "")
+        tif = str(getattr(tif_raw, "value", tif_raw)).lower()
         qty_raw = getattr(order, "qty", None)
         filled_raw = getattr(order, "filled_qty", None)
         stop_raw = getattr(order, "stop_price", None)
@@ -5591,7 +6831,7 @@ class QuarterlyHoldManager:
                 or not math.isfinite(stop_price) or stop_price <= 0
                 or symbol != pos.symbol.upper() or not coid.startswith("QH-")
                 or side != "sell" or "stop" not in order_type
-                or status not in {"new", "accepted"}):
+                or tif != "gtc" or status not in {"new", "accepted"}):
             return None
         return {
             "id": str(getattr(order, "id", "") or ""),
@@ -5612,6 +6852,8 @@ class QuarterlyHoldManager:
         side = str(getattr(side_raw, "value", side_raw)).lower()
         type_raw = getattr(order, "type", "")
         order_type = str(getattr(type_raw, "value", type_raw)).lower()
+        tif_raw = getattr(order, "time_in_force", "")
+        tif = str(getattr(tif_raw, "value", tif_raw)).lower()
         stop_raw: Any = getattr(order, "stop_price", None)
         try:
             stop_price = float(stop_raw)
@@ -5623,6 +6865,7 @@ class QuarterlyHoldManager:
             and coid.startswith("QH-")
             and side == "sell"
             and "stop" in order_type
+            and tif == "gtc"
             and math.isfinite(stop_price)
             and round(stop_price, 2) == round(float(pos.stop_price), 2)
         )

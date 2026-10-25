@@ -35,12 +35,14 @@ import contextlib
 import fcntl
 import json
 import logging
+import math
 import os
+import stat
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from execution.ownership_ledger_codec import (
     LedgerSchemaError,
@@ -73,6 +75,7 @@ _LEDGER_LOCK_PATH = _ROOT / "data" / "state" / ".ledger.lock"
 # command holds EXCLUSIVE. Unlike the legacy liveness lock, this fence never proceeds
 # unlocked, so schema conversion cannot race any routine writer.
 _LEDGER_MIGRATION_LOCK_PATH = _ROOT / "data" / "state" / ".ledger.migration.lock"
+_OWNER_ASSIGNMENT_PATH = _ROOT / "data" / "state" / "owner_tier_assignments.json"
 # Operator confirmations authorizing a protected-floor DOWN-heal (human-in-the-loop; board
 # 2026-08-08 — automated manual-close-vs-breach distinction is impossible, so the irreversible
 # heal-down direction needs an EXPLICIT, one-shot, expiring operator confirmation written by
@@ -311,8 +314,267 @@ def _ledger_write_lock(timeout_s: float = 5.0):
                 os.close(_fd)
 
 
+@contextlib.contextmanager
+def _strict_ledger_write_lock(timeout_s: float = 5.0):
+    """Cross-process ledger lock that fails closed instead of proceeding unlocked."""
+    _LEDGER_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(
+        str(_LEDGER_LOCK_PATH),
+        os.O_CREAT | os.O_RDWR,
+        stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,
+    )
+    held = False
+    try:
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held = True
+                break
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise LedgerError("strict ledger write-lock timed out") from exc
+                time.sleep(0.1)
+        yield
+    finally:
+        if held:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 class LedgerError(Exception):
     """Raised on a present-but-corrupt ledger — callers must fail closed."""
+
+
+def _load_owner_assignments() -> dict:
+    if not _OWNER_ASSIGNMENT_PATH.exists():
+        return {"schema": 1, "orders": {}}
+    try:
+        data = json.loads(_OWNER_ASSIGNMENT_PATH.read_text())
+    except Exception as exc:
+        raise LedgerError(f"owner assignment journal unreadable: {exc}") from exc
+    if not isinstance(data, dict) or data.get("schema") != 1 or not isinstance(data.get("orders"), dict):
+        raise LedgerError("owner assignment journal schema invalid")
+    for oid, row in data["orders"].items():
+        if (
+            not isinstance(oid, str)
+            or not oid
+            or not isinstance(row, dict)
+            or row.get("tier") != "qhm"
+            or not isinstance(row.get("symbol"), str)
+            or not row["symbol"]
+            or isinstance(row.get("qty"), bool)
+        ):
+            raise LedgerError(f"owner assignment journal row invalid: {oid!r}")
+        try:
+            qty = float(row["qty"])
+        except (TypeError, ValueError) as exc:
+            raise LedgerError(f"owner assignment journal qty invalid: {oid!r}") from exc
+        if not qty.is_integer() or qty <= 0:
+            raise LedgerError(f"owner assignment journal qty invalid: {oid!r}")
+        state = row.get("state", "committed")
+        if state not in ("pending", "committed"):
+            raise LedgerError(f"owner assignment journal state invalid: {oid!r}")
+    return data
+
+
+def _save_owner_assignments(data: dict) -> None:
+    _OWNER_ASSIGNMENT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, indent=2, sort_keys=True, allow_nan=False).encode()
+    tmp = _OWNER_ASSIGNMENT_PATH.with_name(
+        f"{_OWNER_ASSIGNMENT_PATH.name}.{os.getpid()}.tmp"
+    )
+    try:
+        with open(tmp, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, _OWNER_ASSIGNMENT_PATH)
+        dfd = os.open(_OWNER_ASSIGNMENT_PATH.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
+
+
+def apply_authorized_owner_buy_assignment(
+    symbol: str,
+    order_qty_by_id: dict[str, int],
+    filled_qty: int,
+    baseline_qty: int,
+    fresh_net: int,
+    broker_avg: float,
+    terminal_stop_fill_qty: int = 0,
+    terminal_stop_id: str = "",
+) -> bool:
+    """Durably assign proven owner app/web buys to an existing sole QHM lot.
+
+    The assignment journal is written before the immediate ledger projection so a
+    crash can only leave a replayable journal with an older ledger, never the reverse.
+    """
+    sym = str(symbol or "").upper()
+    ids = sorted(str(value) for value in order_qty_by_id if str(value))
+    def _strict_whole(value: Any, *, allow_zero: bool = False) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number) or not number.is_integer():
+            return None
+        parsed = int(number)
+        if parsed < 0 or (parsed == 0 and not allow_zero):
+            return None
+        return parsed
+
+    qty = _strict_whole(filled_qty)
+    baseline = _strict_whole(baseline_qty)
+    net = _strict_whole(fresh_net, allow_zero=True)
+    stopped = _strict_whole(terminal_stop_fill_qty, allow_zero=True)
+    if isinstance(broker_avg, bool):
+        return False
+    try:
+        avg = float(broker_avg)
+    except (TypeError, ValueError):
+        return False
+    if (
+        not sym
+        or qty is None
+        or baseline is None
+        or net is None
+        or stopped is None
+        or len(ids) != len(order_qty_by_id)
+        or stopped > baseline + qty
+        or net != baseline + qty - stopped
+        or (stopped > 0 and not str(terminal_stop_id or "").strip())
+        or not math.isfinite(avg)
+        or avg <= 0
+    ):
+        return False
+    try:
+        with _strict_ledger_write_lock():
+            journal = _load_owner_assignments()
+            exact_qty: dict[str, int] = {}
+            for oid in ids:
+                raw = order_qty_by_id.get(oid)
+                if raw is None or isinstance(raw, bool):
+                    return False
+                try:
+                    value = float(raw)
+                except (TypeError, ValueError):
+                    return False
+                if not value.is_integer() or value <= 0:
+                    return False
+                exact_qty[oid] = int(value)
+            if not ids or sum(exact_qty.values()) != qty:
+                return False
+            ledger = load_ledger()
+            ent = ledger.get("positions", {}).get(sym)
+            # Owner-buy adoption is restricted to an existing, solely-QHM-owned
+            # symbol. A missing or malformed ledger entry fails closed here.
+            if not isinstance(ent, dict):
+                return False
+            tiers = ent.get("tiers", {})
+            current = float(tiers.get("qhm", {}).get("qty", 0.0) or 0.0)
+            total = sum(float(tiers.get(t, {}).get("qty", 0.0) or 0.0) for t in _TIERS)
+            ledger_net = float(ent.get("alpaca_net_qty", 0.0) or 0.0)
+            expected = baseline + qty
+            committed_credit = sum(
+                exact_qty[oid]
+                for oid in ids
+                if isinstance(journal["orders"].get(oid), dict)
+                and journal["orders"][oid].get("state") == "committed"
+                and journal["orders"][oid].get("symbol") == sym
+                and journal["orders"][oid].get("tier") == "qhm"
+                and journal["orders"][oid].get("qty") == exact_qty[oid]
+            )
+            intermediate = baseline + committed_credit
+            final_fill_id = (
+                f"qhm_registered_stop:{terminal_stop_id}"
+                if stopped else "owner_app_buy:" + ",".join(ids)
+            )
+            if not any(abs(ledger_net - value) <= _QTY_EPS
+                       for value in (net, baseline, intermediate, expected)):
+                return False
+            if not any(abs(total - value) <= _QTY_EPS
+                       for value in (net, baseline, intermediate, expected)):
+                return False
+            other = {
+                t: float(tiers.get(t, {}).get("qty", 0.0) or 0.0)
+                for t in _TIERS if t != "qhm"
+            }
+            if any(abs(value) > _QTY_EPS for name, value in other.items() if name != "intraday"):
+                return False
+            intraday = other.get("intraday", 0.0)
+            if not any(abs(intraday - value) <= _QTY_EPS
+                       for value in (0.0, float(qty), float(max(0, qty - stopped)))):
+                return False
+            if abs(current - net) > _QTY_EPS:
+                if not any(abs(current - value) <= _QTY_EPS
+                           for value in (
+                               baseline, baseline - stopped, intermediate, expected
+                           )):
+                    return False
+
+            # Validate the journal and ledger before publishing either mutation. Once
+            # this durable replay key exists, canonical replay is allowed to claim the
+            # exact owner order for QHM, so a rejected co-hold shape must never leave a
+            # journal row behind.
+            for oid in ids:
+                wanted = {"symbol": sym, "tier": "qhm", "qty": exact_qty[oid]}
+                existing = journal["orders"].get(oid)
+                if existing is not None and any(existing.get(k) != v for k, v in wanted.items()):
+                    return False
+                if existing is None:
+                    journal["orders"][oid] = {
+                        **wanted,
+                        "state": "pending",
+                        "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    }
+            _save_owner_assignments(journal)
+            already_final = (
+                abs(current - net) <= _QTY_EPS
+                and abs(total - net) <= _QTY_EPS
+                and abs(ledger_net - net) <= _QTY_EPS
+                and all(
+                    abs(float(tiers.get(t, {}).get("qty", 0.0) or 0.0)) <= _QTY_EPS
+                    for t in _TIERS if t != "qhm"
+                )
+                and str(tiers.get("qhm", {}).get("last_fill_id") or "") == final_fill_id
+            )
+            if not already_final:
+                for tier_name in _TIERS:
+                    if tier_name != "qhm":
+                        tiers[tier_name]["qty"] = 0.0
+                tiers["qhm"]["qty"] = float(net)
+                tiers["qhm"]["avg_cost"] = round(avg, 4)
+                tiers["qhm"]["last_fill_id"] = final_fill_id
+                ent["alpaca_net_qty"] = float(net)
+                ent["drift"] = 0.0
+                save_ledger(ledger)
+            # Only a committed row may change canonical replay attribution.  This
+            # second fsynced publish happens after the ledger projection; if it
+            # fails, the staged QHM transaction retries and promotes the same
+            # idempotent rows.  Containment can therefore abandon a pending row
+            # without canonical replay silently reclaiming the owner's share.
+            for oid in ids:
+                journal["orders"][oid]["state"] = "committed"
+                journal["orders"][oid]["committed_at"] = datetime.now(
+                    timezone.utc
+                ).isoformat()
+            _save_owner_assignments(journal)
+            logger.warning(
+                "authorized owner buy assignment: %s QHM %d→%d orders=%s",
+                sym, baseline, net, ids,
+            )
+            return True
+    except Exception as exc:
+        logger.critical("authorized owner buy assignment failed for %s: %s", sym, exc)
+        return False
 
 
 # ── D-obs: never-raises operator pager ─────────────────────────────────────────
@@ -1138,6 +1400,12 @@ def sync_ledger(
     here (defensive — never assumes the caller sorted). Returns the ledger dict on
     success, or {"healed": False, "reason":..., "shrink":{...}} on a refused replay.
     """
+    try:
+        _owner_assignments = _load_owner_assignments().get("orders", {})
+    except LedgerError as exc:
+        logger.critical("sync_ledger REFUSED — owner assignment journal unreadable: %s", exc)
+        return {"healed": False, "reason": "owner assignment journal unreadable"}
+    _owner_seen: dict[str, float] = {}
     tiers_qty: dict = {}  # symbol -> {tier: net_qty}
     lots: dict = {}  # symbol -> {tier: list[[qty, price]]} open longs, FIFO
     _events = [(_fill_time_key(f), 0, f) for f in (fills or [])]
@@ -1169,6 +1437,22 @@ def sync_ledger(
             _coid = f.get("client_order_id")
         _tagged = tier_of_coid(_coid)
         tier = _tagged or "intraday"
+        _assigned = _owner_assignments.get(str(_oid))
+        if _assigned is not None and _assigned.get("state", "committed") != "committed":
+            _assigned = None
+        if _assigned is not None:
+            if (
+                str(_assigned.get("symbol") or "").upper() != str(sym).upper()
+                or _assigned.get("tier") != "qhm"
+                or side != "buy"
+            ):
+                logger.critical(
+                    "sync_ledger REFUSED — owner assignment %s contradicts fill %s/%s",
+                    _oid, sym, side,
+                )
+                return {"healed": False, "reason": "owner assignment contradicts fill"}
+            tier = "qhm"
+            _owner_seen[str(_oid)] = _owner_seen.get(str(_oid), 0.0) + q
         tq = tiers_qty.setdefault(sym, {})
         # UNTAGGED-SELL RE-ATTRIBUTION (board 2026-08-19, NVDA phantom-short fix): an UNTAGGED sell
         # (no tier coid — e.g. a stop/close on a protected-tier name whose order did not carry the
@@ -1207,6 +1491,18 @@ def sync_ledger(
                 else:
                     lt[0][0] -= rem
                     rem = 0.0
+
+    for _oid, _assignment in _owner_assignments.items():
+        if _assignment.get("state", "committed") != "committed":
+            continue
+        _expected = float(_assignment.get("qty", 0.0) or 0.0)
+        _seen = _owner_seen.get(str(_oid), 0.0)
+        if abs(_seen - _expected) > _QTY_EPS:
+            logger.critical(
+                "sync_ledger REFUSED — owner assignment %s expects %g shares but replay saw %g",
+                _oid, _expected, _seen,
+            )
+            return {"healed": False, "reason": "owner assignment fill missing or incomplete"}
 
     alp = {}
     for p in positions or []:

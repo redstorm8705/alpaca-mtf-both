@@ -66,12 +66,13 @@ def _prepare_real_helper(m):
         p.ambiguous_add_baseline_qty = p.qty_filled
         return True
 
-    def _strict(p, *_args):
-        try:
-            m._resync_from_alpaca(p)
-        except Exception:
-            return None
-        return p.qty_filled
+    def _strict(_p, expected_qty=None, _baseline_qty=None):
+        # The production helper proves the caller's explicitly expected
+        # QHM-owned quantity without absorbing co-held broker inventory.  This
+        # focused fixture has no ownership ledger, so return that expectation
+        # instead of mutating the position through the legacy whole-account
+        # resync stub.  Calls without an expectation retain the local QHM qty.
+        return expected_qty if expected_qty is not None else _p.qty_filled
 
     m._arm_ambiguous_add_recovery = _arm
     m._strict_resync_qty = _strict
@@ -84,6 +85,19 @@ def _fake_allocator_module():
         live_bind=lambda *_a, **_kw: True,
         live_release=lambda *_a, **_kw: True,
         live_order_id=lambda _lease: "QH-NVDA-test",
+    )
+
+
+def _add_order(status="new", filled=0, qty=1, order_id="add-1"):
+    """Complete broker evidence for the exact QHM add used by these fixtures."""
+    return SimpleNamespace(
+        id=order_id,
+        client_order_id="QH-NVDA-test",
+        symbol="NVDA",
+        side="buy",
+        status=status,
+        qty=qty,
+        filled_qty=filled,
     )
 
 
@@ -295,7 +309,7 @@ def _helper_run(pos, fill_qty, raise_to, add_ok=True):
     _prepare_real_helper(m)
     stops = []
     m._dispatcher = SimpleNamespace(
-        submit_limit=lambda *a, **kw: SimpleNamespace(id="add-1") if add_ok else None,
+        submit_limit=lambda *a, **kw: _add_order() if add_ok else None,
         submit_gtc_stop=lambda b, s, q, side, px: stops.append((q, px)) or SimpleNamespace(id="stop-2"))
     m.broker.get_position = lambda s: SimpleNamespace(qty=pos.qty_filled)
 
@@ -303,7 +317,7 @@ def _helper_run(pos, fill_qty, raise_to, add_ok=True):
         p.qty_filled += fill_qty
     m._resync_from_alpaca = _resync  # type: ignore[method-assign]
     fake = SimpleNamespace(is_market_open=lambda: True, cancel_order=lambda oid: True,
-                           get_order=lambda oid: SimpleNamespace(status="filled" if fill_qty else "new", filled_qty=fill_qty),
+                           get_order=lambda oid: _add_order("filled" if fill_qty else "new", fill_qty),
                            get_order_by_client_order_id=lambda _coid: None)
     clock = iter(range(1000))
     with mock.patch.dict(sys.modules, {"execution.broker": fake,
@@ -349,14 +363,14 @@ class LateFillAndFailedResync(unittest.TestCase):
         _prepare_real_helper(m)
         stops = []
         m._dispatcher = SimpleNamespace(
-            submit_limit=lambda *a, **kw: SimpleNamespace(id="add-1"),
+            submit_limit=lambda *a, **kw: _add_order(),
             submit_gtc_stop=lambda b, s, q, side, px: stops.append(q) or SimpleNamespace(id="stop-2"))
         m.broker.get_position = lambda s: SimpleNamespace(qty=1)
 
         def _resync_fails(p):
             raise RuntimeError("alpaca down")
         m._resync_from_alpaca = _resync_fails  # type: ignore[method-assign]
-        reads = iter([SimpleNamespace(status="new", filled_qty=0)] * 14 + [SimpleNamespace(status="filled", filled_qty=1)] * 5)
+        reads = iter([_add_order("new", 0)] * 14 + [_add_order("filled", 1)] * 5)
         fake = SimpleNamespace(is_market_open=lambda: True, cancel_order=lambda oid: True,
                                get_order=lambda oid: next(reads),
                                get_order_by_client_order_id=lambda _coid: None)
@@ -378,11 +392,11 @@ class RemainderCancelFailure(unittest.TestCase):
         del m._stop_safe_add  # use the real helper
         _prepare_real_helper(m)
         m._dispatcher = SimpleNamespace(
-            submit_limit=lambda *a, **kw: SimpleNamespace(id="add-1"),
+            submit_limit=lambda *a, **kw: _add_order(),
             submit_gtc_stop=lambda *a: SimpleNamespace(id="stop-2"))
         m.broker.get_position = lambda s: SimpleNamespace(qty=2)
         m._resync_from_alpaca = lambda p: None  # type: ignore[method-assign]
-        fake = SimpleNamespace(is_market_open=lambda: True, get_order=lambda oid: SimpleNamespace(status="new", filled_qty=0),
+        fake = SimpleNamespace(is_market_open=lambda: True, get_order=lambda oid: _add_order("new", 0),
                                cancel_order=lambda oid: oid == "stop-1",
                                get_order_by_client_order_id=lambda _coid: None)
         clock = iter(range(1000))

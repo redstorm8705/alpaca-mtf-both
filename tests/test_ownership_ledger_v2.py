@@ -146,6 +146,9 @@ class GuardBoundaryTests(unittest.TestCase):
                 guard, "_LEDGER_MIGRATION_LOCK_PATH", root / ".migration.lock"
             ),
             mock.patch.object(guard, "_LEDGER_LOCK_PATH", root / ".ledger.lock"),
+            mock.patch.object(
+                guard, "_OWNER_ASSIGNMENT_PATH", root / "owner_tier_assignments.json"
+            ),
         ]
         for patch in self.patches:
             patch.start()
@@ -252,6 +255,245 @@ class GuardBoundaryTests(unittest.TestCase):
         led = guard.load_ledger()
         self.assertEqual(guard.tier_qty(led, "AAPL", "qhm"), 2.0)
         self.assertEqual(guard.tier_qty(led, "NVDA", "qhm"), 3.0)
+
+    def test_owner_buy_assignment_moves_only_exact_intraday_residual_to_qhm(self):
+        row = ledger_v1()
+        entry = row["positions"]["NVDA"]
+        for tier in entry["tiers"].values():
+            tier["qty"] = 0.0
+            tier["avg_cost"] = 0.0
+            tier["last_fill_id"] = None
+        entry["tiers"]["qhm"]["qty"] = 2.0
+        entry["tiers"]["intraday"]["qty"] = 1.0
+        entry["alpaca_net_qty"] = 3.0
+        entry["drift"] = 0.0
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        self.assertTrue(guard.apply_authorized_owner_buy_assignment(
+            "NVDA", {"owner-order": 1}, 1, 2, 3, 101.25
+        ))
+        updated = guard.load_ledger()["positions"]["NVDA"]
+        self.assertEqual(updated["tiers"]["qhm"]["qty"], 3.0)
+        self.assertEqual(updated["tiers"]["intraday"]["qty"], 0.0)
+        self.assertEqual(updated["tiers"]["qhm"]["avg_cost"], 101.25)
+        journal = json.loads(guard._OWNER_ASSIGNMENT_PATH.read_text())
+        self.assertEqual(journal["orders"]["owner-order"]["qty"], 1)
+        self.assertEqual(journal["orders"]["owner-order"]["state"], "committed")
+
+    def test_owner_buy_assignment_rejects_coerced_quantities_and_average(self):
+        cases = (
+            {"filled_qty": 1.5}, {"filled_qty": True},
+            {"baseline_qty": 2.5}, {"baseline_qty": True},
+            {"fresh_net": 3.5}, {"fresh_net": True},
+            {"terminal_stop_fill_qty": 0.5},
+            {"terminal_stop_fill_qty": True},
+            {"broker_avg": float("inf")}, {"broker_avg": True},
+        )
+        base = {
+            "symbol": "NVDA", "order_qty_by_id": {"owner-order": 1},
+            "filled_qty": 1, "baseline_qty": 2, "fresh_net": 3,
+            "broker_avg": 101.25,
+        }
+        for changes in cases:
+            with self.subTest(changes=changes):
+                values = dict(base)
+                values.update(changes)
+                self.assertFalse(
+                    guard.apply_authorized_owner_buy_assignment(**values)
+                )
+        self.assertFalse(guard._OWNER_ASSIGNMENT_PATH.exists())
+
+    def test_failed_ledger_projection_leaves_noncanonical_pending_assignment(self):
+        row = ledger_v1()
+        entry = row["positions"]["NVDA"]
+        for tier in entry["tiers"].values():
+            tier["qty"] = 0.0
+            tier["avg_cost"] = 0.0
+            tier["last_fill_id"] = None
+        entry["tiers"]["qhm"]["qty"] = 2.0
+        entry["tiers"]["intraday"]["qty"] = 1.0
+        entry["alpaca_net_qty"] = 3.0
+        entry["drift"] = 0.0
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        with mock.patch.object(guard, "save_ledger", side_effect=OSError("disk")):
+            self.assertFalse(guard.apply_authorized_owner_buy_assignment(
+                "NVDA", {"owner-order": 1}, 1, 2, 3, 101.25
+            ))
+        journal = json.loads(guard._OWNER_ASSIGNMENT_PATH.read_text())
+        self.assertEqual(journal["orders"]["owner-order"]["state"], "pending")
+
+        # A pending row must not rewrite the untagged fill as QHM during a
+        # canonical replay after containment abandons the staged transaction.
+        guard._LEDGER_PATH.write_text(json.dumps({
+            "version": 1,
+            "last_reconciled_utc": None,
+            "positions": {},
+        }))
+        rebuilt = guard.sync_ledger(
+            [{
+                "order_id": "owner-order", "symbol": "NVDA", "side": "buy",
+                "qty": "1", "price": "101.25",
+                "transaction_time": "2026-10-23T16:00:00Z",
+            }],
+            [{"symbol": "NVDA", "qty": "1"}],
+            coid_by_order_id={"owner-order": None},
+        )
+        self.assertNotEqual(rebuilt.get("healed"), False)
+        self.assertEqual(guard.tier_qty(rebuilt, "NVDA", "intraday"), 1.0)
+        self.assertEqual(guard.tier_qty(rebuilt, "NVDA", "qhm"), 0.0)
+
+    def test_failed_commit_publish_leaves_retryable_pending_projection(self):
+        row = ledger_v1()
+        entry = row["positions"]["NVDA"]
+        for tier in entry["tiers"].values():
+            tier["qty"] = 0.0
+            tier["avg_cost"] = 0.0
+            tier["last_fill_id"] = None
+        entry["tiers"]["qhm"]["qty"] = 2.0
+        entry["tiers"]["intraday"]["qty"] = 1.0
+        entry["alpaca_net_qty"] = 3.0
+        entry["drift"] = 0.0
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        real_save = guard._save_owner_assignments
+        calls = 0
+
+        def _fail_second(payload):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("commit publish failed")
+            real_save(payload)
+
+        with mock.patch.object(
+            guard, "_save_owner_assignments", side_effect=_fail_second
+        ):
+            self.assertFalse(guard.apply_authorized_owner_buy_assignment(
+                "NVDA", {"owner-order": 1}, 1, 2, 3, 101.25
+            ))
+        projected = guard.load_ledger()["positions"]["NVDA"]
+        self.assertEqual(projected["tiers"]["qhm"]["qty"], 3.0)
+        self.assertEqual(projected["tiers"]["intraday"]["qty"], 0.0)
+        journal = json.loads(guard._OWNER_ASSIGNMENT_PATH.read_text())
+        self.assertEqual(journal["orders"]["owner-order"]["state"], "pending")
+        # The same durable stage can retry and promote without duplicating quantity.
+        self.assertTrue(guard.apply_authorized_owner_buy_assignment(
+            "NVDA", {"owner-order": 1}, 1, 2, 3, 101.25
+        ))
+        journal = json.loads(guard._OWNER_ASSIGNMENT_PATH.read_text())
+        self.assertEqual(journal["orders"]["owner-order"]["state"], "committed")
+
+    def test_owner_buy_assignment_expands_after_prior_order_was_committed(self):
+        row = ledger_v1()
+        entry = row["positions"]["NVDA"]
+        for tier in entry["tiers"].values():
+            tier["qty"] = 0.0
+            tier["avg_cost"] = 0.0
+            tier["last_fill_id"] = None
+        entry["tiers"]["qhm"]["qty"] = 2.0
+        entry["tiers"]["intraday"]["qty"] = 1.0
+        entry["alpaca_net_qty"] = 3.0
+        entry["drift"] = 0.0
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+
+        self.assertTrue(guard.apply_authorized_owner_buy_assignment(
+            "NVDA", {"owner-order-1": 1}, 1, 2, 3, 101.25
+        ))
+        self.assertTrue(guard.apply_authorized_owner_buy_assignment(
+            "NVDA", {"owner-order-1": 1, "owner-order-2": 1},
+            2, 2, 4, 102.50,
+        ))
+        updated = guard.load_ledger()["positions"]["NVDA"]
+        self.assertEqual(updated["tiers"]["qhm"]["qty"], 4.0)
+        self.assertEqual(updated["tiers"]["intraday"]["qty"], 0.0)
+        journal = json.loads(guard._OWNER_ASSIGNMENT_PATH.read_text())
+        self.assertEqual(journal["orders"]["owner-order-1"]["state"], "committed")
+        self.assertEqual(journal["orders"]["owner-order-2"]["state"], "committed")
+
+    def test_owner_buy_assignment_rejects_cohold_before_writing_journal(self):
+        row = ledger_v1()
+        entry = row["positions"]["NVDA"]
+        for tier in entry["tiers"].values():
+            tier["qty"] = 0.0
+            tier["avg_cost"] = 0.0
+            tier["last_fill_id"] = None
+        entry["tiers"]["qhm"]["qty"] = 2.0
+        entry["tiers"]["daytrade"]["qty"] = 1.0
+        entry["alpaca_net_qty"] = 3.0
+        entry["drift"] = 0.0
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        self.assertFalse(guard.apply_authorized_owner_buy_assignment(
+            "NVDA", {"owner-order": 1}, 1, 2, 3, 101.25
+        ))
+        self.assertFalse(guard._OWNER_ASSIGNMENT_PATH.exists())
+
+    def test_owner_buy_assignment_and_terminal_stop_fill_commit_one_final_state(self):
+        row = ledger_v1()
+        entry = row["positions"]["NVDA"]
+        for tier in entry["tiers"].values():
+            tier["qty"] = 0.0
+            tier["avg_cost"] = 0.0
+            tier["last_fill_id"] = None
+        entry["tiers"]["qhm"]["qty"] = 2.0
+        entry["tiers"]["intraday"]["qty"] = 1.0
+        entry["alpaca_net_qty"] = 1.0
+        entry["drift"] = -2.0
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        self.assertTrue(guard.apply_authorized_owner_buy_assignment(
+            "NVDA", {"owner-order": 1}, 1, 2, 1, 101.25,
+            terminal_stop_fill_qty=2, terminal_stop_id="filled-stop",
+        ))
+        updated = guard.load_ledger()["positions"]["NVDA"]
+        self.assertEqual(updated["tiers"]["qhm"]["qty"], 1.0)
+        self.assertEqual(updated["tiers"]["intraday"]["qty"], 0.0)
+        self.assertEqual(updated["alpaca_net_qty"], 1.0)
+        self.assertEqual(
+            updated["tiers"]["qhm"]["last_fill_id"],
+            "qhm_registered_stop:filled-stop",
+        )
+
+    def test_owner_buy_assignment_repairs_partial_terminal_projection(self):
+        row = ledger_v1()
+        entry = row["positions"]["NVDA"]
+        for tier in entry["tiers"].values():
+            tier["qty"] = 0.0
+            tier["avg_cost"] = 0.0
+            tier["last_fill_id"] = None
+        # A prior interrupted attempt wrote QHM to the final broker net but left
+        # the replay residual in Swing/intraday.  This is not an idempotent success.
+        entry["tiers"]["qhm"]["qty"] = 2.0
+        entry["tiers"]["intraday"]["qty"] = 1.0
+        entry["alpaca_net_qty"] = 2.0
+        entry["drift"] = -1.0
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        self.assertTrue(guard.apply_authorized_owner_buy_assignment(
+            "NVDA", {"owner-order": 1}, 1, 2, 2, 101.25,
+            terminal_stop_fill_qty=1, terminal_stop_id="filled-stop",
+        ))
+        updated = guard.load_ledger()["positions"]["NVDA"]
+        self.assertEqual(updated["tiers"]["qhm"]["qty"], 2.0)
+        self.assertEqual(updated["tiers"]["intraday"]["qty"], 0.0)
+        self.assertEqual(updated["alpaca_net_qty"], 2.0)
+        self.assertEqual(updated["drift"], 0.0)
+
+    def test_terminal_assignment_never_erases_non_qhm_cohold(self):
+        row = ledger_v1()
+        entry = row["positions"]["NVDA"]
+        for tier in entry["tiers"].values():
+            tier["qty"] = 0.0
+            tier["avg_cost"] = 0.0
+            tier["last_fill_id"] = None
+        entry["tiers"]["qhm"]["qty"] = 2.0
+        entry["tiers"]["forever6"]["qty"] = 1.0
+        entry["alpaca_net_qty"] = 2.0
+        entry["drift"] = -1.0
+        guard._LEDGER_PATH.write_bytes(dumps(row, target=2))
+        self.assertFalse(guard.apply_authorized_owner_buy_assignment(
+            "NVDA", {"owner-order": 1}, 1, 2, 2, 101.25,
+            terminal_stop_fill_qty=1, terminal_stop_id="filled-stop",
+        ))
+        unchanged = guard.load_ledger()["positions"]["NVDA"]
+        self.assertEqual(unchanged["tiers"]["qhm"]["qty"], 2.0)
+        self.assertEqual(unchanged["tiers"]["forever6"]["qty"], 1.0)
+        self.assertFalse(guard._OWNER_ASSIGNMENT_PATH.exists())
 
     def test_invalid_candidate_leaves_current_and_backup_unchanged(self):
         original = dumps(ledger_v1(), target=1)

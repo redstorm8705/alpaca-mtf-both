@@ -1777,6 +1777,7 @@ def replace_stop_order(
     order_id: str,
     stop_price: float,
     qty: "int | None" = None,
+    client_order_id: "str | None" = None,
 ) -> object:
     """Move a live protective stop IN PLACE (Alpaca PATCH /v2/orders/{order_id}) — the P0 fix for
     the cancel-then-resubmit race (UBER 2026-09-18: cancel is async, the resubmit hit 40310000,
@@ -1812,7 +1813,11 @@ def replace_stop_order(
     if (not order_id or not isinstance(stop_price, (int, float)) or not math.isfinite(stop_price)
             or stop_price <= 0
             or (qty is not None and (not isinstance(qty, (int, float)) or not math.isfinite(qty)
-                                     or not float(qty).is_integer() or qty < 1))):
+                                     or not float(qty).is_integer() or qty < 1))
+            or (client_order_id is not None
+                and (not isinstance(client_order_id, str)
+                     or not client_order_id.strip()
+                     or client_order_id != client_order_id.strip()))):
         logger.warning(
             f"[{symbol}] stop replace skipped: order_id={order_id!r} stop=${stop_price} qty={qty}"
         )
@@ -1823,18 +1828,39 @@ def replace_stop_order(
     # (untagged) unless one is sent. Tier attribution (ownership_guard.tier_of_coid, the IN-/DT-/
     # QH-/F6- prefix) drives P&L attribution, tier-aware cancels and the broker ground-truth owner,
     # so the replacement is given a fresh id with the SAME tier prefix as the order it replaces.
-    # An untagged/unreadable old order gets none (Alpaca generates one, as before this helper).
+    # An untagged readable old order gets none (Alpaca generates one, as before this
+    # helper). An unreadable prior is never patched: without its identity and state,
+    # success could mutate the wrong or already-terminal order.
     _fields: dict = {"stop_price": round(stop_price, 2)}
     if qty is not None:
         _fields["qty"] = int(qty)
     _prior = get_order(order_id)
-    if _prior is not None:
-        from execution.ownership_guard import tier_of_coid
-        _tier = tier_of_coid(getattr(_prior, "client_order_id", None))
-        _side = getattr(_prior, "side", "")
-        _side_s = str(getattr(_side, "value", _side)).lower()
-        if _tier and _side_s in ("buy", "sell"):
-            _fields["client_order_id"] = _make_idem_id(_tier, symbol, _side_s)
+    if _prior is None:
+        logger.critical(
+            "[%s] stop replace blocked: prior order is unreadable",
+            symbol,
+        )
+        return None
+    from execution.ownership_guard import tier_of_coid
+    _tier = tier_of_coid(getattr(_prior, "client_order_id", None))
+    _side = getattr(_prior, "side", "")
+    _side_s = str(getattr(_side, "value", _side)).lower()
+    if not _tier or _side_s not in ("buy", "sell"):
+        logger.critical(
+            "[%s] stop replace blocked: prior order has no trusted tier/side identity",
+            symbol,
+        )
+        return None
+    if client_order_id is not None:
+        if tier_of_coid(client_order_id) != _tier:
+            logger.critical(
+                "[%s] stop replace blocked: staged client id tier does not match prior order",
+                symbol,
+            )
+            return None
+        _fields["client_order_id"] = client_order_id
+    else:
+        _fields["client_order_id"] = _make_idem_id(_tier, symbol, _side_s)
     req = ReplaceOrderRequest(**_fields)
     try:
         _note_reduction_attempted()
