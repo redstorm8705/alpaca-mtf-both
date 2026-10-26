@@ -122,6 +122,7 @@ from execution.orphan_manager import (
     get_tod_phase as _get_tod_phase,
     cancel_and_reconcile_gtc_stops as _cancel_and_reconcile_gtc_stops,
     reconcile_positions as _reconcile_positions,
+    _get_daytrade_syms,
 )
 
 # ── VOTE-4: SPY 200d MA for overnight size reduction (board-approved 2026-04-20) ──
@@ -133,6 +134,36 @@ _spy_200d_ma_date: str   = ""    # ET date of last _spy_200d_ma fetch; prevents 
 # OVERNIGHT_ENTRIES_ENABLED is resolved from config.py — see module-level gate below.
 _OVERNIGHT_CANCEL_CUTOFF  = 9 * 60 + 28  # cancel unfilled orders by 9:28 AM ET (2 min before RTH open)
                                            # Ensures stale overnight limits are dead before the first RTH print.
+
+
+def _startup_managed_position_sets(
+    tracker,
+    alpaca_symbols: set[str],
+    day_symbols: set[str],
+    swing_symbols: set[str],
+    excluded_symbols: set[str] | None = None,
+) -> tuple[set[str], set[str], set[str]]:
+    """Return (managed, unmanaged_at_broker, stale_legacy_tracker).
+
+    Day and the dedicated Swing manager intentionally keep their lots outside
+    ``tracker.open_trades``.  Count only dedicated-tier symbols that Alpaca
+    currently reports: their own reconcilers own stale-local-state handling,
+    while this legacy check owns stale rows in ``tracker.open_trades``.
+    """
+    live = set(alpaca_symbols)
+    excluded = set(excluded_symbols or set())
+    legacy = {
+        str(symbol)
+        for symbol, trade in (getattr(tracker, "open_trades", {}) or {}).items()
+        if (
+            isinstance(trade, dict)
+            and trade.get("status") != "closed"
+            and symbol not in excluded
+        )
+    }
+    dedicated_live = (set(day_symbols) | set(swing_symbols)) & live
+    managed = legacy | dedicated_live
+    return managed, live - managed, legacy - live
                                            # If the thesis is still valid at open, the scanner regenerates it fresh.
 _OVERNIGHT_ENTRY_START    = 20 * 60    # 8 PM ET — earliest overnight entry window
 _OVERNIGHT_MAX_AH_DRIFT   = 0.03       # reject if AH price > 3% from close
@@ -835,15 +866,40 @@ def main():
         # the root of the recurring Tracker<RiskManager desync. Exclude QHM; the
         # downstream _alpaca_syms observability (below) becomes QHM-clean too.
         _qhm_syms    = get_quarterly_hold_symbols()
-        _live_pos    = [p for p in _broker_positions() if p.symbol not in _qhm_syms]
-        _live_count  = len(_live_pos)
+        _live_pos = [p for p in _broker_positions() if p.symbol not in _qhm_syms]
+        _live_count = len(_live_pos)
         _tracker_count = risk.open_positions
-        if _live_count != _tracker_count:
+        _alpaca_syms = {pos.symbol for pos in _live_pos}
+        from execution.swing_breakout_manager import get_breakout_symbols_checked
+        _swing_syms, _swing_state_readable = get_breakout_symbols_checked()
+        _managed_syms, _untracked, _stale = _startup_managed_position_sets(
+            tracker,
+            _alpaca_syms,
+            _get_daytrade_syms(),
+            _swing_syms,
+            _qhm_syms,
+        )
+        if not _swing_state_readable:
             logger.critical(
-                f"P0-STARTUP: Alpaca live positions ({_live_count}) != "
-                f"tracker count ({_tracker_count}). "
-                f"Overriding to Alpaca-authoritative count."
+                "P0-STARTUP: dedicated Swing state unreadable — broker symbols "
+                "cannot be credited to Swing ownership."
             )
+        if _live_count != _tracker_count:
+            if _untracked or _stale:
+                logger.critical(
+                    "P0-STARTUP: Alpaca live positions (%d) != risk count (%d); "
+                    "managed=%d, unmanaged=%s, stale_legacy=%s. Overriding to "
+                    "Alpaca-authoritative count.",
+                    _live_count, _tracker_count, len(_managed_syms),
+                    sorted(_untracked), sorted(_stale),
+                )
+            else:
+                logger.info(
+                    "P0-STARTUP: dedicated Day/Swing positions accounted for; "
+                    "risk count %d→%d from Alpaca-authoritative inventory "
+                    "[change=swing-startup-truth-1026].",
+                    _tracker_count, _live_count,
+                )
             if _live_count > _tracker_count:
                 for _ in range(_live_count - _tracker_count):
                     risk.register_open()
@@ -853,23 +909,19 @@ def main():
                     _live_count, _tracker_count,
                 )
                 risk.open_positions = _live_count
-            # Observability: surface which symbols are causing the discrepancy
-            _alpaca_syms  = {pos.symbol for pos in _live_pos}
-            _tracker_syms = {s for s, t in tracker.open_trades.items()
-                             if t.get("status") != "closed" and s not in _qhm_syms}
-            _untracked = _alpaca_syms - _tracker_syms
-            _stale     = _tracker_syms - _alpaca_syms
-            if _untracked:
-                logger.critical(
-                    f"P0-STARTUP: In Alpaca but NOT in tracker: {sorted(_untracked)}. "
-                    f"Stops/targets will NOT fire for these — manual intervention required."
-                )
-            if _stale:
-                logger.critical(
-                    f"P0-STARTUP: In tracker but NOT in Alpaca: {sorted(_stale)}. "
-                    f"Likely externally closed — reconcile_positions() should have handled this."
-                )
-        else:
+        if _untracked:
+            logger.critical(
+                "P0-STARTUP: In Alpaca but absent from every position manager: %s. "
+                "Stops/targets may not fire — manual intervention required.",
+                sorted(_untracked),
+            )
+        if _stale:
+            logger.critical(
+                "P0-STARTUP: In legacy tracker but NOT in Alpaca: %s. Likely "
+                "externally closed — reconcile_positions() should have handled this.",
+                sorted(_stale),
+            )
+        if _live_count == _tracker_count and not _untracked and not _stale:
             logger.info(
                 f"P0-STARTUP: Positions verified — Alpaca={_live_count} == "
                 f"tracker={_tracker_count}. OK."
