@@ -87,74 +87,7 @@ class Decisions(unittest.TestCase):
         df = _bars([100.0] * 10, start="2026-09-14")    # completed sessions 09-14 .. 09-25
         self.assertEqual(sb.sessions_held(df, "2026-09-24"), 3)   # 09-24, 09-25 completed + today
 
-    def test_size_order_bounds(self):
-        with mock.patch.object(sb.config, "SWING_BREAKOUT_MAX_RISK_PCT", 0.02, create=True):
-            q, _ = sb.size_order(2500.0, 230.0, 5.0, 0.0, 0.0)          # slot $500 → 2 sh; risk $50/$12.5 → 4
-            self.assertEqual(q, 2)
-            q, _ = sb.size_order(2500.0, 230.0, 5.0, 2400.0, 0.0)       # others use 96% → room $100 → 0
-            self.assertEqual(q, 0)
-            q, _ = sb.size_order(2500.0, 100.0, 20.0, 0.0, 0.0)         # risk cap: $50 / $50 → 1 sh
-            self.assertEqual(q, 1)
-            q, _ = sb.size_order(2500.0, 100.0, 1.0, 0.0, 1900.0)       # tier already $1,900 of $2,000 → 1 sh
-            self.assertEqual(q, 1)
-            q, _ = sb.size_order(float("nan"), 100.0, 1.0, 0.0, 0.0)
-            self.assertEqual(q, 0)
-            q, why = sb.size_order(2520.0, 511.0, 9.5, 0.0, 0.0)       # MSFT: 1 share > $504 slot → floor → 1 sh
-            self.assertEqual(q, 1)
-            self.assertIn("1-share floor", why)
-            q, _ = sb.size_order(2520.0, 640.0, 9.5, 0.0, 0.0)         # one share > 25% of equity ($630) → 0
-            self.assertEqual(q, 0)
-            with mock.patch.object(sb.config, "SWING_BREAKOUT_MIN1_RISK_PCT", 0.0, create=True):
-                q, _ = sb.size_order(2520.0, 600.0, 21.0, 0.0, 0.0)    # 2.5×ATR $52.5 > $50.4 risk cap → 0
-                self.assertEqual(q, 0)
-            q, _ = sb.size_order(2520.0, 511.0, 9.5, 0.0, 2000.0)      # budget room $16 → no floor → 0
-            self.assertEqual(q, 0)
-
-    def test_one_share_floor_risk_up_to_three_percent(self):
-        # CEO 2026-10-14: AMD 10/07 was refused ($63.30 stop distance vs a $50 cap). A single share may risk up to
-        # 3% of equity at its stop when the 2% cap buys none; never above 3%, never above the price caps.
-        with mock.patch.multiple(sb.config, SWING_BREAKOUT_MAX_RISK_PCT=0.02, SWING_BREAKOUT_MIN1_RISK_PCT=0.03,
-                                 SWING_BREAKOUT_TOTAL_OVERNIGHT_K=1.9, create=True):
-            q, why = sb.size_order(2620.0, 640.0, 25.32, 0.0, 0.0)    # stop $63.30 ≤ $78.60; $640 ≤ $655 → 1
-            self.assertEqual(q, 1)
-            self.assertIn("stop risk $63", why)
-            q, _ = sb.size_order(2620.0, 640.0, 32.0, 0.0, 0.0)       # stop $80 > 3% ($78.60) → 0
-            self.assertEqual(q, 0)
-            q, _ = sb.size_order(2620.0, 660.0, 25.32, 0.0, 0.0)      # one share > 25% of equity ($655) → 0
-            self.assertEqual(q, 0)
-            q, _ = sb.size_order(2620.0, 640.0, 25.32, 0.0, 0.0, 4400.0)   # K limb room $578 < $640 → 0
-            self.assertEqual(q, 0)
-            q, _ = sb.size_order(2620.0, 300.0, 25.32, 0.0, 0.0)      # cheap share, wide stop: 2% buys 0 → 1 sh
-            self.assertEqual(q, 1)
-
-    def test_size_order_k19_room_for_a_second_lot(self):
-        # 2026-10-13 book: equity $2,620, QHM $3,227 + UBER $499 (other) + MSFT $542 (tier). At 1.75× the total
-        # limb is $318 (< one $524 slot); at 1.9× it is $711 → one more lot fits.
-        with mock.patch.multiple(sb.config, SWING_BREAKOUT_MAX_RISK_PCT=0.02, create=True):
-            with mock.patch.object(sb.config, "SWING_BREAKOUT_TOTAL_OVERNIGHT_K", 1.75, create=True):
-                q, _ = sb.size_order(2620.0, 230.0, 5.0, 499.0, 542.0, 3227.0)
-                self.assertEqual(q, 1)                                   # $318 room → 1 sh at $230
-            with mock.patch.object(sb.config, "SWING_BREAKOUT_TOTAL_OVERNIGHT_K", 1.9, create=True):
-                q, why = sb.size_order(2620.0, 230.0, 5.0, 499.0, 542.0, 3227.0)
-                self.assertEqual(q, 2)                                   # slot $524 → 2 sh at $230
-                self.assertIn("total-limb $710", why)
-
-    def test_size_order_invariant11_amended_two_limbs(self):
-        # 2026-10-02 live book: equity $2,441, swing $256, QHM $3,175. QHM no longer blocks the 100% limb; the
-        # total limb 1.75 × 2441 − 3431 = $841 binds → slot $488 → 2 sh at $230 (risk cap 48.8/12.5 → 3).
-        with mock.patch.multiple(sb.config, SWING_BREAKOUT_MAX_RISK_PCT=0.02, SWING_BREAKOUT_TOTAL_OVERNIGHT_K=1.75,
-                                 create=True):
-            q, why = sb.size_order(2441.0, 230.0, 5.0, 256.0, 0.0, 3175.0)
-            self.assertEqual(q, 2)
-            self.assertIn("total-limb $841", why)
-            q, _ = sb.size_order(2441.0, 230.0, 5.0, 256.0, 700.0, 3175.0)    # tier already $700 → room $141 → 0
-            self.assertEqual(q, 0)
-            q, _ = sb.size_order(2441.0, 230.0, 5.0, 256.0, 0.0, 4100.0)      # QHM fills the K limb → 0
-            self.assertEqual(q, 0)
-            q, _ = sb.size_order(2441.0, 230.0, 5.0, 3431.0, 0.0, 0.0)        # same book, ledger unreadable → 0
-            self.assertEqual(q, 0)
-            q, _ = sb.size_order(2441.0, 230.0, 5.0, 256.0, 0.0, -1.0)        # bad input → 0
-            self.assertEqual(q, 0)
+    # size_order tests for the stop-based sizing (SWING-OWNER-1025) live in tests/test_swing_owner_design.py
 
     def test_protected_notional_from_ledger_and_fail_safe(self):
         led = {"positions": {
@@ -273,6 +206,8 @@ class Lifecycle(unittest.TestCase):
                  "execution.tier_capital_allocator": self.alloc}
         m = sb.SwingBreakoutManager()
         with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: bars[s])), \
+                mock.patch.object(sb.SwingBreakoutManager, "_today_open", staticmethod(lambda s, t, n: 125.0)), \
+                mock.patch.object(sb.SwingBreakoutManager, "_maint_ratio", staticmethod(lambda a, p: 0.3)), \
                 mock.patch("time.sleep"):
             return m, m.run_entries(datetime(2026, 9, 30, 10, 10, tzinfo=sb.ET))
 
@@ -519,10 +454,11 @@ class Lifecycle(unittest.TestCase):
         self.assertTrue(any(ev == "page" for ev, _, _ in self.logs))
 
     def test_same_scan_second_entry_sees_first_lot(self):
+        # the K limb (K x equity, here 0.06 x $2,500 = $150) is used by the first lot; the second sees it and gets no size
         b = FakeBroker()
-        with mock.patch.multiple(sb.config, SWING_BREAKOUT_BUDGET_PCT=0.20, create=True):
+        with mock.patch("execution.overnight_capacity.overnight_k", return_value=0.06):
             _, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _breakout_df()})
-        self.assertEqual(len(got), 1)                          # the 20% budget is used by the first lot
+        self.assertEqual(len(got), 1)
         self.assertTrue(any(ev == "skip" and kw.get("reason") == "no size" for ev, _, kw in self.logs))
 
     def test_unreadable_stop_fill_halts_exit_then_reprotects(self):
@@ -807,6 +743,7 @@ class Lifecycle(unittest.TestCase):
         m._book_exit = _book_exit_then_flat
         bars = {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)}
         with _mods(fakes), mock.patch.object(sb.SwingBreakoutManager, "_bars", staticmethod(lambda s: bars[s])), \
+                mock.patch.object(sb.SwingBreakoutManager, "_today_open", staticmethod(lambda s, t, n: 125.0)), \
                 mock.patch("time.sleep"):
             got = m.run_entries(datetime(2026, 9, 30, 10, 10, tzinfo=sb.ET))
         rec = sb._load_state()["positions"]["AAA"]
