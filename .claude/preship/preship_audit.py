@@ -14,8 +14,8 @@ prompt (CLAIM_PROMPT_HEAD) is used — an evidentiary-rigor audit for factual cl
 not a code-defect audit. Added 2026-08-04 after an unverified diagnostic claim shipped
 straight into handoff.md with zero review.
 
---waive-gro : record gro=WAIVED (Rafael-authorized only, e.g. Groq TPD limit).
-              GAI must still APPROVE.
+--waive-gro : waive reviewer #2 (Codex, or its Gro fallback) — record gro=WAIVED (Rafael-authorized
+              only). GAI must still APPROVE. Reviewer #2 is Codex since REVIEWER-SWAP-1025 (2026-10-25).
 --context   : PROACTIVE ground-truth facts (a file path OR inline string) about code
               OUTSIDE the diff — what a referenced constant means, threading model, a
               cross-file helper/guard, the runtime profile — plus refutations of the
@@ -219,6 +219,140 @@ def _gro(prompt, key):
         raise RuntimeError(str(r).replace(key, "***")[:200])
     return r["choices"][0]["message"]["content"]
 
+
+# REVIEWER #2 = CODEX (BGC gate: Board + GAI + Codex — REVIEWER-SWAP-1025, owner 2026-10-25; design record
+# logs/design_records/reviewer_swap_codex_2026-10-25.md). Bake-off: Codex 7/8 bugs and 1/12 false rejects; Gro high
+# 4-5/12 false rejects, and Gro's 8k-token free cap cannot take a large diff. Gro (low) is the fallback when Codex is
+# unavailable. Every Codex prompt starts with REVIEW_SENTINEL: approval capture scans Codex session files, and
+# owner_approval_capture._NOT_HUMAN rejects any message carrying it, so a review prompt can never count as an approval.
+REVIEW_SENTINEL = "[AUTOMATED-REVIEW-PROMPT: code-review prompt sent by preship_audit.py, not a message from the owner]"
+CODEX_PERSONA = ("You are an expert engineer at a quantitative / algorithmic trading fund, auditing a diff before it "
+                 "ships. Concrete and technical, no hedging.")
+_CODEX_TIMEOUT = 600
+# Every Codex signature form in this repo's history (git log, 2026-10-25): "(OpenAI Codex)", "Signed: OpenAI Codex",
+# "Signed-off-by: ChatGPT/Codex <noreply@openai.com>", "Agent-Signature: OpenAI Codex (...)". A Claude commit that only
+# mentions Codex ("... for Claude, Codex and every worktree") does not match.
+_CODEX_SIGNED = re.compile(r"(?i)\bopenai\s+codex\b|\bchatgpt\s*/\s*codex\b|\bsigned(?:-off-by)?:\s*codex\b"
+                           r"|\bagent-signature:\s*(?:openai\s+)?codex\b|noreply@openai\.com")
+# Every reviewer-#2 verdict, one JSON row each, in the git COMMON dir (shared by every worktree of this repository, so
+# a re-run from another worktree sees it). It blocks the Gro fallback for a (file, sha) Codex has already REJECTed —
+# no reviewer shopping across runs — and is the record the reversal criterion is counted from.
+_VERDICT_LOG_NAME = "reviewer-verdicts.jsonl"
+
+
+def _verdict_log_path():
+    ok, out, _ = _git(["rev-parse", "--git-common-dir"])
+    d = out.strip() if ok and out.strip() else os.path.join(REPO, ".git")
+    return os.path.join(d if os.path.isabs(d) else os.path.join(REPO, d), _VERDICT_LOG_NAME)
+
+
+def _log_verdict(relpath, sha, reviewer, verdict, reason="", note=""):
+    """Append one reviewer verdict row (append-only; a write failure is reported, never fatal)."""
+    row = {"ts": int(time.time()), "file": relpath, "sha256": sha, "reviewer": reviewer, "verdict": verdict,
+           "reason": (reason or "")[-300:], "note": note, "adjudicated": None}
+    try:
+        with open(_verdict_log_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+    except OSError as e:
+        sys.stderr.write(f"[preship] reviewer verdict log write failed ({e}) — verdict still enforced this run.\n")
+
+
+def _codex_rejected(relpath):
+    """True when Codex has REJECTed this file (any content) and has not APPROVEd it since — the reject stays
+    unresolved until Codex itself approves a later version (an INDETERMINATE in between does not clear it), so a
+    trivial edit plus a Codex outage cannot route the file to Gro. Unreadable log → False (nothing recorded)."""
+    open_reject = False
+    try:
+        with open(_verdict_log_path(), encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(r, dict) and r.get("file") == relpath and r.get("reviewer") == "codex":
+                    if r.get("verdict") == "REJECT":
+                        open_reject = True
+                    elif r.get("verdict") == "APPROVE":
+                        open_reject = False
+    except OSError:
+        return False
+    return open_reject
+
+
+class CodexUnavailable(RuntimeError):
+    """Codex could not give a verdict (not installed, usage limit, timeout, error, empty output) — never a REJECT."""
+
+
+_CODEX_ENV_KEEP = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "CODEX_HOME")
+
+
+def _redact(text):
+    """Mask every .env value (6+ characters) in reviewer output before it is printed, logged or stored."""
+    for v in sorted({v.strip().strip('"') for v in _load_env().values()}, key=len, reverse=True):
+        if len(v) >= 6:
+            text = text.replace(v, "***")
+    return text
+
+
+def _codex(prompt):
+    """Codex CLI on the owner's ChatGPT plan: read-only sandbox (it can still READ files by absolute path — it cannot
+    write), started in an empty temporary directory with a minimal environment (none of the .env keys), prompt on
+    stdin. Returns its reply with .env values masked; raises CodexUnavailable on any failure to produce one."""
+    import shutil
+    import tempfile
+    exe = shutil.which("codex")
+    if not exe:
+        raise CodexUnavailable("codex command line not installed")
+    text = REVIEW_SENTINEL + "\n\n" + CODEX_PERSONA + "\n\n" + _framed(prompt)
+    env = {k: os.environ[k] for k in _CODEX_ENV_KEEP if k in os.environ}
+    with tempfile.TemporaryDirectory() as work:
+        try:
+            r = subprocess.run([exe, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "--cd", work, "-"],
+                               input=text, capture_output=True, text=True, timeout=_CODEX_TIMEOUT, env=env)
+        except subprocess.TimeoutExpired:
+            raise CodexUnavailable(f"timed out after {_CODEX_TIMEOUT}s") from None
+        except OSError as e:
+            raise CodexUnavailable(f"could not start ({type(e).__name__})") from None
+    out = _redact((r.stdout or "").strip())
+    if r.returncode != 0 or not out:
+        tail = _redact(((r.stderr or "") + (r.stdout or ""))[-200:]).replace("\n", " ")
+        kind = "usage limit" if re.search(r"(?i)usage limit|rate limit|quota", tail) else f"exit {r.returncode}"
+        raise CodexUnavailable(f"{kind}: {tail}")
+    return out
+
+
+def _codex_signed(relpath):
+    """True when a commit touching `relpath` since origin/main is signed by Codex. Then Codex AND Gro must both
+    approve (Codex alone would be reviewing its own work; Gro alone would be the weaker reviewer, and a forged
+    signature could buy it). Both agents commit under the owner's name, so the message text is the signal; a forged
+    signature only ADDS a reviewer. If the history cannot be read (no origin/main, git error) this returns True.
+    Uncommitted Codex edits cannot be seen (documented limit)."""
+    ok, log, _ = _git(["log", "--format=%B%n%an <%ae>", "origin/main..HEAD", "--", relpath])
+    return (not ok) or bool(_CODEX_SIGNED.search(log))
+
+
+def _codex_review(prompt, reminder, names_ok, relpath):
+    """Reviewer #2 via Codex: (verdict, text) or (None, reason) when Codex is unavailable before giving any verdict.
+    Once Codex has given a verdict, a later failure keeps that verdict — Gro can never overturn a Codex REJECT."""
+    try:
+        txt = _codex(prompt)
+    except CodexUnavailable as e:
+        return None, str(e)
+    v = _verdict(txt)
+    try:
+        if v == "INDETERMINATE":
+            txt = _codex(prompt + reminder)
+            v = _verdict(txt)
+        if v == "REJECT" and _name_premise_reject(txt, names_ok):
+            sys.stderr.write("[preship] Codex rejected on an undefined-name premise the static check contradicts — "
+                             "one automatic counter-prompt with that evidence.\n")
+            txt = _codex(prompt + _name_counter(txt) + reminder)
+            v = _verdict(txt)
+    except CodexUnavailable as e:
+        sys.stderr.write(f"[preship] Codex follow-up failed ({str(e)[:80]}) — keeping its verdict {v}.\n")
+    return v, txt
+
+
 def _split_pure_add_hunk(hunk, limit):
     """Split ONE git hunk that contains NO removed ('-') lines into line-boundary pieces of at most
     ~`limit` chars, each prefixed with the hunk's own '@@' header line. Returns [hunk] unchanged if
@@ -360,7 +494,7 @@ def _gai(prompt, key, paid_key=""):
     # fails does the caller escalate (free retry -> paid-if-allowed -> NVIDIA substitute).
     # thinkingBudget:0 keeps a thinking model from spending the whole maxOutputTokens on hidden
     # reasoning (INDETERMINATE otherwise). maxOutputTokens 2048 stays under the free per-minute cap.
-    _GAI_LADDER = ("gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest")  # 3.1-flash-lite FIRST: proven clean-VERDICT for the gate. Canonical: gai_client.GAI_MODEL_LADDER
+    _GAI_LADDER = ("gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest")  # 3.1-flash-lite FIRST: proven clean-VERDICT for the gate. Canonical: gai_client.GAI_MODEL_LADDER; test_ladder_parity.py fails on drift
 
     def _one(k):
         _last_err = None
@@ -758,11 +892,40 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     if gai_v != "APPROVE":
         return False, f"{relpath}: {_gai_label} REJECT — no marker.\n{gai_txt[-600:]}"
 
-    # Gro (required unless waived)
+    # Reviewer #2 (required unless waived): Codex first (BGC gate, REVIEWER-SWAP-1025); Gro only when Codex is
+    # unavailable. The marker keeps the `gro` field name the ship gate reads; `reviewer_b` records who gave it.
     gro_substituted = ""
+    reviewer_b = "gro"
+    signed = (not waive_gro) and _codex_signed(relpath)
+    codex_v, codex_txt = (None, "") if waive_gro else _codex_review(prompt, _reminder, _names_ok, relpath)
+    if codex_v is not None:
+        _log_verdict(relpath, sha, "codex", codex_v, codex_txt, note="codex-signed file" if signed else "")
     if waive_gro:
         gro_v = "WAIVED"
+        reviewer_b = "waived"
+        _log_verdict(relpath, sha, "waived", "WAIVED")
+    elif codex_v == "INDETERMINATE":
+        return False, (f"{relpath}: Codex INDETERMINATE — no parseable VERDICT line after a retry "
+                       f"(NOT a content reject; re-run). Last 300 chars:\n{codex_txt[-300:]}")
+    elif codex_v is not None and codex_v != "APPROVE":
+        return False, f"{relpath}: Codex REJECT — no marker.\n{codex_txt[-600:]}"
+    elif codex_v == "APPROVE" and not signed:
+        gro_v, reviewer_b = "APPROVE", "codex"
+    elif codex_v is None and signed:
+        # A Codex-signed file (or unreadable history) needs Codex AND Gro; with Codex unavailable it cannot ship.
+        return False, (f"{relpath}: Codex-signed file (or unreadable history) needs Codex AND Gro, and Codex is "
+                       f"unavailable ({codex_txt[:80]}) — no marker. Re-run when Codex is back.")
+    elif codex_v is None and _codex_rejected(relpath):
+        # No reviewer shopping across runs: Codex's latest verdict on this file is a REJECT, so a Codex outage does not
+        # hand the file to Gro. Resolve the reject when Codex is back (--evidence), or the owner waives reviewer #2.
+        return False, (f"{relpath}: Codex's latest verdict on this file is REJECT and Codex is unavailable now "
+                       f"({codex_txt[:80]}) — Gro fallback refused. Resolve the reject (--evidence) when Codex is back.")
     else:
+        # Codex unavailable → Gro is reviewer #2; or Codex approved a Codex-signed file → Gro must ALSO approve.
+        if codex_v == "APPROVE":
+            sys.stderr.write("[preship] Codex-signed file: Codex APPROVE recorded; Gro must also approve.\n")
+        else:
+            sys.stderr.write(f"[preship] Codex unavailable ({codex_txt[:120]}) — Gro reviews as reviewer #2.\n")
         try:
             gro_txt = _gro(prompt, keys.get("GROQ_API_KEY", ""))
             gro_v = _verdict(gro_txt)
@@ -834,6 +997,11 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
                 return False, (f"{relpath}: Gro counter-prompt failed ({_xe}) after a name-premise REJECT — "
                                "no marker; re-run (or --evidence).")
         _gro_lbl = f"substitute {gro_substituted}" if gro_substituted else "Gro"
+        _log_verdict(relpath, sha, gro_substituted or "gro", gro_v, gro_txt,
+                     note="second reviewer on a codex-signed file" if codex_v == "APPROVE"
+                     else f"codex unavailable: {codex_txt[:120]}")
+        if codex_v == "APPROVE":
+            reviewer_b = "codex+" + (gro_substituted or "gro")
         if gro_v == "INDETERMINATE":
             return False, (f"{relpath}: {_gro_lbl} INDETERMINATE — no parseable VERDICT line after a "
                            f"retry (NOT a content reject; re-run). Last 300 chars:\n{gro_txt[-300:]}")
@@ -854,8 +1022,11 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     # check and BLOCKS the very ship the substitute just approved (cold-2nd 2026-08-24, self-
     # defeating fail-closed bug). The substitution is recorded ONLY in the `gai_substituted`
     # key (which the gate ignores) — that fully satisfies auditability without touching `gai`.
+    if gro_substituted and not reviewer_b.startswith("codex+"):
+        reviewer_b = gro_substituted
+    # `gro` = reviewer #2's verdict (field name kept: preship_gate._marker_ok reads it); `reviewer_b` = who gave it.
     marker = {"sha256": sha, "gro": gro_v, "gai": "APPROVE", "ts": int(time.time()),
-              "file": relpath}
+              "file": relpath, "reviewer_b": reviewer_b}
     if gai_substituted:
         marker["gai_substituted"] = gai_substituted  # audit trail: GAI was down; this voice stood in
     if gro_substituted:
@@ -864,7 +1035,8 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
         json.dump(marker, f, indent=2)
     _gai_disp = f"APPROVE (SUBST:{gai_substituted})" if gai_substituted else "APPROVE"
     _gro_disp = f"{gro_v} (SUBST:{gro_substituted})" if gro_substituted else gro_v
-    return True, (f"{relpath}: APPROVED (gro={_gro_disp} gai={_gai_disp}) — marker "
+    _b_name = "codex" if reviewer_b == "codex" else ("codex=APPROVE gro" if reviewer_b.startswith("codex+") else "gro")
+    return True, (f"{relpath}: APPROVED ({_b_name}={_gro_disp} gai={_gai_disp}) — marker "
                   f"written, sha {sha[:12]}")
 
 def main():

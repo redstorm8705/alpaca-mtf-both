@@ -45,7 +45,8 @@ _AFFIRM = re.compile(r"(?i)^\s*(?:(?:yes|yep|ok|okay)[\s,.!]+)?(approved?|procee
                      r"(?:[\s,]+(?:please|thanks|thank\s+you))?[\s.!]*$")
 _AGENT_ASKS = re.compile(r"(?i)\bapprov")
 _NOT_HUMAN = re.compile(r"<task-notification>|<system-reminder>|\[SYSTEM NOTIFICATION|<command-name>|<local-command"
-                        r"|<scheduled-task|<cross-session-message")
+                        r"|<scheduled-task|<cross-session-message"
+                        r"|\[AUTOMATED-REVIEW-PROMPT")   # preship_audit/bgg_call Codex review prompts (REVIEWER-SWAP-1025)
 _PRECONDITION = re.compile(r"(?i)^\W*(?:if|unless|provided|assuming|only\s+if|as\s+long\s+as|so\s+long\s+as|in\s+case"
                            r"|whenever|not\s+sure|wait)\b")
 _NEGATED_ASK = re.compile(r"(?i)\b(not|yet|later|rejected|failed|fail|instead|or|rather|from|whether)\b|n't\b")
@@ -675,6 +676,8 @@ _TEST_TRANSCRIPT_DIRS: list = []   # set only in-process by the test harness; no
 def transcript_allowed(path: str) -> bool:
     """True if `path` is inside a real Claude/Codex transcript tree (the only place owner text can come from)."""
     q = os.path.realpath(path)
+    if _is_codex_exec(q):
+        return False   # an automated `codex exec` review session is never a place owner text comes from
     for d in transcript_dirs() + _TEST_TRANSCRIPT_DIRS:
         d = os.path.realpath(d)
         if q.startswith(d + os.sep):
@@ -837,10 +840,25 @@ def transcript_dirs() -> list:
     return [os.path.join(home, ".codex", "sessions"), os.path.join(home, ".claude", "projects")]
 
 
+def _is_codex_exec(path: str) -> bool:
+    """True for a session started by `codex exec` (first line: session_meta with originator "codex_exec"). Those are the
+    automated review prompts preship_audit.py / bgg_call.py send (REVIEWER-SWAP-1025); the owner never types into them,
+    so they are excluded by channel, not only by the sentinel. The owner's own Codex Desktop sessions are unaffected."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            first = json.loads(fh.readline() or "{}")
+    except (OSError, ValueError):
+        return False
+    payload = first.get("payload") if isinstance(first, dict) else None
+    return isinstance(payload, dict) and first.get("type") == "session_meta" and payload.get("originator") == "codex_exec"
+
+
 def _transcript_files() -> list:
-    """Top-level Claude transcripts of this project and every Codex session file (sub-agent files excluded)."""
+    """Top-level Claude transcripts of this project and every Codex session file (sub-agent files and `codex exec`
+    review sessions excluded)."""
     home = transcript_home()
-    out = glob.glob(os.path.join(home, ".codex", "sessions", "**", "*.jsonl"), recursive=True)
+    out = [p for p in glob.glob(os.path.join(home, ".codex", "sessions", "**", "*.jsonl"), recursive=True)
+           if not _is_codex_exec(p)]
     out += glob.glob(os.path.join(home, ".claude", "projects", "*alpaca-mtf-bot*", "*.jsonl"))
     return out
 

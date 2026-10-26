@@ -7,6 +7,9 @@ the Groq/Gemini APIs, so every prompt passes the scan below — on the text actu
 
     python3 .claude/preship/bgg_call.py <prompt_file> [--add-questions] [--gro-only | --gai-only]
 
+Reviewer #2 is Codex since REVIEWER-SWAP-1025 (2026-10-25), with Gro as the fallback when Codex is unavailable;
+`--gro-only` means reviewer #2 only.
+
 Refuses (exit 2, nothing sent) when the prompt:
   * contains verdict-leading language (bgg_prompt_bias_gate's patterns — one source of truth);
   * is a design/board review without the paper-account frame (paper + the $25K goal);
@@ -74,7 +77,16 @@ def main() -> int:
         return 2
     _env()
     sys.path.insert(0, os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd())
+    codex_done = False
     if "--gai-only" not in sys.argv:
+        # Reviewer #2 = Codex (BGC gate, REVIEWER-SWAP-1025); Gro below only when Codex is unavailable.
+        import preship_audit as pa
+        try:
+            print("=== CODEX ===\n" + pa._codex(prompt))
+            codex_done = True
+        except pa.CodexUnavailable as exc:
+            print(f"CODEX UNAVAILABLE ({str(exc)[:120]}) — Gro reviews as reviewer #2")
+    if "--gai-only" not in sys.argv and not codex_done:
         req = urllib.request.Request(
             "https://api.groq.com/openai/v1/chat/completions",
             data=json.dumps({"model": "openai/gpt-oss-120b", "max_tokens": 6000,

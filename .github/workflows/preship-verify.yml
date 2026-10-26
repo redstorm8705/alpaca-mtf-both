@@ -256,6 +256,12 @@ jobs:
           python3 .claude/preship/test_no_static_scan.py
           # owner-chosen numbers pass only with the owner's approval bound to the exact design text (OWNER-NUMBERS-1025)
           python3 .claude/preship/test_owner_numbers.py
+          # the four Gemini model-ladder copies must match (2026-10-25: a model outside the ladder served while the ladder 429/503'd)
+          python3 .claude/preship/test_ladder_parity.py
+          # BGC gate: Codex is reviewer #2, Gro only when Codex is unavailable; a review prompt never counts as an approval (REVIEWER-SWAP-1025)
+          python3 .claude/preship/test_reviewer_swap.py
+          # the owner-approval parser itself (REVIEWER-SWAP-1025 changed it: codex exec sessions are never owner text)
+          python3 .claude/preship/test_owner_approval.py
           # four tier names only — Day / Swing / QHM / F6 (CEO 2026-10-07); fails on a retired name in person-facing text
           python3 tests/test_tier_names.py
           python3 .claude/preship/gai_health.py canary
