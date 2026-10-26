@@ -30,7 +30,8 @@ import time
 # overloaded pools we do not control — a root cause). Verified live 2026-08-31: gemini-3.7-flash +
 # 3.1-flash-lite + 3-flash-preview + flash-latest all served 200; the old gemini-3.5-flash pin
 # returned 404 (retired) — the exact churn (a single dead pin false-blocking CI) this fix removes.
-CANDIDATE_MODELS = ["gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-3-flash-preview", "gemini-flash-latest"]
+CANDIDATE_MODELS = ["gemini-3.1-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.5-flash",
+                    "gemini-3-flash-preview", "gemini-flash-latest"]   # test_ladder_parity.py fails on drift
 PINNED_MODEL = CANDIDATE_MODELS[0]   # 3.1-flash-lite: proven to emit a clean single VERDICT for the gate
 
 _BASE = "https://generativelanguage.googleapis.com/v1beta"

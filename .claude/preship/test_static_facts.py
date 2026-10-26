@@ -90,6 +90,10 @@ class AuditFlow(unittest.TestCase):
                 mock.patch.object(pa, "_static_facts", return_value=("\nSTATIC ANALYSIS block", names_ok)), \
                 mock.patch.object(pa, "_gai", return_value="VERDICT: APPROVE"), \
                 mock.patch.object(pa, "_gro", side_effect=_gro), \
+                mock.patch.object(pa, "_codex_review", return_value=(None, "stubbed: test exercises the Gro path")), \
+                mock.patch.object(pa, "_codex_signed", return_value=False), \
+                mock.patch.object(pa, "_codex_rejected", return_value=False), \
+                mock.patch.object(pa, "_log_verdict"), \
                 mock.patch("builtins.open", mock.mock_open()), \
                 mock.patch.object(pa.os, "makedirs"):
             ok, msg = pa.audit_file("execution/x.py", False, {"GROQ_API_KEY": "k", "GEMINI_API_KEY": "g"})

@@ -30,7 +30,9 @@ GAI_MODEL_LADDER: tuple[str, ...] = (
     "gemini-3.1-flash-lite",   # FIRST: proven to emit a clean, terse, parseable VERDICT for the
                                # preship/CI gate (the canary self-healed to it 2026-08-31 when
                                # 3.7-flash returned 200 but no single clean VERDICT line). Live 200.
+    "gemini-3.6-flash",        # 2026-10-25: served (3/4 bake-off bugs, 0 false rejects) while the rest were 429/503
     "gemini-3.7-flash",        # stronger/newer fallback
+    "gemini-3.5-flash",        # 2026-10-25: back from 503 the same evening
     "gemini-3-flash-preview",
     "gemini-flash-latest",
 )

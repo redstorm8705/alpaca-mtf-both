@@ -765,6 +765,16 @@ do NOT delay a ready fix to wait for market hours.
 
 **Claude runs Gro and GAI autonomously via direct API. User NEVER needs to manually prompt Gro or GAI.**
 
+**BGC GATE — Codex is reviewer #2 (Rafael 2026-10-25, REVIEWER-SWAP-1025; `logs/design_records/reviewer_swap_codex_2026-10-25.md`):**
+the external pre-ship voices are now **GAI + Codex** (Board, GAI, Codex). `preship_audit.py` and `bgg_call.py` send
+reviewer #2's prompt to the Codex command line (owner's ChatGPT plan, read-only sandbox, minimal environment, `.env`
+values masked in its output; it can still READ files by absolute path). **Gro is the fallback** only when Codex is
+unavailable (not installed, usage limit, timeout, error), and never while Codex's latest verdict on that file is a
+REJECT (no reviewer shopping; verdicts are logged in the git common dir). A file with a Codex-signed commit needs
+Codex AND Gro. `codex exec` sessions are never read as owner approvals. Every rule below that names "Gro" as the second
+voice now means reviewer #2 (Codex, or Gro on fallback); the marker's `reviewer_b` field records which. The
+same-prompt rule applies to GAI and reviewer #2. CI stays GAI-only (three samples, two APPROVEs).
+
 **Browser automation is CONFIRMED BROKEN** — Groq and AI Studio are React/Angular SPAs. Background tabs don't render DOM content; Chrome extension security blocks `innerHTML`/`TreeWalker` access. Direct API is the ONLY reliable approach.
 
 **Groq (Gro):**
