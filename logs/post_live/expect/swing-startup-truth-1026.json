@@ -1,0 +1,19 @@
+{
+  "change": "swing-startup-truth-1026",
+  "tier": 1,
+  "paths": [
+    "main.py",
+    "execution/swing_breakout_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change=swing-startup-truth-1026"
+    }
+  ],
+  "expected_rate": "Once per process restart while a dedicated Day or Swing lot is live outside the legacy tracker",
+  "window_sessions": 2,
+  "window_reason": "A process restart immediately exercises this startup-only classification; two sessions allow for a normal operational restart without prolonging a false readiness claim",
+  "reversal": "A broker position held by Day or Swing is still reported as absent from every manager, or this read-only change mutates any order or position",
+  "verification": "tests/test_startup_managed_position_truth.py"
+}

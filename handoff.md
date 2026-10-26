@@ -8,6 +8,17 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ PARALLEL (2026-10-26, OpenAI Codex signed) — startup ownership truth live
+
+- `SWING-START-1026` shipped in PR #766 and is live on OCI at `a120113`. Its exact source trace, OCI broker/state measurements,
+  required-question answers, failure behavior, and machine checks are in
+  `logs/design_records/startup_managed_position_truth_2026-10-26.md`.
+- The post-restart proof logged `dedicated Day/Swing positions accounted for` for AAPL/MSFT; both remain one-share
+  Swing holdings with live one-share GTC stops at `$328.70` and `$497.10`. Real unmanaged positions still page.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** finish approved `F6-SIM-1023` and prepare
+Rafael's one-page F6 enablement decision. Do not enable F6 before that decision.
+
 ## ⏩ LATEST (2026-10-25, Claude signed) — SWING-OWNER-1025 deployed (#764, e76c045), deployed-unexercised
 
 - Swing tier (design `logs/design_records/swing_owner_design_2026-10-25.md`): top 50 of a 77-name pool, 10 slots;

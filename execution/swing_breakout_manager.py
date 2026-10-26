@@ -491,20 +491,40 @@ def _save_state(state: dict) -> bool:
 _last_good_symbols: frozenset = frozenset()
 
 
-def get_breakout_symbols() -> set:
-    """Symbols this tier currently holds or may hold (for orphan/drift exclusion). On an unreadable state file
-    returns the LAST GOOD set (never empty-on-error, which would let a restart adopt this tier's lots)."""
+def get_breakout_symbols_checked() -> tuple[set, bool]:
+    """Return (confirmed holding symbols, state_readable).
+
+    Unlike :func:`get_breakout_symbols`, this never substitutes the configured
+    candidate pool for confirmed holdings.  It is for observability callers
+    that must distinguish "owned" from "ownership could not be proved".
+    """
     global _last_good_symbols
     try:
         syms = frozenset(s for s, p in _load_state().get("positions", {}).items() if p.get("status") in _HOLDING)
         _last_good_symbols = syms
-        return set(syms)
+        return set(syms), True
     except Exception as e:
-        # FAIL CLOSED (as QHM does): last good set, else the whole configured pool (over-protective — a restart
-        # must never adopt this tier's lots as intraday orphans because its own state file is unreadable)
-        fallback = set(_last_good_symbols) or set(_cfg("SWING_BREAKOUT_POOL", _DEFAULT_POOL) or _DEFAULT_POOL)
-        logger.critical("swing_breakout: state unreadable (%s) — excluding %d symbol(s) from orphan adoption", e, len(fallback))
-        return fallback
+        logger.critical(
+            "swing_breakout: state unreadable (%s) — confirmed holdings unavailable",
+            e,
+        )
+        return set(), False
+
+
+def get_breakout_symbols() -> set:
+    """Symbols this tier currently holds or may hold (for orphan/drift exclusion). On an unreadable state file
+    returns the LAST GOOD set (never empty-on-error, which would let a restart adopt this tier's lots)."""
+    syms, readable = get_breakout_symbols_checked()
+    if readable:
+        return syms
+    # FAIL CLOSED (as QHM does): last good set, else the whole configured pool (over-protective — a restart
+    # must never adopt this tier's lots as intraday orphans because its own state file is unreadable)
+    fallback = set(_last_good_symbols) or set(_cfg("SWING_BREAKOUT_POOL", _DEFAULT_POOL) or _DEFAULT_POOL)
+    logger.critical(
+        "swing_breakout: excluding %d symbol(s) from orphan adoption",
+        len(fallback),
+    )
+    return fallback
 
 
 def _page(msg: str) -> None:
