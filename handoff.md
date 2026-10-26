@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-25 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-26 (Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -18,6 +18,25 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 **⏩ EXACT NEXT ACTION (OpenAI Codex):** finish approved `F6-SIM-1023` and prepare
 Rafael's one-page F6 enablement decision. Do not enable F6 before that decision.
+
+## ⏩ LATEST (2026-10-26, Claude signed) — BGC gate live (#768, 60f9fe8): Codex is reviewer #2, Gro fallback
+
+- REVIEWER-SWAP-1025 (design `logs/design_records/reviewer_swap_codex_2026-10-25.md`, owner sign-off recorded at commit):
+  `preship_audit.py` / `bgg_call.py` send reviewer #2 to the Codex command line (read-only sandbox, minimal env, .env
+  values masked); Gro only when Codex is unavailable, never while Codex's latest logged verdict on a file is REJECT;
+  Codex-signed files need Codex and Gro; verdicts in `<git common dir>/reviewer-verdicts.jsonl`. Approval capture skips
+  `codex exec` sessions. First live run: Codex + GAI passed all 12 files of #768 itself (12 verdict rows).
+- Gemini ladder: gemini-3.6-flash + 3.5-flash in all four copies (`test_ladder_parity.py` in CI); OCI pulled, the server
+  loads the 6-model list. CI now also runs `test_reviewer_swap.py` (31) and `test_owner_approval.py` (100).
+- BV-5 (10/22 market-risk entry block) investigation draft: `logs/design_records/bv5_mri_entry_block_2026-10-25.md`
+  (fired 4 days since July; 10/22 10:01-15:53 ET; a point-in-time scan replay tool is needed before any proposal).
+- Bake-off WIP (reviewer_bakeoff.py, any-wording parser fixes, nightly_audit WIP) is in git stash
+  `bakeoff-wip-claude-1025-b8b86eba` (sha 7357004d); it overlaps files #768 changed, so rebuild on main, do not pop.
+
+**⏩ EXACT NEXT ACTION (Claude):** (1) post-live audits after Monday 10/26: #764 Swing, #758 SAFE-1024, #753 KILL-ATTR,
+#760 AUDIT-1025, #768 BGC (check `reviewer_b` on the first real ships); (2) BV-5 point-in-time replay, then the owner
+package; (3) re-land bake-off tooling + parser fixes on main; (4) Mistral key pending (`MISTRAL_API_KEY`); (5) follow-up:
+log the Codex REJECT when a counter-prompt reply is unclear; restrict `codex exec` launches to preship_audit/bgg_call.
 
 ## ⏩ LATEST (2026-10-25, Claude signed) — SWING-OWNER-1025 deployed (#764, e76c045), deployed-unexercised
 
