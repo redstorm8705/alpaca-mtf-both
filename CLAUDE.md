@@ -1549,6 +1549,12 @@ the board output in plain language without losing the directional conclusion.
     Reg-T 2× overnight limit; at 1.9× with the live maintenance ratio 0.327 a margin call needs a 29.6% drop in long
     value. Block-only: a breach stops NEW entries; it never forces a sale. Raising the ceiling, or changing either
     limb, requires a board vote.
+    **Swing tier (SWING-OWNER-1025, 2026-10-25 — owner-approved; board Thorp + Shaw + Taleb, Gro, GAI):** limb 1
+    (swing/day ≤ 100%) no longer binds the Swing tier. Each Swing lot is sized by its own stop (r = 0.25 × the tier's
+    Kelly from its own fills, replay prior until 30 closed lots, ≤ 2% of equity at the stop, scaled by K / ceiling);
+    the K limb is its ceiling after QHM/F6/other notional; a gap check (each Swing lot × its own 99th-percentile
+    one-day loss within the margin buffer) resizes a new lot down, never below one share. Limb 1 is unchanged for
+    every other path that enforces it.
 12. **VIX-adjusted stop widening (continuous curve, since 2026-06-24):** ATR stop multiplier
     widens via `scalar = min(1.0 + max(0, VIX - 20) × 0.1, 2.0)` — continuous, not a discrete
     step function. Anchors preserved: VIX=25→1.5×, VIX=30→2.0× (hard cap). Target scales

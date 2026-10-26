@@ -1,0 +1,19 @@
+{
+  "change": "swing-owner-1025",
+  "tier": 1,
+  "paths": [
+    "execution/swing_breakout_manager.py",
+    "config.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/trade_events.jsonl",
+      "pattern": "swing-owner-1025"
+    }
+  ],
+  "expected_rate": "every session: the daily breakout-universe signal event carries change=swing-owner-1025; setup, skip and entry events whenever a breakout fires",
+  "window_sessions": 1,
+  "window_reason": "The universe scan runs once every session from 10:05 ET, so the first full session proves the new ranking, the pending-setup rule and the sizing path ran.",
+  "reversal": "an entry below its breakout level, a lot without a GTC stop, a lot whose loss at the stop exceeds 2% of equity (3% for a one-share lot), total overnight notional above K x equity after a Swing entry, or a live per-trade mean below zero over the first 100 Swing trades",
+  "verification": "tests/test_swing_owner_design.py and tests/test_swing_breakout_manager.py; read-only server run 2026-10-24 (77/77 pool names with bars, XOM 3 sh / NOW 2 sh sized on the real book)"
+}
