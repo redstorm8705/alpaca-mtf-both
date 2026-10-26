@@ -39,6 +39,7 @@ def _qhm_stop(status, filled_qty=0, order_id="stop-1", stop_price=90.0):
         client_order_id="QH-NVDA-s-test",
         side="sell",
         type="stop",
+        time_in_force="gtc",
         status=status,
         qty=5,
         filled_qty=filled_qty,

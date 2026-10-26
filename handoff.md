@@ -47,13 +47,33 @@ sources, then push current state; (3) Track A logic
 
 ## PREVIOUS (2026-10-24, Claude signed) — KILL-ATTR-1023 live (#753): 7% kill = Day + Swing only, by exact shares
 
+## ⏩ PARALLEL (2026-10-25, OpenAI Codex signed) — QHM owner-buy adoption approved and ready to ship
+
+- `QHM-ADD-1023` proves a manual Alpaca app/web buy from raw terminal order evidence, only when the
+  symbol was already owned solely by QHM. It replaces the existing QHM stop in place to cover the new total before
+  it changes local ownership, then makes broker quantity, QHM state, and the canonical ledger agree.
+- The transaction is durable across lost replies, restarts, replacement-chain fills, concurrent owner buys, and local
+  write failures. Foreign reducing orders, co-holds, fractional/partial fills, unreadable broker facts, or ambiguous
+  stop descendants refuse automatic adoption. Assignment rows stay noncanonical until the matching ledger projection
+  is safely persisted.
+- The measured GE incident is repaired at 3 QHM shares with a 3-share `$272.71` stop. The new path handles future
+  manual additions; it does not place the owner's buy or change QHM entry logic.
+- Exact design and evidence: `logs/design_records/qhm_manual_add_adoption_2026-10-23.md`.
+- The final safety review required compatibility updates to three existing QHM test files. Rafael approved the exact
+  final 14-file Covers list as `QHM-ADD-1023` on 2026-10-25; no production behavior was widened.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex F6 queue):** after this QHM integrity shipment, finish approved `F6-SIM-1023`
+full-path pre-market simulation and prepare Rafael's one-page enablement decision. Do not enable F6.
+
+## ⏩ PRIOR (2026-10-24, Claude signed) — KILL-ATTR-1023 live (#753): 7% kill = Day + Swing only, by exact shares
+
 - Deployed at `23519e2` (DEPLOY_OK, services active, dashboard 200). First live log line `kill-switch attribution
   exact=False unproven={'GE': ... 'excluded ...'} [change=kill-attr-1023]` (GE: the owner's untagged manual buy today).
 - Design + review trail: `logs/design_records/kill_switch_tier_attribution_2026-10-23.md`; `logs/tb_audit_log.md`.
 - Owner decisions 2026-10-23: TRACK-A-EDGE-1023 (Track A size cut) NOT adopted — keep Track A's size, fix its logic first
   (RIDE: no follow-through, ~0.3R best move, 2R target never reached; FADE: stops inside 5-minute noise), re-evaluate in
   about a month. Stop-beyond-level replayed and rejected 5/5. Records: `logs/design_records/track_a_edge_sizing_2026-10-23.md`.
-- Codex owns QHM-ADD-1023 (owner manual QHM buys adopted, stop resized) — the owner must re-type its approval.
+- Codex owns QHM-ADD-1023 (owner manual QHM buys adopted, stop resized).
 
 **⏩ EXACT NEXT ACTION (Claude):** (1) post-live audit of #753 after Monday 10/26's session (gauge should show a number
 on a day without a manual QHM trade); (2) Track A logic designs through the gate (no size cut); (3) QHM design (check

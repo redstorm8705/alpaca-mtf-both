@@ -21,7 +21,7 @@ def _pos(**kw):
 def _order(**kw):
     base = dict(id="stop-1", symbol="NVDA", client_order_id="QH-NVDA-sell-1",
                 side="sell", type="stop", status="accepted", qty="2",
-                filled_qty="0", stop_price="200.00")
+                filled_qty="0", stop_price="200.00", time_in_force="gtc")
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -76,7 +76,7 @@ class QHMStopQuantityReconcileTests(TestCase):
         self.assertEqual(p.stop_order_id, "stop-2")
 
     def test_qh_buy_is_not_a_stop_candidate_or_replace_target(self):
-        m, p = _manager(strict=(2,), saves=(True,)), _pos()
+        m, p = _manager(strict=(2,), saves=(True, True)), _pos()
         fake = ModuleType("execution.broker")
         fake.replace_stop_order = Mock()
         with patch.dict("sys.modules", {"execution.broker": fake}):
@@ -351,6 +351,43 @@ class QHMStopCrossPathTests(TestCase):
             ))
         self.assertEqual(m._save_state.call_count, 2)
         m._dispatcher.submit_gtc_stop.assert_called_once()
+
+    def test_commit_recovery_final_snapshot_rejects_foreign_reducing_order(self):
+        m, p = _manager(strict=(2,), saves=(True, True)), _pos()
+        foreign = _order(
+            id="swing-stop", qty="1", client_order_id="IN-NVDA-s-foreign"
+        )
+        m._get_open_orders = Mock(return_value=[foreign])
+        m._dispatcher = SimpleNamespace(
+            submit_gtc_stop=Mock(return_value=_order(id="must-not-submit"))
+        )
+        fake = ModuleType("execution.broker")
+        fake.get_order_by_client_order_id = Mock(return_value=None)
+        with patch.dict("sys.modules", {"execution.broker": fake}):
+            self.assertIsNone(m._recover_or_submit_stop(
+                p, 2, "sell", p.stop_price, reject_foreign_reducers=True
+            ))
+        m._dispatcher.submit_gtc_stop.assert_not_called()
+        self.assertEqual(p.state, HoldState.PENDING_STOP_REPLACE)
+
+    def test_commit_recovery_final_snapshot_rejects_unreadable_foreign_side(self):
+        m, p = _manager(strict=(2,), saves=(True, True)), _pos()
+        foreign = _order(
+            id="unknown-order", qty="1", client_order_id="foreign-unknown"
+        )
+        foreign.side = None
+        m._get_open_orders = Mock(return_value=[foreign])
+        m._dispatcher = SimpleNamespace(
+            submit_gtc_stop=Mock(return_value=_order(id="must-not-submit"))
+        )
+        fake = ModuleType("execution.broker")
+        fake.get_order_by_client_order_id = Mock(return_value=None)
+        with patch.dict("sys.modules", {"execution.broker": fake}):
+            self.assertIsNone(m._recover_or_submit_stop(
+                p, 2, "sell", p.stop_price, reject_foreign_reducers=True
+            ))
+        m._dispatcher.submit_gtc_stop.assert_not_called()
+        self.assertEqual(p.state, HoldState.PENDING_STOP_REPLACE)
 
     def test_terminal_zero_fill_intent_rotates_and_submits_new_id(self):
         m, p = _manager(strict=(2,), saves=(True, True)), _pos()
