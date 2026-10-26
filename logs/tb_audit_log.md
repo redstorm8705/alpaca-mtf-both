@@ -11564,3 +11564,5 @@ are live. A fix is proposed as a separate session (dash-stops).
   _submit_new_stop + GTC defer; the late-fill heal closes the entry order's excess shares. Board Harris + Taleb, Gro,
   GAI aligned; preship pass; cold-2nd x3 + adversarial PASS; 15 tests. Waiting on the owner's sign-off.
   TA-FOLLOW-1024 not shipped (owner version -$99.37 -> -$92.24 walk-forward). #755 merged. #756 QHM -> Codex.
+
+- 2026-10-25 (Claude) SWING-OWNER-1025 #764 deployed e76c045. Local preship: Gro WAIVED (18.5k tokens > Groq 8k TPM, NVIDIA substitute empty; owner rule 2026-07-07), GAI APPROVE after adding gemini-3.6-flash to the ladder. CI: 2 false rejects (stop_distance silent drop; gap_resize empty-known) refuted by counter-prompt with source (both reversed to APPROVE), stop_distance executed on real and corrupt bars; CI 2/3 APPROVE. Adversarial claim 6 narrowed (2 failure paths write no decision-stack record).

@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-24 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-25 (Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-10-25, Claude signed) — SWING-OWNER-1025 deployed (#764, e76c045), deployed-unexercised
+
+- Swing tier (design `logs/design_records/swing_owner_design_2026-10-25.md`): top 50 of a 77-name pool, 10 slots;
+  pending breakouts enter only when today's open and the ask are at/above the level; each lot sized by its own stop
+  (quarter-Kelly r 1.484% from the replay prior until 30 closed lots); Invariant #11 limb 1 retired for Swing; gap
+  check resizes down, never below 1 share. OCI DEPLOY_OK, services active, dashboard 200. First run Monday 10/26
+  (`change=swing-owner-1025`). Gro waived (diff > Groq 8k TPM); GAI APPROVE; two CI false rejects reversed by counter-prompt.
+- OWNER-NUMBERS-1025 merged (#762). BAKEOFF-1025 measured: Codex 7/8 bugs, 1/12 false rejects; Gro high 4-5/12 false rejects.
+- Uncommitted in this worktree: bake-off tooling + Gemini ladder fix (gemini-3.6-flash / 3.5-flash added) +
+  REVIEWER-SWAP-1025 draft (`logs/design_records/reviewer_swap_codex_2026-10-25.md`, awaiting owner approval).
+- Live check 10/25: all 5 positions have full-size GTC stops (AAPL, GE 3 sh, GOOGL, MSFT, NVDA).
+
+**⏩ EXACT NEXT ACTION (Claude):** (1) post-live audits after Monday 10/26: #764 Swing, #758 SAFE-1024, #753 KILL-ATTR,
+#760 AUDIT-1025; (2) ship BAKEOFF-1025 tooling (needs `test_reviewer_bakeoff.py`); (3) build REVIEWER-SWAP-1025 once
+approved; (4) Mistral key pending from the owner (`MISTRAL_API_KEY`).
 
 ## ⏩ LATEST (2026-10-24, Claude signed) — SAFE-1024 deployed (#758, 6ef1202), deployed-unexercised
 
