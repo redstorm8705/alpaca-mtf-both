@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-10-26
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The session shows a significant discrepancy between the tracker and the broker ledger, and the bot is currently operating under a "PREMARKET RED LOCKOUT" which has effectively paralyzed the long-side strategy.
+
+### PERFORMANCE AUDIT
+- **Entry/Exit Integrity**: No closed trades were recorded in the `CLOSED TRADE DETAILS`. While 6 fills were reported in the `ALPACA FILLS` ground truth, the bot's internal ledger shows $0.00 P&L.
+- **P&L Discrepancy**: A critical drift of `$-14.15` was identified at 17:28:03 PT between the Alpaca ledger (`$-14.15`) and the internal tracker (`$0.00`). This indicates a failure in the internal accounting engine to reconcile the 6 fills (2B/0S for NOW, TSLA, XOM) with the portfolio state.
+- **Score Correlation**: The bot correctly identified high-scoring candidates (PANW, NET, PLTR at 12/12 and 10/12), but these were blocked by the Rule 1 lockout.
+
+### ENTRY QUALITY
+- **Rule 1 Lockout**: The bot correctly identified that 88% of tracked movers were red, triggering a `PREMARKET RED LOCKOUT`. This prevented entries into high-scoring long setups (PANW, NET, PLTR). While this is a protective measure, it highlights a lack of short-side liquidity or signal strength, as no short entries were taken despite the bearish bias.
+
+### EXIT QUALITY
+- No exits were triggered. Positions in NOW, TSLA, and XOM remain open and are classified as `COVERED` by the broker, which is the expected state for this session.
+
+### MRI ALIGNMENT
+- The session is consistently `STRESSED` (27/27 samples). The bot correctly adjusted the `MIN_SCORE` to 10/12 in response to the stressed regime, demonstrating appropriate defensive posture.
+
+### LOG ANOMALIES
+- `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-14.15 tracker=$0.00 drift=$-14.15`: This is a significant accounting failure.
+- `WARNING | confluence | [DRAM] No daily data — long/short entry blocked (fail-closed)`: Repeated warning indicating missing data for the DRAM ticker.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | HIGH | P&L Reconciliation Failure | The internal tracker failed to account for the 6 fills reported by Alpaca, resulting in a $14.15 drift at EOD.**
+- **INFRASTRUCTURE | MEDIUM | Missing Data Handling | The `DRAM` ticker is triggering repeated warnings due to missing daily data, causing the confluence engine to fail-closed for that symbol.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Investigate `execution.portfolio_tracker` to determine why the 6 fills (NOW, TSLA, XOM) were not reconciled into the internal P&L ledger, causing the $14.15 drift.
+2. **INFRASTRUCTURE**: Add a data-availability check for `DRAM` in the `strategy.signal_generator` to prevent the confluence engine from attempting to process symbols with missing daily data.
+3. **ALPHA**: Review the "PREMARKET RED LOCKOUT" logic; while protective, it resulted in zero activity during a high-volatility session. Consider if the threshold (75%) is too restrictive for the current regime.
