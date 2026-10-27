@@ -951,6 +951,20 @@ DAYTRADE_STOP_SPREAD_SANITY_PCT = 0.02  # PROV:daytier-hairpin-2026-09-18 — a 
                                         # the board-blessed GEX_SPOT_SPREAD_SANITY_PCT=0.02: >200bps on a liquid day-tier
                                         # name is a broken quote by microstructure, not a fitted threshold.
 
+# ─── TRACK A NOISE STOP + RANGE TARGET (TRACK-A-STOP-1026, owner-approved 2026-10-26 with his change: Track A keeps
+# its size rule) ─── Design record logs/design_records/track_a_noise_stop_2026-10-26.md. A Track A stop sits at least
+# NOISE_ATR_MULT x the stock's normal 5-minute movement away (the median, over the last NOISE_SESSIONS sessions, of the
+# mean 5-minute true range within NOISE_WINDOW_MIN minutes of the entry's time of day); the whole lot targets
+# RANGE_TARGET_FRAC x the median daily range of the prior RANGE_SESSIONS sessions. Shares come from the existing sizing
+# at the wider stop (never more than today). Missing data -> today's stop and target. Owner numbers (fixed until 100
+# Track A trades). Kill flag: DAYTRADE_TRACK_A_NOISE_STOP_ENABLED (only an explicit False disables it).
+DAYTRADE_TRACK_A_NOISE_STOP_ENABLED = True
+DAYTRADE_TRACK_A_NOISE_ATR_MULT = 6.0
+DAYTRADE_TRACK_A_NOISE_SESSIONS = 5
+DAYTRADE_TRACK_A_NOISE_WINDOW_MIN = 30
+DAYTRADE_TRACK_A_RANGE_TARGET_FRAC = 0.35
+DAYTRADE_TRACK_A_RANGE_SESSIONS = 20
+
 # ─── DAY-TIER AGGRESSION GUARDRAILS (2026-09-18, Rafael "go further" + board + Gro + GAI) ──────────
 # These MUST ship WITH the ceiling/risk increase above (board: non-optional). Two cold board seats
 # converged: the raised gross ceiling is safe ONLY where the book can liquidate it, and the correlated
