@@ -19,7 +19,16 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 **⏩ EXACT NEXT ACTION (OpenAI Codex):** finish approved `F6-SIM-1023` and prepare
 Rafael's one-page F6 enablement decision. Do not enable F6 before that decision.
 
-## ⏩ LATEST (2026-10-27, Claude signed) — TRACK-A-STOP-1026 in PR #779, not yet merged or deployed
+## ⏩ LATEST (2026-10-27, Claude signed) — TRACK-A-STOP-1026 merged (#779, cba6739) and deployed; unexercised
+
+- OCI `git pull --ff-only` -> cba6739, services restarted, DEPLOY_OK + HEALTH_OK. Read-only probe on OCI with real SIP
+  bars (no orders): flag enabled; SNDK 09:40 noise room 78.43 capped to 39.75 -> 1 share (was 0); AMZN 09:40 room 6.52,
+  target 1.98. No live Track A entry has run on it yet.
+
+**⏩ EXACT NEXT ACTION (Claude):** post-live audit after the first Track A entry tagged `change=track-a-stop-1026`
+(`record_post_live.py 779`); then the two review follow-ups below (RTH-only noise window; room from the fill).
+
+## ⏩ PRIOR (2026-10-27, Claude signed) — TRACK-A-STOP-1026 in PR #779 before merge
 
 - Code + tests + revised record are on branch `claude/track-a-stop-1026` (PR #779); the record is
   `logs/design_records/track_a_noise_stop_2026-10-26.md` (one-share cap added as item 2a; Q2/Q5/Q9/Q11/Q22 revised).
