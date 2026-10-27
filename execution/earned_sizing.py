@@ -273,12 +273,13 @@ def jump_ratio(trades: list, fetch=None) -> "float | None":
 # ── sizing (pure) ────────────────────────────────────────────────────────────────────────────────────────────────
 def conv_size(direction: str, limit_px: float, stop_px: float, anchor_px: float, atr5: "float | None",
               spread_med: "float | None", atr_mult: float, spread_mult: float, g: float, j: float,
-              budget_room: float, rt_room: "float | None" = None) -> dict:
+              budget_room: float, rt_room: "float | None" = None, min_room: "float | None" = None) -> dict:
     """Size a proven-band entry. `stop_px` is today's protective stop (S = |limit - stop|); `anchor_px` the price the
     tight stop is measured from (the more adverse of the limit and the last trade). Returns {"ok", "stop", "d",
     "S", "A", "per_share", "qty", "binding", "why"}. ok False on any unusable input (the caller keeps today's
     sizing). `rt_room` (optional): the real-time / open volatility room the room stop uses; the tight stop never goes
-    inside it. Never raises."""
+    inside it. `min_room` (optional, TRACK-A-STOP-1026): the Track A noise room — the tight stop never goes inside
+    it either (still never wider than S). Never raises."""
     out: dict = {"ok": False, "why": ""}
     try:
         vals = (limit_px, stop_px, anchor_px, atr_mult, spread_mult, g, j, budget_room)
@@ -300,6 +301,9 @@ def conv_size(direction: str, limit_px: float, stop_px: float, anchor_px: float,
             binding = "stop" if d >= s else binding
         else:
             d, binding = s, "stop (atr/spread unavailable)"
+        if min_room is not None and math.isfinite(float(min_room)) and float(min_room) > d:
+            d = min(float(min_room), s)
+            binding = "stop" if d >= s else "track-a noise room"
         stop = round(float(anchor_px) - d, 2) if direction == "long" else round(float(anchor_px) + d, 2)
         # Never wider than today's stop, and on the protective side of the anchor.
         stop = max(stop, float(stop_px)) if direction == "long" else min(stop, float(stop_px))

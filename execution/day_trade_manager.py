@@ -901,6 +901,123 @@ def _room_stop(symbol: str, direction: str, limit_px: float, stop_px: float) -> 
         return None, f"room stop error: {ex!r}"
 
 
+def _track_a_noise_geometry(symbol: str, now_et: "datetime | None" = None) -> "dict | None":
+    """TRACK-A-STOP-1026 (owner-approved 2026-10-26; design record logs/design_records/track_a_noise_stop_2026-10-26.md):
+    the Track A stop room and take-profit distance from the stock's own history, prior sessions only (no look-ahead):
+      atr5        = median, over the last DAYTRADE_TRACK_A_NOISE_SESSIONS sessions, of the mean 5-minute true range in
+                    the window DAYTRADE_TRACK_A_NOISE_WINDOW_MIN minutes either side of now's time of day;
+      room        = DAYTRADE_TRACK_A_NOISE_ATR_MULT x atr5 (the stop sits at least this far from the entry limit);
+      target_dist = DAYTRADE_TRACK_A_RANGE_TARGET_FRAC x the median daily high-low range of the prior
+                    DAYTRADE_TRACK_A_RANGE_SESSIONS sessions (the whole lot's take-profit distance).
+    T1 Alpaca bars (data.fetcher.fetch_bars_window, SIP — prior sessions, so the plan's 15-minute delay does not apply).
+    None when disabled, or any input is missing, short or non-positive (the caller keeps today's stop and target).
+    Runs in the Day runner process (cron), never the main bot's trading thread. Never raises."""
+    try:
+        if _cfg("DAYTRADE_TRACK_A_NOISE_STOP_ENABLED", True) is False:
+            return None
+        k = float(config.DAYTRADE_TRACK_A_NOISE_ATR_MULT)
+        frac = float(config.DAYTRADE_TRACK_A_RANGE_TARGET_FRAC)
+        n_noise = int(config.DAYTRADE_TRACK_A_NOISE_SESSIONS)
+        win = int(config.DAYTRADE_TRACK_A_NOISE_WINDOW_MIN)
+        n_range = int(config.DAYTRADE_TRACK_A_RANGE_SESSIONS)
+        if not (math.isfinite(k) and math.isfinite(frac) and k > 0 and frac > 0
+                and n_noise >= 1 and win >= 1 and n_range >= 1):
+            return None
+        from data.fetcher import fetch_bars_window
+        now = (now_et or _now_et()).astimezone(ET)
+        midnight = datetime(now.year, now.month, now.day, tzinfo=ET)
+        # Calendar weeks back = sessions wanted: always more sessions than needed (5 per week, less holidays).
+        daily = fetch_bars_window(symbol, config.TF_DAILY, midnight - timedelta(weeks=n_range),
+                                  midnight - timedelta(minutes=1), feed="sip")
+        if daily is None or getattr(daily, "empty", True):
+            return None
+        days = [ix.astimezone(ET).date() for ix in daily.index]
+        prior = daily[[d < now.date() for d in days]]
+        if len(prior) < n_range:
+            return None
+        rows = prior.tail(n_range)
+        ranges = [float(h) - float(lo) for h, lo in zip(rows["high"].tolist(), rows["low"].tolist(), strict=True)]
+        rng = statistics.median(ranges)
+        sessions = sorted({d for d in days if d < now.date()})[-n_noise:]
+        if len(sessions) < n_noise:
+            return None
+        s0 = sessions[0]
+        bars = fetch_bars_window(symbol, config.TF_5M, datetime(s0.year, s0.month, s0.day, tzinfo=ET), midnight,
+                                 feed="sip")
+        if bars is None or getattr(bars, "empty", True):
+            return None
+        idx = [ix.astimezone(ET) for ix in bars.index]
+        highs, lows, closes = bars["high"].tolist(), bars["low"].tolist(), bars["close"].tolist()
+        per_session = []
+        for d in sessions:
+            center = datetime(d.year, d.month, d.day, now.hour, now.minute, tzinfo=ET)
+            lo_t, hi_t = center - timedelta(minutes=win), center + timedelta(minutes=win)
+            trs: list = []
+            prev = None
+            for j, ts in enumerate(idx):
+                if not (lo_t <= ts <= hi_t):
+                    continue
+                h, lo, c = float(highs[j]), float(lows[j]), float(closes[j])
+                tr = h - lo if prev is None else max(h - lo, abs(h - prev), abs(lo - prev))
+                if math.isfinite(tr) and tr >= 0:
+                    trs.append(tr)
+                prev = c
+            if trs:
+                per_session.append(sum(trs) / len(trs))
+        if len(per_session) < n_noise:
+            return None
+        atr5 = statistics.median(per_session)
+        room, target_dist = k * atr5, frac * rng
+        if not all(math.isfinite(v) and v > 0 for v in (atr5, room, rng, target_dist)):
+            return None
+        return {"atr5": round(atr5, 4), "atr5_sessions": len(per_session), "k": k, "f": frac,
+                "range_median": round(rng, 4), "range_sessions": len(ranges), "room": round(room, 4),
+                "target_dist": round(target_dist, 4)}
+    except Exception as e:  # noqa: BLE001 — today's stop and target are kept
+        logger.warning("[%s] change=track-a-stop-1026 noise/range read failed (today's stop and target kept): %s",
+                       symbol, e)
+        return None
+
+
+def _track_a_one_share_stop(direction: str, limit_px: float, live_equity: float, day_start_equity: float,
+                            size: dict) -> "float | None":
+    """TRACK-A-STOP-1026 one-share cap (board risk seat 2026-10-26: SNDK at 09:40 had a $80.60 noise room against a
+    $39.75 per-trade budget -> 0 shares -> skipped). The widest whole-cent stop at which the EXISTING per-trade risk
+    budget still buys one share: the budget is _bounded_entry_qty's own — risk basis min(live, start-of-day equity) x
+    the active per-trade risk % (the retained ceiling for a 10/10 max-size entry) x the track's risk_mult — and the
+    stop is stepped toward the limit one price increment at a time until floor(budget / distance) >= 1, the same
+    division the wire-time sizing does. 0.0 for a long priced at or below the budget (no cap binds). None on any
+    unusable input (the caller keeps today's stop and target). Pure, never raises."""
+    try:
+        from execution import broker
+        basis = min(float(live_equity), float(day_start_equity))
+        ceiling = float(config.DAYTRADE_PER_TRADE_RISK_EQUITY_PCT)
+        pct = ceiling if size.get("max_size") is True else min(float(config.DAYTRADE_PER_TRADE_RISK_BASIS_PCT), ceiling)
+        rm = float(size.get("risk_mult", 1.0))
+        lim = float(limit_px)
+        if not (all(math.isfinite(v) and v > 0 for v in (basis, pct, lim)) and math.isfinite(rm) and 0 < rm <= 1):
+            return None
+        budget = basis * pct * rm
+        d = round(budget, 2)
+        tick = broker.canonical_buy_limit_price(math.nextafter(d, math.inf)) - d   # one price increment (a cent)
+        for _ in range(3):
+            stop = round(lim - d if direction == "long" else lim + d, 2)
+            dist = abs(lim - stop)
+            if stop <= 0 and direction == "long":
+                # A long priced at or below the budget: any positive whole-cent stop is closer than the budget, so the
+                # cap does not bind — 0.0 leaves the noise stop as it is (cold-2nd N1: None dropped it entirely).
+                return 0.0
+            if not (dist > 0):
+                return None
+            if math.floor(budget / dist) >= 1:
+                return stop
+            d -= tick
+        return None
+    except Exception as e:  # noqa: BLE001 — today's stop and target are kept
+        logger.warning("change=track-a-stop-1026 one-share cap unavailable: %s", e)
+        return None
+
+
 # ── fill confirmation ──────────────────────────────────────────────────────────────────────────
 def _confirm_fill(order_id: str, expected_qty: int = 0) -> bool:
     """Poll broker.get_order until the entry order is FULLY filled (filled_qty >= expected_qty), reaches a
@@ -2285,7 +2402,7 @@ def _conv_compute(ci: dict, symbol: str, direction: str, size: dict, limit_px: f
         k = float(config.DAYTRADE_MIN_STOP_ATR_MULT)
         sized = es.conv_size(direction, limit_px, stop_px, anchor, ci["atr"], ci["spread_med"], k,
                              float(config.DAYTRADE_MIN_STOP_SPREAD_MULT), float(plan["G"]), float(j), budget_room,
-                             rt_room=ci["rt_room"])
+                             rt_room=ci["rt_room"], min_room=ci.get("noise_room"))
         if not sized.get("ok"):
             logger.info("[%s] CONV-1018 sizing unavailable — today's sizing: %s", symbol, sized.get("why"))
             return plan, None
@@ -2757,6 +2874,32 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                     logger.warning("[%s] day-tier invalidated-setup record not saved: %s", symbol, _ie)
             return False
         logger.info("[%s] day-tier %s", symbol, room_why)
+        # TRACK-A-STOP-1026 (owner-approved 2026-10-26): a Track A stop sits at least the stock's measured noise room
+        # from the entry limit (widen only), and the whole lot targets a fraction of its normal daily range (applied
+        # after the fill below). Shares come from the existing sizing at this wider stop. No history -> today's stop
+        # and target (_ta_geom None).
+        _ta_geom: "dict | None" = None
+        if _entry_track(size, decision) == "A":
+            _ta_geom = _track_a_noise_geometry(symbol)
+            if _ta_geom is None:
+                logger.info("[%s] change=track-a-stop-1026 noise/range unavailable — today's stop and target", symbol)
+            else:
+                _stop_today = float(stop_px)
+                _room_px = float(_ta_geom["room"])
+                _wide = round(limit_px - _room_px if direction == "long" else limit_px + _room_px, 2)
+                if _wide > 0:
+                    stop_px = min(_stop_today, _wide) if direction == "long" else max(_stop_today, _wide)
+                    _ta_geom.update(stop_today=round(_stop_today, 2), stop=round(float(stop_px), 2),
+                                    limit=round(float(limit_px), 2))
+                    logger.info("[%s] change=track-a-stop-1026 %s limit %.2f: atr5 %.4f (%d sessions) x k %.2f = room "
+                                "%.4f -> stop %.2f (today's %.2f); target distance %.4f (f %.2f x range %.4f, %d "
+                                "sessions)", symbol, direction, limit_px, _ta_geom["atr5"], _ta_geom["atr5_sessions"],
+                                _ta_geom["k"], _room_px, float(stop_px), _stop_today, _ta_geom["target_dist"],
+                                _ta_geom["f"], _ta_geom["range_median"], _ta_geom["range_sessions"])
+                else:
+                    logger.info("[%s] change=track-a-stop-1026 room %.4f leaves no positive stop — today's stop and "
+                                "target", symbol, _room_px)
+                    _ta_geom = None
         # TRACK B WATCH-DAY EXEMPTION SCOPE (board Thorp + López de Prado + GAI, 2026-10-12, out-of-sample replay): an
         # exempt Track B short trades only when the room stop KEPT its structural stop (the stop already had the room by
         # every measure _room_stop applies: limit and last trade, the ATR(5m) floor, the real-time room). Those replayed at
@@ -2873,9 +3016,31 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         _risk_ceiling = float(config.DAYTRADE_PER_TRADE_RISK_EQUITY_PCT) * day_start_equity
         _used = _daily_risk_used(open_trades, state, _risk_ceiling)
         _reserve_active = _track_b_reserve_active(state)
+        if _ta_geom is not None:
+            # TRACK-A-STOP-1026 one-share cap (board risk seat): the noise stop never goes wider than the existing
+            # per-trade budget affords for ONE share, so a high-priced name is never sized to 0 by the wider stop.
+            # Widen-only still holds: today's stop is kept when it is already wider than the cap.
+            _cap_stop = _track_a_one_share_stop(direction, limit_px, live_equity, day_start_equity, size)
+            _stop_today = float(_ta_geom["stop_today"])
+            if _cap_stop is None:
+                logger.info("[%s] change=track-a-stop-1026 one-share cap unavailable — today's stop and target", symbol)
+                stop_px, _ta_geom = _stop_today, None
+            else:
+                _capped = (min(_stop_today, max(float(stop_px), _cap_stop)) if direction == "long"
+                           else max(_stop_today, min(float(stop_px), _cap_stop)))
+                if abs(_capped - float(stop_px)) > 0:
+                    logger.info("[%s] change=track-a-stop-1026 noise stop %.2f capped at the one-share budget -> stop "
+                                "%.2f (today's %.2f)", symbol, float(stop_px), _capped, _stop_today)
+                stop_px = _capped
+                _ta_geom.update(one_share_stop=_cap_stop, stop=round(float(stop_px), 2),
+                                room_used=round(abs(limit_px - float(stop_px)), 4))
         _conv_in: "dict | None" = None
         if _track in ("A", "B") and _cfg("DAYTRADE_CONV_SIZING_ENABLED", True) is not False:
             _conv_in = _conv_inputs(symbol, size, decision, _used)
+            if _ta_geom is not None and isinstance(_conv_in, dict) and _conv_in.get("stage") == "ok":
+                # TRACK-A-STOP-1026: the conviction sizing's tight stop never goes inside the Track A noise room.
+                # The room actually used (after the one-share cap), so CONV never re-widens past the cap.
+                _conv_in["noise_room"] = float(_ta_geom["room_used"])
         _w = _wired_entry(symbol=symbol, direction=direction, size=size, track=_track, qty=qty, limit_px=limit_px,
                           stop_px=stop_px, px_base=_px_base, day_start_equity=day_start_equity, live_equity=live_equity,
                           open_trades=open_trades, state_only=_state_only, pos_by_sym=pos_by_sym,
@@ -2888,6 +3053,11 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             return False
         qty, stop_px, size = int(_w["qty"]), float(_w["stop_px"]), _w["size"]
         _min_q, _conv_sized = int(_w["min_q"]), _w["conv_sized"]
+        if _ta_geom is not None:
+            # Decision stack (Rule D): the noise/range inputs and the wired stop and shares, in the logged decision.
+            _ta_geom.update(stop=round(stop_px, 2), shares=qty, change="track-a-stop-1026",
+                            budget=size.get("budget"), conv_sized=_conv_sized is not None)
+            size = {**size, "track_a_stop_1026": dict(_ta_geom)}
 
         # CO-HOLD D3: a bracket needs its take-profit up front — the same target rule as the post-fill OCO, priced
         # off the entry limit (a FADE pin target still on the profit side of the limit, else DAYTRADE_RIDE_TARGET_R x
@@ -2895,6 +3065,12 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         bracket_tp: "float | None" = None
         if cohold:
             bracket_tp = _bracket_take_profit(trigger, direction, limit_px, stop_px)
+            if _ta_geom is not None and trigger.get("no_target") is not True:
+                # TRACK-A-STOP-1026: the range target, priced off the entry limit like the post-fill target below.
+                _d = float(_ta_geom["target_dist"])
+                _bt = round(limit_px + _d if direction == "long" else limit_px - _d, 2)
+                if (direction == "long" and _bt > limit_px) or (direction == "short" and 0 < _bt < limit_px):
+                    bracket_tp = _bt
             if bracket_tp is None:
                 _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "cohold_no_bracket", "wired": int(qty), "min": _min_q}
                 logger.info("[%s] day-tier co-hold entry skipped — no valid bracket take-profit (no-target trigger "
@@ -3079,6 +3255,11 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             # Track M: no profit target by design (the right tail carries the edge) -> no OCO; the plain
             # protective stop below + the EOD force-flat are the only exits.
             tp_px = None
+        elif _ta_geom is not None:
+            # TRACK-A-STOP-1026: the whole lot targets a fraction of the stock's normal daily range from the fill,
+            # replacing the pin / R-multiple target (and the conviction split below). The geometry check still applies.
+            _d = float(_ta_geom["target_dist"])
+            tp_px = round(fill_px + _d if direction == "long" else fill_px - _d, 2)
 
         geometry_ok, geometry_reason = _post_fill_exit_geometry(direction, fill_px, stop_px, tp_px)
         if not geometry_ok:
@@ -3265,7 +3446,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         # OCO for the whole fill. Kill flag DAYTRADE_CONV_SCALE_OUT_ENABLED (only an explicit False disables it).
         _tp_targets = (tp_px,) if tp_px is not None else ()
         _oco_qty = filled_qty_i
-        if (_conv_sized is not None and _tp_targets and _stop_dist > 0
+        if (_conv_sized is not None and _tp_targets and _stop_dist > 0 and _ta_geom is None
                 and _cfg("DAYTRADE_CONV_SCALE_OUT_ENABLED", True) is not False):
             _part = filled_qty_i // (len(_tp_targets) + 1)
             if _part >= 1:
@@ -3933,7 +4114,7 @@ def _closed_orders_since(symbol: str, since: datetime) -> "list | None":
                 return list(seen.values())
             for o in new:
                 seen[str(getattr(o, "id", "") or "")] = o
-            stamps = [o.created_at for o in new if getattr(o, "created_at", None) is not None]
+            stamps = [ca for o in new if (ca := getattr(o, "created_at", None)) is not None]
             if not stamps:
                 return None
             after = max(stamps) - timedelta(microseconds=1)   # re-read the boundary instant; ids de-duplicate
