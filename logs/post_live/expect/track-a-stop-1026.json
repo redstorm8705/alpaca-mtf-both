@@ -1,0 +1,20 @@
+{
+  "change": "track-a-stop-1026",
+  "tier": 1,
+  "paths": [
+    "execution/day_trade_manager.py",
+    "execution/earned_sizing.py",
+    "config.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/day_tier_runner_cron.log",
+      "pattern": "change=track-a-stop-1026"
+    }
+  ],
+  "expected_rate": "on every Track A entry attempt (a geometry line, an unavailable line, or a one-share cap line); Track A has entered on most sessions since 2026-09-15",
+  "window_sessions": 3,
+  "window_reason": "Track A does not fire every session; three sessions covers the observed entry cadence (44 Day entries over 22 sessions, 9/15-10/27).",
+  "reversal": "a Track A entry wires 0 shares or is skipped because of the wider stop; a stop tighter than the room stop; more shares than the existing rule; or, over the next 20 Track A trades, P&L from fills worse than the today-rule counterfactual or a target-hit rate below the trades' own room / (room + target) break-even (design record Q9)",
+  "verification": "tests/test_track_a_noise_stop.py"
+}
