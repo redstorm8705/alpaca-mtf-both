@@ -1,0 +1,58 @@
+Nightly Gemini Audit — 2026-10-26
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['gai_client.py', 'main.py', 'config.py', 'execution/broker.py', 'execution/manual_sale_proof.py', 'execution/ownership_guard.py', 'execution/swing_breakout_manager.py', 'execution/quarterly_hold_manager.py', '.github/scripts/ci_audit.py', 'research/swing_owner_prior.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution.fifo_pnl | [FIFO] TSLA: closing sell with no open long lots (net_qty=0, qty=1, price=391.36) | TSLA
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **[FIFO] TSLA (20:00:56 ET):** The bot recorded three consecutive "closing sell with no open long lots" errors for TSLA. This indicates a state corruption where the internal FIFO ledger lost track of the long position, leading to the creation of "synthetic shorts." This is a critical state-tracking failure.
+* **[CRITICAL] P0-STARTUP (19:39:32 ET):** "EOD P&L DRIFT: Alpaca=$-14.15 tracker=$0.00 drift=$-14.15". While the provenance header notes this is pre-heal, the magnitude of the drift combined with the FIFO corruption suggests the tracker is failing to reconcile with the broker.
+* **[WARNING] ledger_sync (19:40:17 ET):** Wall-time 15.8s for 832 fills/3188 orders. This is an excessive latency for a ledger sync, indicating potential I/O blocking or inefficient state processing.
+
+### PERFORMANCE AUDIT
+* **Trade Integrity:** The TSLA trades recorded in the EOD snapshot (short qty 1 @ 386.0, short qty 1 @ 385.99, long qty 1 @ 392.99) do not match the entry/exit logic of the bot. The FIFO errors confirm that the bot's internal state for TSLA is corrupted.
+* **Score Correlation:** The bot is consistently generating high scores (12/12) for short setups on HOOD and MARA, but the entry logic is blocking all longs due to the "Rule 1 — PREMARKET RED LOCKOUT." The system is functioning as designed regarding the lockout, but the lack of successful entries makes performance analysis of the scoring system impossible for this session.
+
+### TRADE INTEGRITY
+* **FIFO Corruption:** The `execution.fifo_pnl` logic failed to match a closing sell to an open long lot for TSLA. This is a direct failure of the `execution.fifo_pnl` module to maintain state consistency.
+
+### MODIFIED FILE FINDINGS
+* **execution/ownership_guard.py:** The addition of `_strict_ledger_write_lock` and `apply_authorized_owner_buy_assignment` introduces complex state mutation logic. The `apply_authorized_owner_buy_assignment` function performs multiple `fsync` operations and ledger updates. If this function is called during a period of high volatility or ledger sync latency, it could exacerbate the P&L drift/sync issues observed in the logs.
+* **execution/quarterly_hold_manager.py:** The `_owner_add_page` and `_contain_owner_add_stage` logic introduces a new "fencing" mechanism for QHM positions. This is a significant change to the state machine. The logic relies on `pos.owner_add_stage` being a dictionary; if this state is not correctly initialized or is corrupted, it will trigger the `_owner_add_page` critical alert.
+
+### P5 STATUS
+* P5-C1: UNTOUCHED
+* P5-C2: UNTOUCHED
+* P5-H2: TRIGGERED (FIFO state corruption)
+* P5-H3: UNTOUCHED
+* P5-H4: UNTOUCHED
+* P5-M1: UNTOUCHED
+* P5-M2: UNTOUCHED
+* P5-M3: UNTOUCHED
+
+### NEW BUGS FOUND
+* **CATEGORY:** EXECUTION BUG | **SEVERITY:** CRITICAL | **file:** `execution/fifo_pnl` | **description:** FIFO state corruption for TSLA | **failure condition:** Closing sell order processed without corresponding open long lot in FIFO ledger.
+* **CATEGORY:** INFRASTRUCTURE | **SEVERITY:** MEDIUM | **file:** `execution/broker.py` | **description:** Excessive ledger sync latency | **failure condition:** `ledger_sync` wall-time > 15s, indicating potential I/O bottleneck.
+
+### FIX VALIDATION
+* No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **Immediate State Audit:** Manually reconcile the TSLA position on Alpaca vs. the bot's `ownership_ledger.json` and `quarterly_holds.json`. The FIFO corruption must be cleared before the next RTH session.
+2. **Investigate FIFO Logic:** Audit `execution/fifo_pnl` to determine why the long lots were dropped from the state.
+3. **Optimize Ledger Sync:** Investigate the 15.8s `ledger_sync` wall-time. If the ledger is growing too large, implement a pruning strategy for the `score_comparison` or `ledger_sync` history.
+4. **Review QHM Fencing:** Ensure that the new `owner_add_stage` logic in `QuarterlyHoldManager` does not inadvertently block legitimate stop-replacements for QHM positions.
+================================================================================
+BROKER GROUND TRUTH (2026-10-26, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NOW    COVERED                  owners=core exposed=347m no-broker-stop=0m [07:12-07:12] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=376m no-broker-stop=0m [06:42-06:42, 12:58-12:58] rejected_stop_orders=0
+  XOM    COVERED                  owners=core exposed=347m no-broker-stop=0m [07:12-07:12] rejected_stop_orders=0
