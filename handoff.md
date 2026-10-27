@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-26 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-27 (Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -19,7 +19,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 **⏩ EXACT NEXT ACTION (OpenAI Codex):** finish approved `F6-SIM-1023` and prepare
 Rafael's one-page F6 enablement decision. Do not enable F6 before that decision.
 
-## ⏩ LATEST (2026-10-26, Claude signed) — BGC gate live (#768, 60f9fe8): Codex is reviewer #2, Gro fallback
+## ⏩ LATEST (2026-10-27, Claude signed) — TRACK-A-STOP-1026 in PR #779, not yet merged or deployed
+
+- Code + tests + revised record are on branch `claude/track-a-stop-1026` (PR #779); the record is
+  `logs/design_records/track_a_noise_stop_2026-10-26.md` (one-share cap added as item 2a; Q2/Q5/Q9/Q11/Q22 revised).
+- AMZN 10/27 07:00-07:04 PT exit: take_profit at the pin target $249.17, $0.24 from the fill vs a $0.96 stop
+  (`logs/day_tier_events.jsonl`, trade DT-AMZN-s-1793109617826-87aed290). No time-based exit exists in config.py.
+- Commit gate quirk: the Claude hook runs preship_gate from the MAIN checkout, so a file staged there blocks worktree
+  commits; the main checkout's staged handoff.md (prior session) was unstaged, content kept in its working tree.
+- Open review notes for a follow-up: the noise window includes extended-hours SIP bars (fetcher has no RTH filter);
+  the stop room is measured from the limit, not the fill.
+
+**⏩ EXACT NEXT ACTION (Claude):** after PR #779 CI passes: merge, OCI `git pull --ff-only` + restart, then a
+read-only pre-market full-path probe of `_track_a_noise_geometry` + `_track_a_one_share_stop` on real bars, then the
+post-live audit after the first Track A entry (`change=track-a-stop-1026`).
+
+## ⏩ EARLIER (2026-10-26, Claude signed) — BGC gate live (#768, 60f9fe8): Codex is reviewer #2, Gro fallback
 
 - REVIEWER-SWAP-1025 (design `logs/design_records/reviewer_swap_codex_2026-10-25.md`, owner sign-off recorded at commit):
   `preship_audit.py` / `bgg_call.py` send reviewer #2 to the Codex command line (read-only sandbox, minimal env, .env
