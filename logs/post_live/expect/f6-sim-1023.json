@@ -1,0 +1,33 @@
+{
+  "change": "f6-sim-1023",
+  "tier": 2,
+  "paths": [
+    "execution/f6_cycle.py",
+    "strategy/run_cycle.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change=f6-sim-1023 after-close shared route active"
+    }
+  ],
+  "expected_rate": "Zero while F6 is disabled; after a separate owner-approved activation, once per production after-close F6 invocation",
+  "window_sessions": 10,
+  "window_reason": "This shipment deliberately leaves F6 disabled, so live exercise begins only after the separate activation decision; the longest supported window preserves the pending proof without claiming activation.",
+  "reversal": "The tag appears while FOREVER6_ENABLED is false, fails to appear after an enabled after-close invocation, or an enabled invocation changes the established trim-before-starter order.",
+  "metrics": [
+    {
+      "name": "shared F6 after-close route invocations",
+      "source": "logs/mtf_bot.log change=f6-sim-1023",
+      "direction": "none",
+      "bound": "exactly zero while disabled; at least one on the first enabled after-close session"
+    },
+    {
+      "name": "connected F6 simulation verdict",
+      "source": "logs/f6_full_path_simulation_latest.json",
+      "direction": "none",
+      "bound": "overall PASS with every declared scenario PASS and production_flag_remained_disabled=true"
+    }
+  ],
+  "verification": "tests/test_f6_full_path_simulation.py"
+}

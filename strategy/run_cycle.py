@@ -267,16 +267,14 @@ def run_cycle(
     # account-read failures, attribution faults, legacy/stale state, and corrupt
     # state all remain blocking.  Day, Swing, and QHM continue to use the normal
     # entries block above.
-    _f6_kill_block_entries = _kill_block_entries
-    if config.FOREVER6_ENABLED and _kill_tripped and not _control_fault:
-        try:
-            _f6_kill_block_entries = not risk.f6_genuine_loss_bypass_allowed()
-        except Exception as _f6_verdict_err:
-            _f6_kill_block_entries = True
-            logger.error(
-                "F6 kill-verdict validation failed (%r) — starter remains blocked.",
-                _f6_verdict_err,
-            )
+    from execution.f6_cycle import resolve_f6_kill_route
+    _f6_kill_route = resolve_f6_kill_route(
+        enabled=bool(config.FOREVER6_ENABLED),
+        kill_tripped=_kill_tripped,
+        control_fault=_control_fault,
+        risk=risk,
+    )
+    _f6_kill_block_entries = _f6_kill_route.block_starter
     global _control_fault_streak
     if not _control_fault:
         _control_fault_streak = 0
@@ -939,45 +937,14 @@ def run_cycle(
         # must never break the after-hours cycle (overnight stops etc. already ran above).
         if config.FOREVER6_ENABLED and _is_ah:
             try:
-                from execution.forever_hold_manager import (
-                    ForeverHoldManager,
-                    _f6_entry_session,
+                from execution.f6_cycle import run_f6_after_close
+                run_f6_after_close(
+                    enabled=bool(config.FOREVER6_ENABLED),
+                    is_after_close=_is_ah,
+                    now_et=_now_ah,
+                    block_starter=_f6_kill_block_entries,
+                    fetch_bars=fetch_bars,
                 )
-                import execution.broker as _f6_bk
-                _f6_mgr = ForeverHoldManager(_f6_bk)
-                # F6 trims are risk-reducing exits. They do not depend on SPY
-                # starter data and must remain reachable during a market-data
-                # outage or after a kill switch trip.
-                try:
-                    _f6_mgr.evaluate_and_execute_trims()
-                except Exception as _f6_trim_e:
-                    logger.warning("F6 trim evaluation failed (non-fatal): %s", _f6_trim_e)
-                if _f6_entry_session(_now_ah):
-                    _f6_df = fetch_bars(
-                        "SPY",
-                        config.TF_DAILY,
-                        num_bars=config.BARS_TO_FETCH[config.TF_DAILY],
-                    )
-                else:
-                    _f6_df = None
-                if _f6_df is not None and not _f6_df.empty:
-                    # F6 may enter through a genuine-loss trip only when the
-                    # current-session typed verdict proves that cause. Trims
-                    # already ran above and remain reachable under every cause.
-                    _f6_plan = ({} if _f6_kill_block_entries else
-                                _f6_mgr.maybe_start_accumulation(
-                                    _f6_df, datetime.now(ET).date()))
-                    if _f6_plan.get("plan"):
-                        _f6_res = _f6_mgr.execute_starter(
-                            _f6_plan["plan"], _f6_plan["budget"],
-                            trigger_evidence=_f6_plan.get("trigger_evidence"),
-                        )
-                        logger.warning(
-                            "[F6] starter executed: submitted %s (reserved $%.2f; "
-                            "actual spend comes from fills)",
-                            [p.get("symbol") for p in _f6_res.get("submitted", [])],
-                            _f6_res.get("reserved", 0.0),
-                        )
             except Exception as _f6e:
                 logger.warning(f"F6 starter after-close eval failed (non-fatal): {_f6e}")
         _touch_cycle_ts()
