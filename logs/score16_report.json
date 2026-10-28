@@ -1,9 +1,9 @@
 {
-  "generated": "2026-10-26 01:20 PM PT",
-  "shadow_days_archived": 68,
-  "shadow_rows": 2655,
-  "direction_agreement_rate": 0.8927,
-  "would_differ_rate": 0.3631,
+  "generated": "2026-10-27 01:20 PM PT",
+  "shadow_days_archived": 69,
+  "shadow_rows": 2695,
+  "direction_agreement_rate": 0.892,
+  "would_differ_rate": 0.3633,
   "trades_by_score_16pt": {
     "10": {
       "n": 22,
