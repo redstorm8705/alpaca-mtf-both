@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-27 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-28 (OpenAI Codex + Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,7 +8,11 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ PARALLEL (2026-10-26, OpenAI Codex signed) — F6 full-path proof staged, F6 OFF
+## ⏩ PARALLEL (2026-10-28, OpenAI Codex signed) — F6 full-path proof live, F6 OFF
+
+- `F6-SIM-1023` shipped in PR #790 and is live on OCI at `70caa70`. CI passed; all
+  three services restarted healthy; startup reconciliation completed; and the live
+  configuration still reports `FOREVER6_ENABLED=False`.
 
 - `F6-SIM-1023` now exercises the shared production after-close route through the real
   F6 allocator, production broker admission, pending-buy and reducing-order journals,
@@ -38,9 +42,8 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   Full OCI suite after the revision-23 rebase: 2,883 passed, 1 skipped, 186 subtests; the sole Day-promotion fixture failure is unrelated
   and reproduces on clean main. F6 remains disabled.
 
-**⏩ EXACT NEXT ACTION (OpenAI Codex):** capture the widened exact-design approval for
-`F6-SIM-1023`, obtain final exact-byte review passes, ship the proof, then present Rafael's separate
-one-page F6 enablement decision. Do not enable F6 in the simulation shipment.
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** prepare Rafael's separate one-page F6 enablement
+decision from the shipped proof and current Alpaca state. Do not enable F6 before that decision.
 
 ## ⏩ PARALLEL (2026-10-26, OpenAI Codex signed) — startup ownership truth live
 
@@ -50,8 +53,8 @@ one-page F6 enablement decision. Do not enable F6 in the simulation shipment.
 - The post-restart proof logged `dedicated Day/Swing positions accounted for` for AAPL/MSFT; both remain one-share
   Swing holdings with live one-share GTC stops at `$328.70` and `$497.10`. Real unmanaged positions still page.
 
-**⏩ EXACT NEXT ACTION (OpenAI Codex):** finish approved `F6-SIM-1023` and prepare
-Rafael's one-page F6 enablement decision. Do not enable F6 before that decision.
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** prepare Rafael's one-page F6 enablement decision
+from live PR #790 proof. Do not enable F6 before that decision.
 
 ## ⏩ LATEST (2026-10-27 evening, Claude signed) — DAY-UNIVERSE-1027 deployed (#784, 1fa1273), unexercised
 
