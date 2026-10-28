@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-27 (Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-28 (OpenAI Codex + Claude) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,43 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ PARALLEL (2026-10-28, OpenAI Codex signed) — F6 full-path proof live, F6 OFF
+
+- `F6-SIM-1023` shipped in PR #790 and is live on OCI at `70caa70`. CI passed; all
+  three services restarted healthy; startup reconciliation completed; and the live
+  configuration still reports `FOREVER6_ENABLED=False`.
+
+- `F6-SIM-1023` now exercises the shared production after-close route through the real
+  F6 allocator, production broker admission, pending-buy and reducing-order journals,
+  canonical ownership replay, `run_ledger_sync.sync_once`, and the real 7% risk-manager
+  calculation using a Day-loss fixture. The isolated OCI Python 3.10 run includes a real partial-trim/restart case.
+- Failure coverage includes cash and ETF refusals, restart duplicate suppression,
+  accepted/partial/filled/rejected/ambiguous orders, exact entry and trim fills, a
+  QHM/F6 shared-NVDA collision that preserves the QHM stop, socket and built-in/`io`/`os`/
+  `Path` write escape refusal, exception-state restoration, and unchanged source hashes.
+  Every production Python module is source-bound so late imports cannot escape the proof.
+- Cold/adversarial review rejected multiple false-pass routes; all are folded in: the connected lifecycle now
+  enters through the production orchestration helper, `Path.write_text` and related operations
+  are contained, source binding is repository-wide, and `--check` hashes committed `HEAD` blobs
+  while separately refusing dirty bound-source index and working-tree bytes. Filesystem containment
+  also blocks OS and `Path` symlink/hardlink escapes. Focused OCI Python 3.10 checks pass 32/32;
+  the generated source-bound artifact passes all 20 connected scenarios.
+  The production-wiring test also requires the starter gate to receive exactly the typed F6 verdict,
+  preventing the ordinary daily brake from being silently recombined at the call site.
+  The partial-trim case proves the current fail-closed contract: active partial fills keep the rung reserved,
+  canonical sync refuses the temporary protected-floor shrink, restart submits no duplicate, and terminal
+  evidence applies the exact cumulative reduction once before replay heals.
+  Final broker-fidelity hardening gives every logical order a unique deterministic client ID, makes the fake
+  broker reject duplicates like Alpaca, binds the artifact to 143 real staged Python sources with metadata
+  sidecars excluded, and locks every typed F6 kill-resolver argument, verdict assignment and gate polarity to
+  its exact production expression. The non-injected production path also proves the real F6 manager receives
+  the production broker module, rather than relying only on the simulation's injected manager.
+  Full OCI suite after the revision-23 rebase: 2,883 passed, 1 skipped, 186 subtests; the sole Day-promotion fixture failure is unrelated
+  and reproduces on clean main. F6 remains disabled.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** prepare Rafael's separate one-page F6 enablement
+decision from the shipped proof and current Alpaca state. Do not enable F6 before that decision.
 
 ## ⏩ PARALLEL (2026-10-26, OpenAI Codex signed) — startup ownership truth live
 
@@ -16,8 +53,8 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - The post-restart proof logged `dedicated Day/Swing positions accounted for` for AAPL/MSFT; both remain one-share
   Swing holdings with live one-share GTC stops at `$328.70` and `$497.10`. Real unmanaged positions still page.
 
-**⏩ EXACT NEXT ACTION (OpenAI Codex):** finish approved `F6-SIM-1023` and prepare
-Rafael's one-page F6 enablement decision. Do not enable F6 before that decision.
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** prepare Rafael's one-page F6 enablement decision
+from live PR #790 proof. Do not enable F6 before that decision.
 
 ## ⏩ LATEST (2026-10-27 evening, Claude signed) — DAY-UNIVERSE-1027 deployed (#784, 1fa1273), unexercised
 
