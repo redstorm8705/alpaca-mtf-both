@@ -1,0 +1,23 @@
+{
+  "change": "day-universe-1027",
+  "tier": 1,
+  "paths": [
+    "config.py",
+    "data/gex.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/live_writer.log",
+      "pattern": "GEX [COIN]"
+    },
+    {
+      "log": "logs/day_tier_runner_cron.log",
+      "pattern": "[EWY] day-tier TRACK-B SCREEN"
+    }
+  ],
+  "expected_rate": "every 15-minute options refresh during RTH (GEX [COIN]) and every Track B tick in its window (EWY screen line)",
+  "window_sessions": 1,
+  "window_reason": "both lines are written on every refresh / Track B tick of a normal session, so one session is enough.",
+  "reversal": "any of the 18 names missing from the writer's GEX lines or from the runner's DECISION / TRACK-B SCREEN lines in a full session; Track B tick-budget or api_budget deferrals rising above the 9 in 4,270 ticks measured before the change; or an added name's Day mean R from fills below -0.3R after 20 trades (owner decides removal).",
+  "verification": "tests/test_day_shared_universe.py"
+}

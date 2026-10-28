@@ -764,26 +764,23 @@ DAYTRADE_ENABLED            = True    # LIVE (paper) 2026-09-02, Rafael-approved
                                      # Kill switch: flip to False + restart. Armed only under --profile paper
                                      # (validate_config fails-closed under the 3% live/default profile).
 DAYTRADE_TRACK_B_ENABLED    = True    # Track B (dynamic movers) LIVE — Rafael go-live 2026-09-22 (board SPLIT decision).
-                                     # The momentum-mover tier; evaluated only ~09:50-11:05 ET (the trigger's window) and
-                                     # BUDGET-CAPPED (DAYTRADE_TRACK_B_CASH_ONLY), one entry per symbol per day. Kill switch: flip False (the
-                                     # runner is a fresh process every tick — takes effect on the next */2 tick).
-# Pre-registered liquid mover candidate list (PROV:daytier-track-b-screen) — the FIXED list IS the float /
-# micro-cap / liquidity guard (no market-wide gainers feed). Read by strategy/day_tier_track_b.track_b_universe().
-# To DISABLE Track B use DAYTRADE_TRACK_B_ENABLED=False, NOT an empty list (an empty list falls back to the module default).
-DAYTRADE_TRACK_B_UNIVERSE = ["NVDA", "TSLA", "META", "AMD", "AMZN", "AAPL", "MSFT", "GOOGL",
-                             "AVGO", "NFLX", "MU", "COIN", "PLTR", "SMCI", "UBER",
-                             "SNDK"]  # SNDK-TRACK-B-1027 (owner 2026-10-27): breakouts route to SNXX / SNDQ
-
-# Universe (Track A GEX-core): Mag-7 underlyings only day-1 — matches data/gex.py
-# _DAYTRADE_UNDERLYINGS (per-symbol GEX already live). Leveraged trackers
-# (TSLL/NVDL/TQQQ/SOXL) are a buying-power expedient, added after A validates.
-DAYTRADE_UNIVERSE = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA",
-                     "MU", "SNDK", "DRAM", "EWY"]  # +memory names 2026-09-05 (Rafael)
-# DRAM (~$60) and EWY (~$189) are the day-tier FOCAL POINTS — they fit the whole-share Track-A
-# budget (~$263 of equity) and will trade. MU (~$1,015) and SNDK (~$1,740) exceed one whole share
-# of that budget, so the sizing floor (floor(notional/price)=0) safely SKIPS them every session
-# until equity grows — Rafael-accepted (2026-09-05). MUST stay in sync with data/gex.py
-# _DAYTRADE_UNDERLYINGS below, or a new name reads GEX=UNKNOWN and stands down (never trades).
+                                     # The momentum-mover tier; evaluated from ~09:50 ET to ~15:35 ET (the momentum trigger's
+                                     # _SESSION_CUTOFF_BARS) and BUDGET-CAPPED (DAYTRADE_TRACK_B_CASH_ONLY), one entry per symbol per
+                                     # day. Kill switch: flip False (the runner is a fresh process every tick — takes effect on the next
+                                     # */2 tick).
+# DAY-UNIVERSE-1027 (owner 2026-10-27): ONE Day-tier stock list. Track A (options-wall setups), Track B (its daily
+# gap/volume screen picks which of these are movers each session) and the options refresh (data/gex.py) all read this
+# one tuple — tests/test_day_shared_universe.py fails CI if any of them reads a different list. Track B's earlier scan
+# order is kept (a name late in the scan is the first deferred when the per-tick API budget runs out), then the names
+# that were Track A only. The fixed list is the float / micro-cap / liquidity guard (no market-wide gainers feed).
+# To DISABLE a track use its ENABLED flag, NOT an empty list.
+DAY_TIER_UNIVERSE = ("NVDA", "TSLA", "META", "AMD", "AMZN", "AAPL", "MSFT", "GOOGL",
+                     "AVGO", "NFLX", "MU", "COIN", "PLTR", "SMCI", "UBER",
+                     "SNDK", "DRAM", "EWY")
+DAYTRADE_TRACK_B_UNIVERSE = DAY_TIER_UNIVERSE
+DAYTRADE_UNIVERSE = DAY_TIER_UNIVERSE
+# Names outside DAYTRADE_DEEP_LIQUIDITY_SYMBOLS (everything but the Mag-7) enter Track A under the thin-name rules
+# (base gross ceiling + DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD); routes to 2x ETFs live in strategy/day_tier_leverage.py.
 # ACCEPTED COST / fast-follow: there is no pre-trade RTH spread gate; DRAM/EWY are thinner than the
 # Mag-7 so their intraday fill-spread is an accepted cost for now (day-tier is flat-by-close, so
 # EWY's overnight KOSPI-gap risk does NOT reach this tier).
