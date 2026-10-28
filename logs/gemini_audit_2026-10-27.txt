@@ -1,0 +1,64 @@
+Nightly Gemini Audit — 2026-10-27
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['config.py', 'execution/earned_sizing.py', 'execution/day_trade_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there are recurring warnings regarding "FIFO orphan" fills and "P&L drift" that require monitoring, alongside a persistent "ANOMALY-2" warning in the strategy cycle.
+
+### LOG ANOMALIES
+*   **`execution.portfolio_tracker`**: Recurring `FIFO orphan: closing fill for AMZN has no prior lot and no tracker record`. This indicates a mismatch between the broker's fill stream and the internal tracker's state.
+*   **`strategy.run_cycle`**: Persistent `[ANOMALY-2] [AAPL] confirm_gate=31 scans but no entry`. The bot identifies high-scoring setups but fails to trigger entries despite `MAX_OPEN_POSITIONS=20` and `risk.open_positions=5`.
+*   **`ledger_sync`**: `ledger_sync wall-time 16.1s` (and 16.5s). These are high latency spikes for a ledger sync, potentially indicating database contention or inefficient query patterns during high-volume periods.
+
+### PERFORMANCE AUDIT
+*   **P&L Integrity**: The `pnl_today` of -0.98 is consistent with the provided trade history.
+*   **Stop/Exit Analysis**: The `DRAM` short on 2026-10-21 (entry 48.51, stop 49.27, exit 49.26) correctly hit the protective stop. The `TSLA` long on 2026-10-21 (entry 387.465, stop 386.18) hit the stop at 386.02/385.995. The exit logic is functioning as intended.
+*   **Score Correlation**: The bot is consistently identifying high-score setups (e.g., `AAPL` 10/12, `PANW` 10/12), but the `ANOMALY-2` suggests a failure in the `execution.entry_logic` gate that prevents these high-score signals from executing.
+
+### TRADE INTEGRITY
+*   **AMZN Orphan Fills**: The `AMZN` fills on 2026-10-27 (14:02:04) are being reported as orphans by the `portfolio_tracker`. While the P&L is accounted for in the `_pnl_selfcheck_telemetry`, the tracker is failing to link these fills to the entry, causing the "unmatched" warning.
+
+### MODIFIED FILE FINDINGS
+*   **`execution/day_trade_manager.py`**:
+    *   **Function `_track_a_noise_geometry`**: The logic uses `statistics.median` on `per_session` lists. If `per_session` is empty (e.g., due to a symbol with no valid 5m bars in the window), the code correctly returns `None`.
+    *   **Function `_track_a_one_share_stop`**: The loop `for _ in range(3)` is a hardcoded retry limit for finding a stop that fits the budget. This is a safe, bounded approach to prevent infinite loops.
+*   **`execution/earned_sizing.py`**:
+    *   **Function `completed_trades`**: The logic for calculating `R` (`(pnl / xq) / dist`) is mathematically sound. The check `if not all(math.isfinite(v) for v in (entry, qty, stop, xq, pnl)) or dist <= 0 or xq <= 0:` correctly prevents division-by-zero errors.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: UNTOUCHED (Obsolete)
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | `execution/day_trade_manager.py`**: The `_track_a_noise_geometry` function fetches data using `fetch_bars_window` with `feed="sip"`. If the SIP feed is delayed or unavailable, the function fails silently and returns `None`, causing the bot to revert to "today's stop" without logging the specific data-fetch failure reason to the user-facing logs.
+*   **EXECUTION BUG | LOW | `execution/portfolio_tracker.py`**: The `FIFO orphan` warning for `AMZN` suggests that the tracker is not correctly handling partial fills or rapid-fire fills for the same symbol, leading to a desync between the broker's `filled_at` timestamp and the tracker's internal state.
+
+### FIX VALIDATION
+*   **N/A**: No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate `ANOMALY-2`**: Debug `execution.entry_logic` to determine why `confirm_gate` is incrementing but failing to trigger an entry for `AAPL` and `MSFT` despite meeting score requirements.
+2.  **Resolve `FIFO orphan`**: Review `execution/portfolio_tracker.py` to ensure that fill-matching logic correctly handles multiple fills for the same `trade_id` within the same second.
+3.  **Improve Data Logging**: Update `_track_a_noise_geometry` to log the specific reason for failure (e.g., "no bars found", "insufficient sessions") rather than a generic warning.
+4.  **Monitor Ledger Latency**: Investigate the `ledger_sync` wall-time spikes; consider offloading ledger reconciliation to an asynchronous task if it continues to exceed 10s.
+================================================================================
+BROKER GROUND TRUTH (2026-10-27, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AMZN   COVERED                  owners=day exposed=2m no-broker-stop=0m [07:00-07:00] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=core exposed=350m no-broker-stop=0m [07:10-07:10] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  META   COVERED                  owners=day exposed=38m no-broker-stop=0m [11:36-11:36] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NOW    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  XOM    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
