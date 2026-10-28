@@ -771,7 +771,8 @@ DAYTRADE_TRACK_B_ENABLED    = True    # Track B (dynamic movers) LIVE — Rafael
 # micro-cap / liquidity guard (no market-wide gainers feed). Read by strategy/day_tier_track_b.track_b_universe().
 # To DISABLE Track B use DAYTRADE_TRACK_B_ENABLED=False, NOT an empty list (an empty list falls back to the module default).
 DAYTRADE_TRACK_B_UNIVERSE = ["NVDA", "TSLA", "META", "AMD", "AMZN", "AAPL", "MSFT", "GOOGL",
-                             "AVGO", "NFLX", "MU", "COIN", "PLTR", "SMCI", "UBER"]
+                             "AVGO", "NFLX", "MU", "COIN", "PLTR", "SMCI", "UBER",
+                             "SNDK"]  # SNDK-TRACK-B-1027 (owner 2026-10-27): breakouts route to SNXX / SNDQ
 
 # Universe (Track A GEX-core): Mag-7 underlyings only day-1 — matches data/gex.py
 # _DAYTRADE_UNDERLYINGS (per-symbol GEX already live). Leveraged trackers

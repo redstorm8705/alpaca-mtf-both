@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -282,6 +283,58 @@ class TrackerVerdicts(unittest.TestCase):
                                        "--notes", "not exercised: no Swing tranche exits this session at all"]), 2)
             self.assertEqual(rpl.main(["554", "--session", "2026-10-12", "--verdict", "NOT_EXERCISED",
                                        "--notes", "not exercised: no Swing tranche exits this session at all"]), 0)
+
+
+class SlackDigest(unittest.TestCase):
+    """Owner 2026-10-27: the one-paragraph digest was unreadable on a phone. Block Kit, short lines, tappable links."""
+
+    def _run(self, findings, issues, ran=5, idle=4):
+        return ple._slack_digest(date(2026, 10, 27), ran, idle, findings, issues)
+
+    def test_layout_and_links(self):
+        url = "https://github.com/o/r/issues/770"
+        f = [{"change": "alert-false-wording", "finding": "UNEXERCISED_EXPIRED"},
+             {"change": "session", "finding": "NEW_ERRORS_2026-10-26"}]
+        blocks, fallback = self._run(f, [f"opened {url}", "updated https://github.com/o/r/issues/777"])
+        self.assertEqual(blocks[0]["type"], "header")
+        self.assertIn("Tue Oct 27", blocks[0]["text"]["text"])
+        texts = "\n".join(b["text"]["text"] for b in blocks if b["type"] == "section")
+        self.assertIn(f"<{url}|Issue #770>", texts)
+        self.assertIn("New error types in logs", texts)
+        self.assertIn("⚠️ 2 need a look", fallback)
+        for line in texts.split("\n"):
+            self.assertNotIn(" | ", line)                       # SLK05: no packed fields
+            shown = re.sub(r"<[^|>]+\|([^>]+)>", r"\1", line)   # what the phone shows: the link text, not the URL
+            self.assertLessEqual(len(shown), 45, shown)
+
+    def test_nothing_to_flag(self):
+        blocks, fallback = self._run([], [], idle=0)
+        self.assertIn("nothing needs attention", fallback)
+        self.assertFalse(any(b["type"] == "divider" for b in blocks))
+
+    def test_many_findings_split_under_slack_cap(self):
+        f = [{"change": f"change-{n}", "finding": "UNEXERCISED_EXPIRED"} for n in range(40)]
+        i = [f"opened https://github.com/o/r/issues/{700 + n}" for n in range(40)]
+        blocks, _ = self._run(f, i)
+        for b in blocks:
+            if b["type"] == "section":
+                self.assertLess(len(b["text"]["text"]), 3000)
+        self.assertEqual(sum(b["text"]["text"].count("⚠️ change-") for b in blocks if b["type"] == "section"), 40)
+
+    def test_many_error_findings_split_under_slack_cap(self):
+        f = [{"change": "session", "finding": f"NEW_ERRORS_2026-10-{n:02d}"} for n in range(60)]
+        i = [f"opened https://github.com/redstorm8705/alpaca-mtf-both/issues/{700 + n}" for n in range(60)]
+        f.append({"change": "x" * 5000, "finding": "UNEXERCISED_EXPIRED"})
+        i.append("opened https://github.com/o/r/issues/1")
+        blocks, _ = self._run(f, i)
+        for b in blocks:
+            if b["type"] == "section":
+                self.assertLess(len(b["text"]["text"]), 3000)
+        self.assertEqual(sum(b["text"]["text"].count("New error types") for b in blocks if b["type"] == "section"), 60)
+
+    def test_unfiled_issue(self):
+        blocks, _ = self._run([{"change": "x", "finding": "UNEXERCISED_EXPIRED"}], ["issue create failed (500)"])
+        self.assertIn("issue not filed", "\n".join(b["text"]["text"] for b in blocks if b["type"] == "section"))
 
 
 if __name__ == "__main__":

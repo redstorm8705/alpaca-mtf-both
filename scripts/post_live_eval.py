@@ -267,11 +267,64 @@ def main(argv: "list | None" = None) -> int:
     print(f"{session.isoformat()} post-live eval [post-live-evaluator]: {msg}")
     if not dry:
         try:
-            from alerts import send_slack
-            send_slack(f":clipboard: {msg}")
+            from alerts import send_slack_blocks
+            blocks, fallback = _slack_digest(session, len(ran), len(idle), res["findings"], res["issues"])
+            if not send_slack_blocks(blocks, fallback):
+                print("post-live eval: Slack not delivered", file=sys.stderr)
         except Exception as e:  # noqa: BLE001
             print(f"post-live eval: Slack failed: {e}", file=sys.stderr)
     return 0
+
+
+def _slack_digest(session: date, n_ran: int, n_idle: int, findings: list, issues: list) -> "tuple[list, str]":
+    """The owner's phone digest (rules/slack_format.md SLK01-SLK12; owner 2026-10-27: the one-paragraph version was
+    "horrible and hard to read"). Header, a three-line count summary, then one short line per finding with a tappable
+    issue link. Pure: builds blocks only."""
+    def _link(raw: str) -> str:
+        url = next((w for w in str(raw).split() if w.startswith("http")), "")
+        num = url.rstrip("/").rsplit("/", 1)[-1] if url else ""
+        return f"<{url}|Issue #{num}>" if url and num.isdigit() else "issue not filed"
+
+    stale = [(f, i) for f, i in zip(findings, issues, strict=True) if f["finding"] == "UNEXERCISED_EXPIRED"]
+    other = [(f, i) for f, i in zip(findings, issues, strict=True) if f["finding"] != "UNEXERCISED_EXPIRED"]
+    summary = [f"✅ *{n_ran}* ran as expected"]
+    if n_idle:
+        summary.append(f"⏳ {n_idle} still waiting (normal)")
+    summary.append(f"⚠️ *{len(findings)}* need a look" if findings else "Nothing needs attention")
+    blocks: list = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"New-code check · {session:%a %b %d}"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(summary)}},
+    ]
+    def _sections(rows: list) -> list:
+        # Slack caps a section's text at 3,000 characters: pack whole lines into sections under that cap (a single
+        # oversized line is cut to fit rather than dropping the message).
+        out, cur = [], ""
+        for row in (r[:2900] for r in rows):
+            if cur and len(cur) + 1 + len(row) > 2900:
+                out.append(cur)
+                cur = ""
+            cur = f"{cur}\n{row}" if cur else row
+        if cur:
+            out.append(cur)
+        return [{"type": "section", "text": {"type": "mrkdwn", "text": t}} for t in out]
+
+    if other:
+        blocks.append({"type": "divider"})
+        lines = []
+        for f, i in other:
+            what = ("New error types in logs" if str(f["finding"]).startswith("NEW_ERRORS")
+                    else f"{f['change']}: {f['finding']}")
+            lines.append(f"🔴 {what} · {_link(i)}")
+        blocks.extend(_sections(lines))
+    if stale:
+        blocks.append({"type": "divider"})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": (
+            "*Never ran in its check window*\nNeeds a replay or a decision")}})
+        blocks.extend(_sections([f"⚠️ {f['change']} · {_link(i)}" for f, i in stale]))
+    blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": "Post-live evaluator · details in each issue"}]})
+    fallback = (f"New-code check {session:%a %b %d}: {n_ran} ran, {n_idle} waiting, "
+                + (f"⚠️ {len(findings)} need a look" if findings else "nothing needs attention"))
+    return blocks, fallback
 
 
 if __name__ == "__main__":
