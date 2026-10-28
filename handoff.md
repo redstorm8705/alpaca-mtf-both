@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-28 (OpenAI Codex + Claude) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-10-28 (OpenAI Codex + Claude; Claude TRACKB-SIZE-ETF-1028) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -56,7 +56,19 @@ decision from the shipped proof and current Alpaca state. Do not enable F6 befor
 **⏩ EXACT NEXT ACTION (OpenAI Codex):** prepare Rafael's one-page F6 enablement decision
 from live PR #790 proof. Do not enable F6 before that decision.
 
-## ⏩ LATEST (2026-10-27 evening, Claude signed) — DAY-UNIVERSE-1027 deployed (#784, 1fa1273), unexercised
+## ⏩ LATEST (2026-10-28, Claude signed) — TRACKB-SIZE-ETF-1028 merged and deployed, deployed-unexercised
+
+- What changed and why: `logs/design_records/trackb_size_etf_route_2026-10-28.md` (spec, review table, owner
+  approval ID TRACKB-SIZE-ETF-1028).
+- Merges on main (`git log --oneline origin/main`): 4e92a8a (#792), 62e3d8f (#793), 7da8df0 (#789, tests only).
+- `grep -n "^DAYTRADE_TRACK_B_CASH_ONLY" config.py` prints line 800 `= False`.
+- OCI (checked ~16:05 PT, in ~/mtf-bot): `git log --oneline -1` printed `62e3d8f`; `systemctl is-active mtf-bot`
+  printed `active`; `grep -c "change=trackb-size-etf-1028" logs/day_tier_runner_cron.log` printed `0`.
+- Post-live record: `logs/post_live/expect/trackb-size-etf-1028.json`.
+
+**⏩ EXACT NEXT ACTION (Claude):** post-live audit after the first Track B entry on the new code.
+
+## ⏩ EARLIER (2026-10-27 evening, Claude signed) — DAY-UNIVERSE-1027 deployed (#784, 1fa1273), unexercised
 
 - One 18-name Day list (`config.DAY_TIER_UNIVERSE`) read by Track A, Track B and `data/gex.py` refresh. OCI check after
   restart: `18 18 18 True` (Track A list, Track B list, GEX list, same object). Record:
