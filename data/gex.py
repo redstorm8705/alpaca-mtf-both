@@ -64,14 +64,23 @@ _NEAR_FLIP_RATIO = 0.10
 # tracker sits in the same dealer-gamma regime as its underlying). We therefore compute GEX for
 # the Mag-7 underlyings and RESOLVE a tracker symbol to its underlying at read time
 # (get_gex_regime) — no need to compute the tracker's own (censored) chain.
-_DAYTRADE_UNDERLYINGS = ["AAPL", "AMZN", "GOOGL", "META", "MSFT", "NVDA", "TSLA",
-                         "MU", "SNDK", "DRAM", "EWY"]  # +memory names 2026-09-05 (Rafael)
-# Day-tier focal points DRAM/EWY (ETFs) + MU/SNDK single-stocks. GEX is computed on each name's OWN
-# chain here (they are the actual underlyings, not trackers — no _ETF_UNDERLYING_MAP entry needed).
-# The symbol-agnostic quality gate (atm>=3, windowed capture>=0.40, windowed>=10) fail-safes a thin
-# ETF chain to UNKNOWN, and Layer B then stands down — no special-casing. MUST stay in sync with
-# config.DAYTRADE_UNIVERSE (an independent literal). +4 names = +4 per-symbol passes per 15-min
-# refresh (bounded by _MAX_CONTRACT_PAGES=2); per-symbol try/except isolates any one bad chain.
+def _day_tier_underlyings() -> list[str]:
+    """The Day-tier stock list (config.DAY_TIER_UNIVERSE, DAY-UNIVERSE-1027) — the same tuple both Day tracks read, so
+    every Day name gets an options regime. Unreadable config -> [] (the refresh still covers SPY/QQQ + held positions;
+    a Day name then reads UNKNOWN and Track A stands down on it). Never raises."""
+    try:
+        import config as _cfg
+        return [str(s).upper() for s in getattr(_cfg, "DAY_TIER_UNIVERSE", ()) if s]
+    except Exception as e:  # noqa: BLE001 — a config read must never abort the refresh
+        logger.warning("GEX: Day-tier universe read failed (refresh covers SPY/QQQ + positions only): %s", e)
+        return []
+
+
+_DAYTRADE_UNDERLYINGS = _day_tier_underlyings()  # import-time copy for readers (run_day_tier_shadow.py)
+# Each name's GEX is computed on its OWN chain (DRAM/EWY are ETFs but are the actual underlyings, not trackers — no
+# _ETF_UNDERLYING_MAP entry needed). The symbol-agnostic quality gate (atm>=3, windowed capture>=0.40, windowed>=10)
+# fail-safes a thin chain to UNKNOWN, and Layer B then stands down — no special-casing. One per-symbol pass per name
+# per 15-min refresh (bounded by _MAX_CONTRACT_PAGES=2); per-symbol try/except isolates any one bad chain.
 # leveraged tracker -> underlying whose GEX regime it inherits. Only CLEAN single-underlying
 # maps are wired now; SOXL is deferred (its index isn't directly optionable — SMH vs SOXX proxy
 # is a pending design decision, not guessed here). QQQ/TSLA/NVDA underlyings are already computed
@@ -1087,12 +1096,12 @@ def refresh_gex() -> None:
         logger.debug("GEX: prior-label load for transition log failed: %s", _pl_e)
         _prior_labels = {}
 
-    # Universe: market anchors + Mag-7 day-tier underlyings + current bot positions.
+    # Universe: market anchors + the Day-tier list (config.DAY_TIER_UNIVERSE) + current bot positions.
     # Resolve any leveraged tracker (a held TSLL/NVDL/TQQQ from _position_symbols) to its
     # UNDERLYING at WRITE time too, so refresh computes the underlying's real chain — never the
     # tracker's thin/ghost chain (which read-time resolution in get_gex_regime would skip anyway).
     # dedup collapses a tracker+underlying pair to one compute; order preserved.
-    _raw_universe = _MARKET_SYMBOLS + _DAYTRADE_UNDERLYINGS + _position_symbols()
+    _raw_universe = _MARKET_SYMBOLS + _day_tier_underlyings() + _position_symbols()
     symbols = list(dict.fromkeys(_ETF_UNDERLYING_MAP.get(_s, _s) for _s in _raw_universe))
 
     results: dict = {}
