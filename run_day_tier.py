@@ -771,8 +771,10 @@ def _place_track_b(dtm, sym: str, order_sym: str, decision: dict, trigger: dict,
                 r, w = _track_b_bull_route(sym, decision, trigger, held, equity, buying_power, prior_close)
             else:
                 r, w = _inverse_pivot(sym, decision, trigger, held, equity, buying_power, "B", prior_close=prior_close)
-            if r is not None and not r[2].get("size_ok"):
-                return None, f"{w}: size not ok ({r[2].get('reason')})"
+            if r is not None:
+                _rd, _rt, _rs, _re = r
+                if not _rs.get("size_ok"):
+                    return None, f"{w}: size not ok ({_rs.get('reason')})"
             return r, w
 
         def _fund(route: tuple, why: str, wired: int) -> "tuple[str, str, str]":
@@ -829,8 +831,9 @@ def _place_track_b(dtm, sym: str, order_sym: str, decision: dict, trigger: dict,
             elif route is None:
                 logger.info("[%s] track-B stock fits %d sh; no ETF route (%s)", sym, wired, why)
             else:
+                _nd, _nt, _ns, _netf = route
                 logger.info("[%s] track-B stock fits %d sh; ETF %s not tried — tick API/time reserve used", sym,
-                            wired, route[3])
+                            wired, _netf)
         if wired == 1 and tries < max_tries:
             # no fund placed: the 1-share stock fallback (owner 2026-10-07). No time-reserve check: it replaces the single
             # 1-share-minimum attempt today's code makes, so the trade is never lost to the clock (cold review FAIL-1).
