@@ -797,13 +797,18 @@ DAYTRADE_UNIVERSE = DAY_TIER_UNIVERSE
 DAYTRADE_ALLOC_PCT          = 0.15   # PROV:daytier-v2-2026-08-29  15% of equity to the whole day-tier (start; scale to 0.25 as B validates)
 DAYTRADE_TRACK_A_PCT        = 0.65   # PROV:daytier-v2-2026-08-29  Track A share of the tier allocation
 DAYTRADE_TRACK_B_PCT        = 0.35   # PROV:daytier-v2-2026-08-29  Track B share (an exposure budget — see DAYTRADE_TRACK_B_CASH_ONLY)
-DAYTRADE_TRACK_B_CASH_ONLY  = True   # HARD Track-B EXPOSURE cap (halt-reopen gap containment), ENFORCED at wire time by
-                                     # day_trade_manager._bounded_entry_qty: a Track-B entry is capped at its budget share
-                                     # count AND open Track-B notional stays <= the Track-B budget (equity × 15% × 35%,
-                                     # strategy/day_tier_sizing module constants); the risk-basis upsize is Track A only.
-                                     # HONEST SCOPE: this caps EXPOSURE, not funding — a Track-B short, or a buy while the
-                                     # account's cash is negative, is still margin-financed. Only an explicit False disables
-                                     # it (a board-gated risk-path switch — never flip casually).
+DAYTRADE_TRACK_B_CASH_ONLY  = False  # OFF — TRACKB-SIZE-ETF-1028 (owner 2026-10-28: "This needs to increase. I don't want
+                                     # it to continue cutting the share count down"; design record
+                                     # logs/design_records/trackb_size_etf_route_2026-10-28.md). Track B is sized like Track
+                                     # A and its own 10/10 entries: the risk / conviction-band sizing, then every account room
+                                     # (all-tier gross, buying power after the main-bot reserve, maintenance cushion, Day
+                                     # gross ceiling, single-name and thin-name caps — divided by |k| for a Track B lot on a
+                                     # leveraged/inverse fund), the daily Day dollar budget, the protective stop, the EOD flat
+                                     # and the 7% account kill. When True (the kill flag) it restores the old Track-B
+                                     # EXPOSURE cap enforced at wire time by day_trade_manager._bounded_entry_qty /
+                                     # _wired_entry: a Track-B entry capped at its budget share count AND open Track-B
+                                     # notional <= the Track-B budget (equity × 15% × 35%). That caps EXPOSURE, not funding.
+                                     # A board-gated risk-path switch — never flip casually.
 
 # Kills (§3, §7b.6) — nested: track sub-kills sum < tier kill < account 7% kill.
 DAYTRADE_TIER_KILL_PCT      = 0.25   # PROV:daytier-v2-2026-08-29  flatten + halt the whole day-tier at −25% of tier allocated capital

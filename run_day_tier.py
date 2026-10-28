@@ -485,6 +485,28 @@ def _direction_conflict(exposure: "dict | None", order_sym: str, direction: obje
         return f"direction check error ({e!r}) — entry refused"
 
 
+def _floor_fund_wall(etf: str, t2: dict, quote) -> "tuple[dict | None, str]":
+    """TRACKB-SIZE-ETF-1028 B.2(a): floor a routed fund's translated stop reference (t2["wall_ref"]) at
+    day_tier_leverage.fund_stop_floor, BEFORE sizing and the liquidity gate. Returns (t2 with the floored wall_ref,
+    why), or (None, why) = no fund route: an unreadable quote (as before — the liquidity gate refused it), or a
+    watch-day-exempt Track B short whose fund stop the floor would widen (only exempt shorts whose stop already has
+    the room trade). Never raises."""
+    try:
+        from strategy import day_tier_leverage as lev
+        wall = t2.get("wall_ref")
+        floored, _room, why = lev.fund_stop_floor(t2.get("entry_ref"), wall, quote)
+        if floored is None:
+            return None, why
+        if floored != wall:
+            if t2.get("watch_day_exempt_b") is True:
+                return None, f"watch-day-exempt short: {why} would widen the stop — no fund route"
+            logger.info("[%s] fund route stop floored %s -> %.2f (%s)", etf, wall, floored, why)
+            return {**t2, "wall_ref": floored, "fund_stop_floor": why}, why
+        return t2, why
+    except Exception as e:  # noqa: BLE001
+        return None, f"fund stop floor error: {e!r}"
+
+
 def _inverse_pivot(sym: str, decision: dict, trigger: dict, held: "set | None", equity: float,
                    buying_power: float, track: str, prior_close: "float | None" = None) -> "tuple[tuple | None, str]":
     """Route a SHORT signal on `sym` to a BUY of its inverse ETF (strategy/day_tier_leverage.inverse_entry), then
@@ -510,16 +532,25 @@ def _inverse_pivot(sym: str, decision: dict, trigger: dict, held: "set | None", 
                                       inverse=True)
         if not ok:
             return None, f"inverse route to {etf}: {why}"
+        _q = get_latest_quote(etf)   # ONE quote read: the fund stop floor (B.2) and the liquidity gate
+        # B.2(a) is Track B only (TRACKB-SIZE-ETF-1028: Track A fund routes unchanged)
+        _t2f, _floor_why = (_floor_fund_wall(etf, t2, _q) if str(track).strip().upper() == "B" else (t2, ""))
+        if _t2f is None:
+            return None, f"inverse route to {etf}: {_floor_why}"
+        t2 = _t2f
         size = compute_day_tier_size(etf, d2, t2.get("entry_ref"), equity, buying_power=buying_power, track=track)
         if not size.get("size_ok"):
             return None, f"inverse route to {etf}: size not ok ({size.get('reason')})"
         _n = datetime.now(ET)
         _frac = ((_n.hour * 60 + _n.minute) - (9 * 60 + 30)) / 390.0   # session fraction elapsed (expected-by-now)
-        ok, liq = lev.etf_liquidity_ok(get_latest_quote(etf), _today_iex_volume(etf), size.get("shares"),
-                                       t2.get("entry_ref"), t2.get("wall_ref"), session_frac=_frac)
+        _vol = _today_iex_volume(etf)
+        ok, liq = lev.etf_liquidity_ok(_q, _vol, size.get("shares"), t2.get("entry_ref"), t2.get("wall_ref"),
+                                       session_frac=_frac)
         if not ok:
             return None, f"inverse route to {etf}: {liq}"
-        return (d2, {**t2, "tracking": why, "liquidity": liq}, size, etf), f"inverse route -> {etf}"
+        # fund_today_volume: place_entry caps a Track B fund lot's wired shares at it (B.3)
+        return ((d2, {**t2, "tracking": why, "liquidity": liq, "fund_today_volume": _vol}, size, etf),
+                f"inverse route -> {etf}")
     except Exception as e:  # noqa: BLE001
         logger.warning("[%s] inverse route error (no route): %s", sym, e)
         return None, f"inverse route error: {e!r}"
@@ -549,16 +580,24 @@ def _bull_pivot(sym: str, decision: dict, trigger: dict, held: "set | None", equ
                                       inverse=False)
         if not ok:
             return None, f"bull route to {etf}: {why}"
+        _q = get_latest_quote(etf)   # ONE quote read: the fund stop floor (B.2) and the liquidity gate
+        # B.2(a) is Track B only (TRACKB-SIZE-ETF-1028: Track A fund routes unchanged)
+        _t2f, _floor_why = (_floor_fund_wall(etf, t2, _q) if str(track).strip().upper() == "B" else (t2, ""))
+        if _t2f is None:
+            return None, f"bull route to {etf}: {_floor_why}"
+        t2 = _t2f
         size = compute_day_tier_size(etf, d2, t2.get("entry_ref"), equity, buying_power=buying_power, track=track)
         if not size.get("size_ok"):
             return None, f"bull route to {etf}: size not ok ({size.get('reason')})"
         _n = datetime.now(ET)
         _frac = ((_n.hour * 60 + _n.minute) - (9 * 60 + 30)) / 390.0
-        ok, liq = lev.etf_liquidity_ok(get_latest_quote(etf), _today_iex_volume(etf), size.get("shares"),
-                                       t2.get("entry_ref"), t2.get("wall_ref"), session_frac=_frac)
+        _vol = _today_iex_volume(etf)
+        ok, liq = lev.etf_liquidity_ok(_q, _vol, size.get("shares"), t2.get("entry_ref"), t2.get("wall_ref"),
+                                       session_frac=_frac)
         if not ok:
             return None, f"bull route to {etf}: {liq}"
-        return (d2, {**t2, "tracking": why, "liquidity": liq}, size, etf), f"bull route -> {etf}"
+        return ((d2, {**t2, "tracking": why, "liquidity": liq, "fund_today_volume": _vol}, size, etf),
+                f"bull route -> {etf}")
     except Exception as e:  # noqa: BLE001
         logger.warning("[%s] bull route error (no route): %s", sym, e)
         return None, f"bull route error: {e!r}"
@@ -629,6 +668,182 @@ def _place_affordable(dtm, sym: str, decision: dict, trigger: dict, size: dict, 
         return False, sym, direction, tries
     except Exception as e:  # noqa: BLE001
         logger.warning("[%s] affordable-entry routing error (no entry): %s", sym, e)
+        return False, sym, direction, max(1, tries)
+
+
+def _track_b_one_share_floor(trigger: dict, size: dict, worst_mult: "float | None") -> dict:
+    """CEO order 2026-10-06 ("the budget is never the reason a Track-B trade is skipped"), applied to a routed FUND
+    attempt (TRACKB-SIZE-ETF-1028): the Track-B budget is floored at the fund's MINIMUM order (2 shares,
+    day_trade_manager._min_entry_qty; Codex preship 2026-10-28) at its worst marketable limit — entry_ref x
+    `worst_mult`, the same live-price-band x entry-slippage multiplier the Track B loop applies to the stock — so the
+    minimum order survives the Track-B budget cap when DAYTRADE_TRACK_B_CASH_ONLY is on; the account caps and the daily
+    dollar budget still decide. A size_ok=False size, an unusable multiplier or entry is returned unchanged. Never
+    raises."""
+    try:
+        if not size.get("size_ok") or worst_mult is None:
+            return size
+        from execution.day_trade_manager import _min_entry_qty
+        _one = (float(trigger.get("entry_ref") or 0.0) * float(worst_mult)
+                * _min_entry_qty(str(trigger.get("symbol") or ""), 1))
+        if _one > float(size.get("budget") or 0.0):
+            return {**size, "budget": round(_one, 2)}
+        return size
+    except (TypeError, ValueError):
+        return size
+
+
+def _track_b_bull_route(sym: str, decision: dict, trigger: dict, held: "set | None", equity: float,
+                        buying_power: float, prior_close: "float | None") -> "tuple[tuple | None, str]":
+    """Track B's 2x bull-fund route — the existing rule moved out of the Track B loop unchanged (TRACKB-SIZE-ETF-1028
+    B.4: it keeps its delayed-feed ETF price and its stop translation from the stock's prior close; the inverse
+    route's tracking and liquidity checks are not added). Today's IEX volume on the fund is stamped on the trigger
+    (fund_today_volume) for place_entry's Track B fund volume cap (B.3). Returns ((decision, trigger, size, etf),
+    why) or (None, why); the size may be size_ok=False (the caller decides). Never raises."""
+    try:
+        from data.live_price import DELAYED_FEED_AGE_S, live_price
+        from strategy import day_tier_leverage as lev
+        from strategy.day_tier_sizing import compute_day_tier_size
+        etf = lev.etf_for_order(sym, held) if (lev.pivot_enabled() and lev.bull_etf_for(sym)) else None
+        if not etf:
+            return None, "no free 2x bull ETF for this stock"
+        # thin ETFs (GGLL, AVL, ...) can go minutes without an IEX print: accept up to the delayed-feed age
+        up, ep = live_price(sym), live_price(etf, max_age_s=DELAYED_FEED_AGE_S)
+        piv = lev.leveraged_entry(decision, trigger, etf, up.price if up else None, ep.price if ep else None,
+                                  prior_close=prior_close)
+        if piv is None:
+            return None, f"bull route to {etf}: price/geometry not usable"
+        d2, t2 = piv
+        # B.2(a) fund stop floor before sizing (Codex preship 2026-10-28). An unreadable quote keeps the translated stop
+        # here; place_entry then applies the tick floor before the share count (B.2(b)), so the route is not refused.
+        from data.alpaca_data import get_latest_quote
+        _t2f, _fwhy = _floor_fund_wall(etf, t2, get_latest_quote(etf))
+        if _t2f is not None:
+            t2 = _t2f
+        size = compute_day_tier_size(etf, d2, t2.get("entry_ref"), equity, buying_power=buying_power, track="B")
+        return (d2, {**t2, "fund_today_volume": _today_iex_volume(etf)}, size, etf), f"bull route -> {etf}"
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] track-B bull route error (no route): %s", sym, e)
+        return None, f"bull route error: {e!r}"
+
+
+def _place_track_b(dtm, sym: str, order_sym: str, decision: dict, trigger: dict, size: dict, *, bar_id: str,
+                   equity: float, buying_power: float, held: "set | None", route_fund: "str | None", ten: bool,
+                   prior_close: "float | None", pe_kw: "dict | None", max_tries: int,
+                   tick_t0: float, worst_mult: "float | None" = None,
+                   budget_shares: "int | None" = None) -> "tuple[bool, str, str, int]":
+    """Track B placement with the 2-share rule on the WIRED size (TRACKB-SIZE-ETF-1028 B.1; owner 2026-10-28: "If we
+    can only afford one, we need to buy a levered etf given the stock's signal").
+    - `order_sym` != `sym` (the co-held pre-route already chose the fund) or no fund route (`route_fund` None, the
+      free fund the caller found for this direction): one place_entry exactly as before (the stock's minimum is 1).
+    - Otherwise the STOCK first with the fund's own minimum (2 shares, day_trade_manager._min_entry_qty). When
+      wire-time sizing fits fewer (skip reason
+      below_min_qty), the fund route runs (2x bull fund for a long signal, the inverse fund for a short; a fund always
+      needs 2+ shares) and a 10/10 setup keeps maximum size on it. If no fund is placed and exactly 1 stock share fits,
+      that 1 share (owner fallback 2026-10-07; trade count unchanged). A fund attempt that ends without a size skip
+      (an order may exist) never adds the stock.
+    Each place_entry is one attempt; at most `max_tries` (the tick's remaining API budget), and a second or third
+    attempt only while the tick keeps its place_entry time reserve. `pe_kw` (the counter-trend decision_id, recorded
+    once by the caller) goes to every attempt. Returns (entered, ordered symbol, ordered direction, attempts). Never
+    raises."""
+    kw = dict(pe_kw or {})
+    direction = str(trigger.get("direction") or "long")
+    tries = 0
+
+    def _time_left() -> bool:
+        return time.monotonic() - tick_t0 <= _TICK_CADENCE_S - _PLACE_ENTRY_RESERVE_S
+
+    try:
+        if max_tries < 1:
+            return False, order_sym, direction, 0
+        if order_sym != sym or not route_fund:
+            tries += 1
+            ok = bool(dtm.place_entry(order_sym, decision, trigger, size, bar_id=bar_id, equity=equity, **kw))
+            return ok, order_sym, direction, tries
+        from execution.day_trade_manager import _min_entry_qty
+        # The stock needs as many shares as the fund route's minimum ONLY when this tick can still afford the fund
+        # attempt (API budget for a second place_entry and two time reserves); otherwise one attempt with today's
+        # 1-share minimum, so no Track B trade taken today is dropped (cold review 2026-10-28, FAIL-1).
+        two_ok = (max_tries > 1
+                  and time.monotonic() - tick_t0 <= _TICK_CADENCE_S - (_PLACE_ENTRY_RESERVE_S + _PLACE_ENTRY_RESERVE_S))
+
+        def _route() -> "tuple[tuple | None, str]":
+            if direction == "long":
+                r, w = _track_b_bull_route(sym, decision, trigger, held, equity, buying_power, prior_close)
+            else:
+                r, w = _inverse_pivot(sym, decision, trigger, held, equity, buying_power, "B", prior_close=prior_close)
+            if r is not None:
+                _rd, _rt, _rs, _re = r
+                if not _rs.get("size_ok"):
+                    return None, f"{w}: size not ok ({_rs.get('reason')})"
+            return r, w
+
+        def _fund(route: tuple, why: str, wired: int) -> "tuple[str, str, str]":
+            """One fund place_entry. ("placed" | "order_may_exist" | "skipped", symbol, direction)."""
+            nonlocal tries
+            d2, t2, s2, etf = route
+            if ten:
+                s2 = {**s2, "max_size": True}   # 10/10 -> maximum size on the fund (size_ok checked in _route)
+            s2 = _track_b_one_share_floor(t2, s2, worst_mult)
+            logger.info("[%s] track-B stock fits %d sh -> ETF %s (%s)", sym, wired, etf, why)
+            tries += 1
+            # pre_order_sentinel: a skip that happens before any order is sent leaves a record, so the router knows
+            # no order exists and may still place the 1-share stock (adversarial review 2026-10-28, D2).
+            if dtm.place_entry(etf, d2, t2, s2, bar_id=bar_id, equity=equity, pre_order_sentinel=True, **kw):
+                return "placed", etf, str(t2.get("direction") or "long")
+            if dtm.last_entry_skip(etf) is None:
+                return "order_may_exist", sym, direction   # an order may exist: never add the stock
+            logger.info("[%s] track-B ETF %s not placed (%s)", sym, etf, dtm.last_entry_skip(etf))
+            return "skipped", sym, direction
+
+        if not two_ok and budget_shares is not None and budget_shares <= 1:
+            # Only one attempt fits this tick and the stock is beyond the Track B budget: today's single-attempt route
+            # (the fund first, decided from the budget), so a tight tick never loses a fund trade today's code places
+            # (adversarial review 2026-10-28, D1). No usable fund -> today's stock attempt at the 1-share minimum.
+            route, why = _route()
+            if route is not None:
+                st, osym, odir = _fund(route, why, 0)
+                return st == "placed", osym, odir, tries
+            logger.info("[%s] track-B no ETF route (%s) — stock at the 1-share minimum", sym, why)
+            tries += 1
+            ok = bool(dtm.place_entry(sym, decision, trigger, size, bar_id=bar_id, equity=equity, min_qty=1, **kw))
+            return ok, sym, direction, tries
+        stock_min = _min_entry_qty(route_fund, 1) if two_ok else 1
+        logger.info("[%s] change=trackb-size-etf-1028 track-B stock attempt (minimum %d sh; fund route %s)", sym,
+                    stock_min, route_fund)
+        tries += 1
+        if dtm.place_entry(sym, decision, trigger, size, bar_id=bar_id, equity=equity, min_qty=stock_min, **kw):
+            return True, sym, direction, tries
+        skip = dtm.last_entry_skip(sym)
+        if not skip:
+            return False, sym, direction, tries   # any non-size skip is final (as Track A)
+        wired = int(skip.get("wired") or 0)
+        if skip.get("reason") == "below_min_qty":
+            route, why = _route()
+            # The fund attempt keeps one more attempt in the API budget for the 1-share fallback when 1 stock share
+            # fits, so a skipped fund never costs today's 1-share trade (cold review 2026-10-28, FAIL-1 residual).
+            _need = 1 + (1 if wired == 1 else 0)
+            if route is not None and tries + _need <= max_tries and _time_left():
+                st, osym, odir = _fund(route, why, wired)
+                if st == "placed":
+                    return True, osym, odir, tries
+                if st == "order_may_exist":
+                    return False, sym, direction, tries
+            elif route is None:
+                logger.info("[%s] track-B stock fits %d sh; no ETF route (%s)", sym, wired, why)
+            else:
+                _nd, _nt, _ns, _netf = route
+                logger.info("[%s] track-B stock fits %d sh; ETF %s not tried — tick API/time reserve used", sym,
+                            wired, _netf)
+        if wired == 1 and tries < max_tries:
+            # no fund placed: the 1-share stock fallback (owner 2026-10-07). No time-reserve check: it replaces the single
+            # 1-share-minimum attempt today's code makes, so the trade is never lost to the clock (cold review FAIL-1).
+            tries += 1
+            logger.info("[%s] track-B 1-share stock fallback", sym)
+            if dtm.place_entry(sym, decision, trigger, size, bar_id=bar_id, equity=equity, min_qty=1, **kw):
+                return True, sym, direction, tries
+        return False, sym, direction, tries
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] track-B entry routing error (no entry): %s", sym, e)
         return False, sym, direction, max(1, tries)
 
 
@@ -1312,10 +1527,14 @@ def run_tick() -> dict:
                         trigger_b = {**trigger_b, "watch_day": True, "watch_day_reason": _wd_why_b}
                 size_b = compute_day_tier_size(sym, decision_b, trigger_b.get("entry_ref"), equity,
                                                buying_power=buying_power, track="B")
-                # LEVERAGED PIVOT (Rafael CEO directive 2026-10-06; strategy/day_tier_leverage.py): a Track-B LONG trades
-                # its 2x bull ETF when the setup is 10/10 or the budget cannot buy one share of the stock. Any failure
-                # -> no pivot (today's behaviour). The 10/10 verdict is recorded on the decision.
+                # LEVERAGED / INVERSE FUND ROUTE (Rafael CEO directives 2026-10-06/07, owner 2026-10-28;
+                # strategy/day_tier_leverage.py): a co-held stock goes to its fund up front; otherwise the stock is
+                # placed first and goes to its fund only when the wired size fits 0-1 shares (_place_track_b). Any
+                # failure -> no fund route (the stock path). The 10/10 verdict is recorded on the decision.
                 order_sym = sym
+                _ten = False
+                _route_fund: "str | None" = None
+                _stock_shares = 0   # shares the Track B budget buys (set below; today's route rule in a tight tick)
                 # Co-held and NOT a same-direction co-hold the lifted guard allows -> the ETF route (as before).
                 _coheld_b = (_held_other is not None and sym in _held_other
                              and not _cohold_ok(sym, trigger_b.get("direction"), _foreign))
@@ -1329,9 +1548,9 @@ def run_tick() -> dict:
                     if lev.pivot_enabled() and trigger_b.get("direction") == "long" and lev.bull_etf_for(sym):
                         # ETFs already held by ANOTHER tier are skipped (co-hold close hazard); unreadable book -> no pivot
                         _etf = lev.etf_for_order(sym, _held_other)
-                    # Rafael 2026-10-06: trade the STOCK when the budget buys 2+ shares; switch to the 2x ETF only
-                    # when it buys 0 or 1. For a 10/10 setup the budget is the max-size notional (single-name cap,
-                    # and the thin-name cap for non-deep names) — the same rooms place_entry sizes max_size to.
+                    # A 10/10 setup takes maximum size on the stock when its max-size notional (single-name cap, and the
+                    # thin-name cap for non-deep names — the same rooms place_entry sizes max_size to) buys 2+ shares.
+                    # (TRACKB-SIZE-ETF-1028: this budget no longer decides the fund route; the wired size does.)
                     try:
                         _px_u = float(trigger_b.get("entry_ref") or 0.0)
                         if _ten:
@@ -1345,48 +1564,46 @@ def run_tick() -> dict:
                         _stock_shares = 0
                     if _ten and _stock_shares >= 2 and size_b.get("size_ok"):
                         size_b = {**size_b, "max_size": True}   # 10/10 on the stock itself, at maximum size
-                    # ...and ALWAYS switch when another tier holds the stock (no co-hold, interim 2026-10-07)
-                    if _etf and (_stock_shares <= 1 or _coheld_b):
-                        from data.live_price import DELAYED_FEED_AGE_S, live_price
-                        # thin ETFs (GGLL, AVL, ...) can go minutes without an IEX print: accept up to the delayed-feed age
-                        _up, _ep = live_price(sym), live_price(_etf, max_age_s=DELAYED_FEED_AGE_S)
-                        _piv = lev.leveraged_entry(decision_b, trigger_b, _etf,
-                                                   _up.price if _up else None, _ep.price if _ep else None,
-                                                   prior_close=prior_close)
-                        if _piv is not None:
-                            decision_b, trigger_b = _piv
-                            order_sym = _etf
-                            size_b = compute_day_tier_size(_etf, decision_b, trigger_b.get("entry_ref"), equity,
-                                                           buying_power=buying_power, track="B")
+                    # CO-HELD PRE-ROUTE (no co-hold, interim 2026-10-07): when another tier holds the stock, the fund
+                    # route is taken up front (unchanged). The old BUDGET branch (route decided from the Track-B budget
+                    # buying 0-1 shares) is gone (TRACKB-SIZE-ETF-1028 B.1): a non-co-held signal places the STOCK first
+                    # and routes to its fund only when the WIRED size fits 0-1 shares (_place_track_b).
+                    if _etf and _coheld_b:
+                        _br, _why_br = _track_b_bull_route(sym, decision_b, trigger_b, _held_other, equity,
+                                                           buying_power, prior_close)
+                        if _br is not None:
+                            decision_b, trigger_b, size_b, order_sym = _br
                             if _ten and size_b.get("size_ok"):
                                 size_b = {**size_b, "max_size": True}   # 10/10 -> maximum size (place_entry)
-                            logger.info("[%s] track-B LEVERAGED PIVOT -> %s (%s; stock buys %d sh): %s", sym, _etf,
-                                        "10/10" if _ten else "budget", _stock_shares, size_b.get("reason"))
+                            logger.info("[%s] track-B LEVERAGED PIVOT -> %s (%s; co-held): %s", sym, order_sym,
+                                        "10/10" if _ten else "not 10/10", size_b.get("reason"))
                         else:
-                            logger.info("[%s] track-B leveraged pivot to %s not possible (price/geometry) — stock path",
-                                        sym, _etf)
-                    # SHORT -> BUY the inverse ETF (Rafael 2026-10-07): when another tier holds the stock, or the budget
-                    # buys 0-1 shares. Otherwise the stock itself is shorted. A failed route on a co-held stock is
-                    # skipped (place_entry would refuse the co-hold anyway); on a budget route it keeps the stock path.
-                    if (trigger_b.get("direction") == "short" and lev.inverse_pivot_enabled()
-                            and (_coheld_b or _stock_shares <= 1)):
+                            logger.info("[%s] track-B leveraged pivot not possible (%s) — stock path", sym, _why_br)
+                    # SHORT on a co-held stock -> BUY the inverse ETF (Rafael 2026-10-07); no route -> skipped
+                    # (place_entry would refuse the co-hold anyway).
+                    if trigger_b.get("direction") == "short" and lev.inverse_pivot_enabled() and _coheld_b:
                         _inv_b, _why_inv_b = _inverse_pivot(sym, decision_b, trigger_b, _held_other, equity,
                                                             buying_power, "B", prior_close=prior_close)
                         if _inv_b is not None:
                             decision_b, trigger_b, size_b, order_sym = _inv_b
                             if _ten and size_b.get("size_ok"):   # never on a size_ok=False dict
                                 size_b = {**size_b, "max_size": True}   # 10/10 short -> maximum size on the ETF
-                            logger.info("[%s] track-B INVERSE ROUTE -> %s (%s; stock buys %d sh): %s", sym, order_sym,
-                                        "co-held" if _coheld_b else "budget", _stock_shares, size_b.get("reason"))
-                        elif _coheld_b:
+                            logger.info("[%s] track-B INVERSE ROUTE -> %s (co-held): %s", sym, order_sym,
+                                        size_b.get("reason"))
+                        else:
                             _log_direction_skip(sym, decision_b, trigger_b, f"another tier holds this symbol; "
                                                 f"{_why_inv_b}", bar_id)
                             continue
-                        else:
-                            logger.info("[%s] track-B inverse route not taken (%s) — shorting the stock", sym,
-                                        _why_inv_b)
+                    if not _coheld_b:
+                        # The free fund this signal would route to when the stock's wired size fits 0-1 shares.
+                        if trigger_b.get("direction") == "long":
+                            _route_fund = _etf
+                        elif lev.inverse_pivot_enabled():
+                            _inv_c = lev.inverse_etf_for_order(sym, _held_other)
+                            _route_fund = _inv_c[0] if _inv_c else None
                 except Exception as _pe:  # noqa: BLE001 — a pivot failure keeps the stock path
                     logger.warning("[%s] track-B leveraged pivot error (stock path): %s", sym, _pe)
+                _one_mult: "float | None" = None   # the same worst-limit multiplier, for a routed fund attempt
                 if size_b.get("size_ok"):
                     # CEO order 2026-10-06: the budget is never the reason a Track-B trade is skipped. The Track-B budget
                     # is floored at ONE share of the instrument actually ordered (stock or ETF) at the worst marketable
@@ -1398,6 +1615,7 @@ def run_tick() -> dict:
                                 * (1.0 + float(getattr(config, "DAYTRADE_ENTRY_SLIPPAGE_PCT", 0.002))))
                         if _one > float(size_b.get("budget") or 0.0):
                             size_b = {**size_b, "budget": round(_one, 2)}
+                        _one_mult = _one / float(trigger_b.get("entry_ref") or 0.0) if _one > 0 else None
                     except (TypeError, ValueError):
                         pass
                 if not size_b.get("size_ok"):
@@ -1413,18 +1631,26 @@ def run_tick() -> dict:
                     break
                 _pe_kw_b: dict = {}
                 if trigger_b.get("counter_trend"):
-                    # never-mask-a-loss: a counter-trend Track-B trade's tag must be DURABLE before the order exists
-                    _ct_b = _record_counter_trend_intent(order_sym, decision_b, trigger_b, bar_id)
+                    # never-mask-a-loss: a counter-trend Track-B trade's tag must be DURABLE before the order exists.
+                    # Recorded ONCE, under the stock, before the first attempt; every attempt (stock, fund, 1-share
+                    # fallback) carries the same decision_id (Track A's pattern).
+                    _ct_b = _record_counter_trend_intent(sym, decision_b, trigger_b, bar_id)
                     if not _ct_b:
                         continue
                     _pe_kw_b["decision_id"] = _ct_b
-                if dtm.place_entry(order_sym, decision_b, trigger_b, size_b, bar_id=bar_id, equity=equity, **_pe_kw_b):
+                _ok_b, order_sym, _dir_b, _tries_b = _place_track_b(
+                    dtm, sym, order_sym, decision_b, trigger_b, size_b, bar_id=bar_id, equity=equity,
+                    buying_power=buying_power, held=_held_other, route_fund=_route_fund, ten=_ten,
+                    prior_close=prior_close, pe_kw=_pe_kw_b,
+                    max_tries=max(1, (call_budget - calls_used) // max(1, per_entry_est)), tick_t0=_tick_t0,
+                    worst_mult=_one_mult, budget_shares=_stock_shares)
+                if _ok_b:
                     entered_b += 1
                     if _dt_exp is not None:
                         from strategy import day_tier_leverage as _lv_b
-                        _u_b, _sg_b = _lv_b.exposure_sign(order_sym, str(trigger_b.get("direction") or "long"))
+                        _u_b, _sg_b = _lv_b.exposure_sign(order_sym, _dir_b)   # the symbol actually ordered
                         _dt_exp[_u_b] = _sg_b
-                calls_used += per_entry_est
+                calls_used += per_entry_est * _tries_b
             except Exception as e:  # noqa: BLE001 — one symbol must never abort the tick
                 logger.warning("[%s] track-B entry loop error (non-fatal): %s", sym, e)
         if b_live:
