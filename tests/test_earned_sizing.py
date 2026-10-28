@@ -392,6 +392,7 @@ class PlaceEntryConv(unittest.TestCase):
         entry = next(v for s in saved for k, v in s.items() if k.startswith("entry::"))
         self.assertNotIn("risk_per_share", entry)
 
+    @mock.patch("config.DAYTRADE_TRACK_B_CASH_ONLY", True)   # the clamp when the flag is on (off by default since TRACKB-SIZE-ETF-1028)
     def test_track_b_keeps_exposure_cap(self):
         sized = {"ok": True, "stop": 99.40, "qty": 50, "per_share": 1.2, "why": "conv test"}
         ok, sub, _saved, _ce = self._run(({"proven": True, "band": "middle", "band_mean_r": 0.3, "band_n": 12}, sized),
@@ -406,6 +407,7 @@ class PlaceEntryConv(unittest.TestCase):
                                          track="B", max_size=True)
         self.assertEqual(sub["qty"], 50)
 
+    @mock.patch("config.DAYTRADE_TRACK_B_CASH_ONLY", True)   # the clamp when the flag is on (off by default since TRACKB-SIZE-ETF-1028)
     def test_track_b_not_ten_of_ten_keeps_exposure_cap(self):
         sized = {"ok": True, "stop": 99.40, "qty": 50, "per_share": 1.2, "why": "conv test"}
         ok, sub, _saved, _ce = self._run(({"proven": True, "band": "middle", "band_mean_r": 0.3, "band_n": 12}, sized),

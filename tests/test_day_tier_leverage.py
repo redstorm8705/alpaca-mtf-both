@@ -87,24 +87,33 @@ class MaxSize(unittest.TestCase):
     """execution.day_trade_manager._bounded_entry_qty max_size (10/10): sizes to the account rooms, skips the
     per-trade risk basis and the Track-B budget cap; every room still binds."""
 
-    def _q(self, max_size, track="B", budget=130.0):
+    def _q(self, max_size, track="B", budget=130.0, symbol="TSLL"):
         from execution import day_trade_manager as dtm
         return dtm._bounded_entry_qty(
             requested_qty=12, order_price=10.0, stop_price=9.6, equity=2500.0, open_trades={},
             positions_by_symbol={}, buying_power=9000.0, maintenance_margin=0.0, maintenance_rate=0.5,
-            open_orders=[], risk_equity=2500.0, symbol="TSLL", track=track, track_budget=budget,
+            open_orders=[], risk_equity=2500.0, symbol=symbol, track=track, track_budget=budget,
             max_size=max_size)
 
     def test_normal_track_b_is_budget_capped(self):
-        q, _ = self._q(False)
+        import config
+        # The Track-B budget cap is the DAYTRADE_TRACK_B_CASH_ONLY kill flag (off since TRACKB-SIZE-ETF-1028).
+        with mock.patch.object(config, "DAYTRADE_TRACK_B_CASH_ONLY", True):
+            q, _ = self._q(False)
         self.assertLessEqual(q, 13)                       # $130 budget / $10
 
     def test_max_size_sizes_to_the_stop_distance(self):
-        q, why = self._q(True)
+        # a thin STOCK (not a fund, so A.1 does not apply): 2% ceiling x $2500 / $0.40 stop = 124.99.. sh (float;
+        # floored like the risk-basis path), under the $1300 thin-name room (130 sh)
+        q, why = self._q(True, symbol="XYZQ")
         self.assertIn("MAX-SIZE", why)
-        # 2% ceiling x $2500 / $0.40 stop = 124.99.. sh (float; floored like the risk-basis path), under the
-        # $1300 thin-name room (130 sh)
         self.assertEqual(q, 124)
+
+    def test_max_size_on_a_2x_fund_is_bounded_by_the_halved_thin_room(self):
+        # TRACKB-SIZE-ETF-1028 A.1: the same entry on TSLL (2x) -> thin-name room $1300 / 2 = $650 -> 65 sh
+        q, why = self._q(True)
+        self.assertEqual(q, 65)
+        self.assertIn("thin_name:$650.00", why)
 
     def test_max_size_wide_stop_buys_fewer_shares(self):
         from execution import day_trade_manager as dtm
@@ -119,8 +128,13 @@ class MaxSize(unittest.TestCase):
         q, _ = dtm._bounded_entry_qty(
             requested_qty=12, order_price=10.0, stop_price=9.95, equity=2500.0, open_trades={},
             positions_by_symbol={}, buying_power=9000.0, maintenance_margin=0.0, maintenance_rate=0.5,
-            open_orders=[], risk_equity=2500.0, symbol="TSLL", track="B", track_budget=130.0, max_size=True)
+            open_orders=[], risk_equity=2500.0, symbol="XYZQ", track="B", track_budget=130.0, max_size=True)
         self.assertEqual(q, 130)                          # 1000 sh by risk, 130 sh by the thin-name room
+        q2, _ = dtm._bounded_entry_qty(
+            requested_qty=12, order_price=10.0, stop_price=9.95, equity=2500.0, open_trades={},
+            positions_by_symbol={}, buying_power=9000.0, maintenance_margin=0.0, maintenance_rate=0.5,
+            open_orders=[], risk_equity=2500.0, symbol="TSLL", track="B", track_budget=130.0, max_size=True)
+        self.assertEqual(q2, 65)                          # a 2x fund: the thin-name room halved (A.1)
 
     def test_max_size_still_fails_closed_on_bad_input(self):
         from execution import day_trade_manager as dtm
@@ -284,6 +298,96 @@ class MapAdditions20261009(unittest.TestCase):
         from execution import day_trade_manager as dtm
         for etf in ("DAMD", "AMDD", "SNDQ", "SNXX", "SNDG", "CONI", "GGLS", "NFXS", "METD"):
             self.assertEqual(dtm._min_entry_qty(etf, 1), 2, etf)
+
+
+class FundLeverage(unittest.TestCase):
+    """TRACKB-SIZE-ETF-1028 A.1: |k| per mapped fund, None for a stock / unmapped symbol."""
+
+    def test_k_per_fund(self):
+        for etf in ("TSLL", "NVDL", "NVDU", "SNXX", "SNDG"):
+            self.assertEqual(lev.fund_leverage(etf), 2.0, etf)
+        for etf, k in (("NVD", 2.0), ("TSLQ", 2.0), ("PLTD", 1.0), ("METD", 1.0), ("AMDD", 1.0), ("tslz", 2.0)):
+            self.assertEqual(lev.fund_leverage(etf), k, etf)
+
+    def test_stock_or_unknown_is_none(self):
+        for s in ("NVDA", "PLTR", "XYZQ", "", None):
+            self.assertIsNone(lev.fund_leverage(s), s)
+
+    def test_unusable_k_is_none(self):
+        with mock.patch.dict(lev._DEFAULT_INVERSE, {"PLTR": ("PLTD", 0.0)}):
+            self.assertIsNone(lev.fund_leverage("PLTD"))
+
+
+class FundStopFloor(unittest.TestCase):
+    """TRACKB-SIZE-ETF-1028 B.2: a fund stop sits at least max(5 ticks, spread / 0.25) from its entry, rounded away."""
+    PLTD_Q = {"bid": 4.565, "ask": 4.575}   # $0.01 spread
+
+    def test_pltd_10_28_input(self):
+        # PLTR 10/28 short -> PLTD: entry 4.57, translated stop 0.0489 below, spread 0.01 -> 5 ticks ($0.05)
+        stop, room, why = lev.fund_stop_floor(4.57, 4.57 - 0.0489, self.PLTD_Q)
+        self.assertAlmostEqual(stop, 4.52, places=6)
+        self.assertAlmostEqual(room, 0.05, places=6)
+        self.assertIn("floored", why)
+        # the floored stop passes the live liquidity gate's stop / spread checks that refused the route on 10/28
+        ok, liq = lev.etf_liquidity_ok(self.PLTD_Q, 4_000_000, 10, 4.57, stop)
+        self.assertTrue(ok, liq)
+        self.assertFalse(lev.etf_liquidity_ok(self.PLTD_Q, 4_000_000, 10, 4.57, 4.57 - 0.0489)[0])
+
+    def test_wide_spread_sets_the_floor(self):
+        # spread $0.03 -> 0.03 / 0.25 = $0.12 > 5 ticks; rounded AWAY from the entry
+        stop, room, _ = lev.fund_stop_floor(10.005, 9.99, {"bid": 9.99, "ask": 10.02})
+        self.assertAlmostEqual(stop, 9.88, places=6)          # 10.005 - 0.12 = 9.885 -> rounded down to 9.88
+        self.assertGreaterEqual(10.005 - stop, 0.12)
+        self.assertAlmostEqual(room, 10.005 - 9.88, places=6)   # the true distance, never below the floor
+
+    def test_rounds_away_for_a_stop_above_the_entry(self):
+        stop, _room, _ = lev.fund_stop_floor(4.57, 4.59, self.PLTD_Q)
+        self.assertAlmostEqual(stop, 4.62, places=6)
+
+    def test_wide_stop_is_kept(self):
+        stop, room, why = lev.fund_stop_floor(4.57, 4.40, self.PLTD_Q)
+        self.assertEqual(stop, 4.40)
+        self.assertAlmostEqual(room, 0.05, places=6)
+        self.assertIn("kept", why)
+
+    def test_unusable_inputs_are_none(self):
+        for args in ((4.57, 4.52, None), (4.57, 4.52, {}), (4.57, 4.52, {"bid": 4.6, "ask": 4.5}),
+                     (None, 4.52, self.PLTD_Q), (4.57, 4.57, self.PLTD_Q), (4.57, -1, self.PLTD_Q)):
+            self.assertEqual(lev.fund_stop_floor(*args)[:2], (None, None), args)
+
+    def test_conviction_sizing_cannot_tighten_below_the_floor(self):
+        # Board input: PLTD $4.57, 5-min ATR $0.02, spread $0.01 -> conv_size picks a 3-tick stop on its own; with the
+        # floor passed as its minimum room it cannot end below 5 ticks.
+        import config
+        from execution import earned_sizing as es
+        stop, room, _ = lev.fund_stop_floor(4.57, 4.57 - 0.0489, self.PLTD_Q)
+        args = ("long", 4.57, stop, 4.57, 0.02, 0.01, float(config.DAYTRADE_MIN_STOP_ATR_MULT),
+                float(config.DAYTRADE_MIN_STOP_SPREAD_MULT), 0.0, 0.0, 125.0)
+        bare = es.conv_size(*args)
+        floored = es.conv_size(*args, min_room=room)
+        self.assertTrue(bare["ok"] and floored["ok"])
+        self.assertLess(bare["d"], 0.05 - 1e-9)               # without the floor: tighter than 5 ticks
+        self.assertGreaterEqual(floored["d"], 0.05 - 1e-9)    # with it: at least 5 ticks
+        self.assertGreaterEqual(4.57 - floored["stop"], 0.05 - 1e-9)
+
+    def test_dollar_risk_with_the_floor_stays_inside_the_per_trade_budget(self):
+        # Shares are sized to the floored stop, so qty x stop distance never exceeds the per-trade risk budget.
+        import config
+        from execution import day_trade_manager as dtm
+        stop, _room, _ = lev.fund_stop_floor(4.57, 4.57 - 0.0489, self.PLTD_Q)
+        budget = 2500.0 * min(float(config.DAYTRADE_PER_TRADE_RISK_BASIS_PCT),
+                              float(config.DAYTRADE_PER_TRADE_RISK_EQUITY_PCT))
+        for st in (4.57 - 0.0489, stop):
+            for bp in (9000.0, 100000.0):
+                q, _ = dtm._bounded_entry_qty(1, 4.57, st, 2500.0, {}, {}, bp, 0.0, 0.3, [], risk_equity=2500.0,
+                                              symbol="PLTD", track="B", track_budget=140.0)
+                self.assertGreater(q, 0)
+                self.assertLessEqual(q * abs(4.57 - st), budget + 1e-9)
+        # and the 10/10 path at its retained ceiling
+        ceiling = 2500.0 * float(config.DAYTRADE_PER_TRADE_RISK_EQUITY_PCT)
+        q, _ = dtm._bounded_entry_qty(1, 4.57, stop, 2500.0, {}, {}, 9000.0, 0.0, 0.3, [], risk_equity=2500.0,
+                                      symbol="PLTD", track="B", track_budget=140.0, max_size=True)
+        self.assertLessEqual(q * abs(4.57 - stop), ceiling + 1e-9)
 
 
 if __name__ == "__main__":

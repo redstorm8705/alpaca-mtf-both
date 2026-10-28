@@ -1,0 +1,35 @@
+{
+  "change": "trackb-size-etf-1028",
+  "tier": 2,
+  "paths": [
+    "config.py",
+    "run_day_tier.py",
+    "strategy/day_tier_leverage.py",
+    "execution/day_trade_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/day_tier_runner_cron.log",
+      "pattern": "change=trackb-size-etf-1028 track-B stock attempt"
+    }
+  ],
+  "expected_rate": "each non-co-held Track B entry on a stock with a fund route (most names; about 1-4 Track B entries per session on 10/09-10/28: 17 entries in 14 sessions).",
+  "window_sessions": 5,
+  "window_reason": "Track B trades on most but not all sessions; five sessions covers several non-10/10 entries.",
+  "reversal": "a non-10/10 Track B entry still wired at the $140 budget cap; any Track B fund lot whose final stop is under 5 ticks from its entry; any Track B lot of 1 stock share while a fund route passed its checks with 2+ shares; any Track A sizing or stop change; Track B realized P&L (Alpaca fills) below -2% of equity over its next 20 closed lots (owner reviews).",
+  "metrics": [
+    {
+      "name": "track_b_wired_vs_precap_shares",
+      "source": "logs/day_tier_events.jsonl decision size.wire_cap_reason (non-10/10 Track B)",
+      "direction": "up",
+      "bound": "wired shares equal the account-room size (no 'track-B exposure cap' clause)"
+    },
+    {
+      "name": "track_b_realized_pnl",
+      "source": "Alpaca fills, Track B lots",
+      "direction": "none",
+      "bound": "not below -2% of equity over 20 closed lots"
+    }
+  ],
+  "verification": "tests/test_day_tier_affordable_route.py"
+}

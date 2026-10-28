@@ -47,7 +47,35 @@ def _bounded(requested, track="A", order_price=70.0, stop_price=69.0, equity=250
                                   risk_equity=equity, symbol=symbol, track=track, track_budget=track_budget)
 
 
+# A free inverse fund for the runner tests' route check (UBER has no mapped inverse fund; PLTD is a mapped 1x fund,
+# so day_trade_manager._min_entry_qty gives the stock attempt the fund's 2-share minimum). _inverse_pivot is mocked.
+_FREE_FUND = ("PLTD", 1.0)
+
+
+def _stock_fits(fits: dict):
+    """place_entry stand-in for the runner tests: `fits` = shares the wire-time sizing fits per symbol (a symbol not
+    listed always fits). Below the minimum -> False + the below_min_qty skip record, exactly as place_entry records
+    it; nothing reaches the broker."""
+    def _pe(sym, decision, trigger, size, *, bar_id, equity, min_qty=1, **kw):
+        need = dtm._min_entry_qty(sym, min_qty)
+        n = fits.get(sym, need)
+        dtm._LAST_ENTRY_SKIP.pop(str(sym), None)
+        if n >= need:
+            return True
+        dtm._LAST_ENTRY_SKIP[str(sym)] = {"reason": "below_min_qty", "wired": n, "min": need}
+        return False
+    return _pe
+
+
 class TrackBBudgetCap(unittest.TestCase):
+    """The budget cap is the DAYTRADE_TRACK_B_CASH_ONLY kill flag (OFF since TRACKB-SIZE-ETF-1028): these tests pin
+    the flag ON explicitly so the cap keeps working whenever the flag is turned back on."""
+
+    def setUp(self):
+        p = mock.patch.object(config, "DAYTRADE_TRACK_B_CASH_ONLY", True)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_track_b_is_capped_at_budget_share_count(self):
         # risk-basis: 1.5% x 2500 / $1 stop = 37 sh; thin-name cap $1000/$70 = 14 sh -> Track A would wire 14.
         qty_a, _ = _bounded(1, track="A")
@@ -119,6 +147,87 @@ class TrackBBudgetCap(unittest.TestCase):
         self.assertEqual(_bounded(1, track="b")[0], 1)
 
 
+class TrackBSizeFlagOff(unittest.TestCase):
+    """TRACKB-SIZE-ETF-1028 A: DAYTRADE_TRACK_B_CASH_ONLY defaults to False -> a non-10/10 Track B entry is sized like
+    Track A (risk basis, every account room), no longer clamped to the Track-B budget."""
+
+    def test_default_flag_is_off(self):
+        self.assertIs(config.DAYTRADE_TRACK_B_CASH_ONLY, False)
+
+    def test_flag_off_sizes_track_b_like_track_a(self):
+        qty_a, _ = _bounded(1, track="A")
+        qty_b, why_b = _bounded(1, track="B")
+        self.assertEqual(qty_b, qty_a)
+        self.assertGreater(qty_b, 1)
+        self.assertNotIn("track-B budget cap", why_b)
+
+    def test_flag_on_keeps_the_old_clamp(self):
+        with mock.patch.object(config, "DAYTRADE_TRACK_B_CASH_ONLY", True):
+            qty_b, why_b = _bounded(1, track="B")
+        self.assertEqual(qty_b, 1)
+        self.assertIn("track-B budget cap", why_b)
+
+    def test_flag_off_conv_path_has_no_exposure_cap(self):
+        # _wired_entry's conviction-sizing branch: the Track-B exposure cap is skipped when the flag is off.
+        sized = {"ok": True, "stop": 69.0, "qty": 12, "per_share": 1.0, "why": "conv"}
+        kw = dict(symbol="UBER", direction="long", size={"size_ok": True, "budget": 131.25, "track": "B"}, track="B",
+                  qty=1, limit_px=70.0, stop_px=69.0, px_base=70.0, day_start_equity=2500.0, live_equity=2500.0,
+                  open_trades={}, state_only={}, pos_by_sym={}, buying_power=4000.0, maintenance_margin=0.0,
+                  maintenance_rate=0.3, open_orders=[], min_qty=1, conv_in={"stage": "ok"}, used=(0.0, 0.0, ""),
+                  reserve_active=False)
+        with mock.patch.object(dtm, "_conv_compute", return_value=({"proven": True}, dict(sized))):
+            off = dtm._wired_entry(**kw)
+            with mock.patch.object(config, "DAYTRADE_TRACK_B_CASH_ONLY", True):
+                on = dtm._wired_entry(**kw)
+        self.assertEqual(off["qty"], 12)
+        self.assertEqual(on["qty"], 1)
+        self.assertNotIn("track-B exposure cap", off["size"]["wire_cap_reason"])
+
+
+class TrackBFundRooms(unittest.TestCase):
+    """TRACKB-SIZE-ETF-1028 A.1: a Track B lot on a leveraged / inverse fund gets the thin-name and single-name rooms
+    divided by |k|, at BOTH room sites (_bounded_entry_qty and _conv_compute); a fund with no readable k fails closed."""
+
+    def _conv(self, symbol, track="B"):
+        ci = {"stage": "ok", "plan": {"G": 0.0, "proven": True}, "j": 0.0, "used": (0.0, 0.0, ""), "atr": None,
+              "spread_med": None, "rt_room": None}
+        return dtm._conv_compute(ci, symbol, "long", {"track": track}, 10.0, 9.9, 10.0, 2500.0, 2500.0, {}, {},
+                                 9000.0, 0.0, 0.5, [], False)
+
+    def test_bounded_entry_qty_divides_the_thin_room_by_k(self):
+        # $10 lots, $0.01 stop: risk does not bind; the thin-name room does ($1300 stock, $650 for a 2x fund)
+        stock, _ = _bounded(1, track="B", symbol="XYZQ", order_price=10.0, stop_price=9.99, bp=9000.0)
+        two_x, why = _bounded(1, track="B", symbol="TSLL", order_price=10.0, stop_price=9.99, bp=9000.0)
+        one_x, _ = _bounded(1, track="B", symbol="PLTD", order_price=10.0, stop_price=9.99, bp=9000.0)
+        self.assertEqual(stock, 130)
+        self.assertEqual(two_x, 65)
+        self.assertEqual(one_x, 130)
+        self.assertIn("thin_name:$650.00", why)
+
+    def test_track_a_fund_lot_is_unchanged(self):
+        a_fund, _ = _bounded(1, track="A", symbol="TSLL", order_price=10.0, stop_price=9.99, bp=9000.0)
+        self.assertEqual(a_fund, 130)
+
+    def test_conv_compute_divides_the_thin_room_by_k(self):
+        _plan, s_stock = self._conv("XYZQ")
+        _plan, s_fund = self._conv("TSLL")
+        self.assertEqual(s_stock["qty"], 130)
+        self.assertEqual(s_fund["qty"], 65)
+        self.assertIn("thin_name:$650.00", s_fund["why"])
+        _plan, s_a = self._conv("TSLL", track="A")
+        self.assertEqual(s_a["qty"], 130)
+
+    def test_unknown_k_fails_closed_at_both_sites(self):
+        with mock.patch("strategy.day_tier_leverage.fund_leverage", return_value=None):
+            q, why = _bounded(1, track="B", symbol="TSLL", order_price=10.0, stop_price=9.99, bp=9000.0)
+            plan, sized = self._conv("TSLL")
+            q_stock, _ = _bounded(1, track="B", symbol="XYZQ", order_price=10.0, stop_price=9.99, bp=9000.0)
+        self.assertEqual(q, 0)
+        self.assertIn("fail closed", why)
+        self.assertIsNone(sized)          # no conviction sizing; _bounded_entry_qty (the fallback) returns 0
+        self.assertEqual(q_stock, 130)    # a stock is not a fund: unaffected
+
+
 class PlaceEntryTrackThreading(unittest.TestCase):
     """place_entry: Track B submits the budget-capped qty and stamps track B; Track A's code path unchanged."""
 
@@ -126,7 +235,9 @@ class PlaceEntryTrackThreading(unittest.TestCase):
              *, fill_price=70.1, trigger_override=None, flatten_ok=True, exit_recorded=None,
              stop_state=False, pending_close=False, emergency_cancelled=True,
              emergency_fill_qty=0.0, emergency_readable=True, live_net_covers=True,
-             emergency_submit_status="live", pin_fallback=False, positions=None):
+             emergency_submit_status="live", pin_fallback=False, positions=None, cash_only=True):
+        # cash_only: the DAYTRADE_TRACK_B_CASH_ONLY kill flag (OFF in config since TRACKB-SIZE-ETF-1028). Pinned ON
+        # here so the budget-cap tests keep guarding the cap for when the flag is turned back on.
         state = {} if state is None else state
         self.last_state = state
         submitted: dict = {}
@@ -227,6 +338,7 @@ class PlaceEntryTrackThreading(unittest.TestCase):
             mock.patch.object(dtm, "_record_confirmed_stop_exit",
                               side_effect=_record_emergency_stop),
             mock.patch.object(dtm, "_live_net_covers_owned", return_value=live_net_covers),
+            mock.patch.object(config, "DAYTRADE_TRACK_B_CASH_ONLY", cash_only),
         ]
         with ExitStack() as stack:  # >20 nested `with` items is a SyntaxError on the OCI py3.10 target
             for p in patches:
@@ -242,6 +354,15 @@ class PlaceEntryTrackThreading(unittest.TestCase):
         self.assertEqual(qty, 1)            # the budget share count, NOT the ~14-sh risk size
         self.assertEqual(log_track, "B")
         self.assertEqual(state_track, "B")
+
+    def test_track_b_flag_off_submits_the_track_a_size(self):
+        # TRACKB-SIZE-ETF-1028 A: with the kill flag off (the config default) Track B wires what Track A would.
+        ok_b, qty_b, log_track, _ = self._run("B", cash_only=False)
+        ok_a, qty_a, _, _ = self._run("A", cash_only=False)
+        self.assertTrue(ok_b and ok_a)
+        self.assertGreater(qty_b, 1)
+        self.assertEqual(qty_b, qty_a)
+        self.assertEqual(log_track, "B")
 
     def test_short_uses_alpacas_short_maintenance_rate(self):
         # $10 short, posted (long) rate 30% -> Alpaca short rule: greater of $5/share or 30% = 50% (board 2026-10-07)
@@ -1018,16 +1139,22 @@ class RunnerWindowGate(unittest.TestCase):
         lp = {"UBER": LivePrice(70.0, "iex_trade", 1.0), "UBRL": LivePrice(20.0, "iex_trade", 1.0)}
         # 10/10 whose max-size budget buys only 1 share of the stock (single-name cap shrunk to $75 vs UBER $70)
         # -> the 2x ETF at max size (Rafael 2026-10-06: ETF only when the stock gives 0 or 1 share)
+        # TRACKB-SIZE-ETF-1028 B.1: the STOCK is placed first with a 2-share minimum; its wire-time sizing fits 1 share
+        # (below_min_qty) -> the 2x ETF at max size (10/10).
         extra = [mock.patch("strategy.day_tier_leverage.etf_for_order", return_value="UBRL"),
                  mock.patch("strategy.day_tier_leverage.is_ten_of_ten", return_value=(True, "10/10")),
                  mock.patch.object(config, "DAYTRADE_MAX_SINGLE_NAME_NOTIONAL_PCT", 0.03),
                  mock.patch("data.live_price.live_price", side_effect=lambda s, **k: lp.get(s)),
+                 mock.patch.object(run_day_tier, "_today_iex_volume", return_value=500000.0),
                  mock.patch("execution.broker.get_open_positions", return_value=[]),
                  mock.patch("strategy.day_tier_logger.open_trades_from_log", return_value={})]
-        result, bsf, pe = self._tick(True, extra=extra)
+        result, bsf, pe = self._tick(True, extra=extra, pe_side_effect=_stock_fits({"UBER": 1}))
         self.assertEqual(result["entered_b"], 1)
+        self.assertEqual([(c.args[0], c.kwargs.get("min_qty")) for c in pe.call_args_list],
+                         [("UBER", 2), ("UBRL", None)])
         sym, _dec, trg, size = pe.call_args.args[:4]
         self.assertEqual(sym, "UBRL")
+        self.assertEqual(trg["fund_today_volume"], 500000.0)   # stamped for the B.3 volume cap
         self.assertEqual((trg["underlying"], trg["leverage"]), ("UBER", 2.0))
         # exact daily-reset stop with the harness's prior close (100): UBER 70 -> 69 moves UBRL by -5%, so 19.00
         from strategy import day_tier_leverage as lev
@@ -1070,18 +1197,60 @@ class RunnerWindowGate(unittest.TestCase):
         self.assertEqual((sym, trg["direction"]), ("UBER", "short"))
 
     def test_short_not_held_with_budget_for_one_share_buys_the_inverse_etf(self):
+        # B.1: the route is decided by the WIRED size (1 share fits), not the budget: stock first, then the fund.
         extra = [mock.patch.object(run_day_tier, "_inverse_pivot", return_value=self._INV_OK),
+                 mock.patch("strategy.day_tier_leverage.inverse_etf_for_order", return_value=_FREE_FUND),
                  mock.patch("strategy.day_tier_sizing.compute_day_tier_size",
                             return_value={"size_ok": True, "shares": 1, "budget": 100.0, "track": "B"})]
-        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
-        self.assertEqual(pe.call_args.args[0], "UBRD")
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT",
+                                      pe_side_effect=_stock_fits({"UBER": 1}))
+        self.assertEqual([c.args[0] for c in pe.call_args_list], ["UBER", "UBRD"])
+        self.assertEqual(result["entered_b"], 1)
 
     def test_short_budget_route_failure_keeps_the_stock_short(self):
+        # The stock fits 1 share, no fund route passes its live checks -> the 1-share stock short (owner 2026-10-07).
         extra = [mock.patch.object(run_day_tier, "_inverse_pivot", return_value=(None, "spread too wide")),
+                 mock.patch("strategy.day_tier_leverage.inverse_etf_for_order", return_value=_FREE_FUND),
                  mock.patch("strategy.day_tier_sizing.compute_day_tier_size",
                             return_value={"size_ok": True, "shares": 1, "budget": 100.0, "track": "B"})]
-        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT")
-        self.assertEqual((pe.call_args.args[0], pe.call_args.args[2]["direction"]), ("UBER", "short"))
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT",
+                                      pe_side_effect=_stock_fits({"UBER": 1}))
+        self.assertEqual([(c.args[0], c.kwargs.get("min_qty")) for c in pe.call_args_list], [("UBER", 2), ("UBER", 1)])
+        self.assertEqual(pe.call_args.args[2]["direction"], "short")
+        self.assertEqual(result["entered_b"], 1)
+
+    def test_short_with_room_for_two_plus_shares_shorts_the_stock_without_a_fund(self):
+        inv = mock.Mock(return_value=self._INV_OK)
+        extra = [mock.patch.object(run_day_tier, "_inverse_pivot", inv),
+                 mock.patch("strategy.day_tier_leverage.inverse_etf_for_order", return_value=_FREE_FUND)]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT",
+                                      pe_side_effect=_stock_fits({"UBER": 6}))
+        inv.assert_not_called()
+        self.assertEqual([(c.args[0], c.kwargs.get("min_qty")) for c in pe.call_args_list], [("UBER", 2)])
+
+    def test_counter_trend_tag_recorded_once_and_reused_on_the_fund(self):
+        # A counter-trend Track B short (daily side LONG): the durable tag is written ONCE, under the stock, before
+        # the first attempt; the fund attempt carries the same decision_id.
+        rec = mock.Mock(return_value="CT-UBER-1")
+        extra = [mock.patch.object(run_day_tier, "_inverse_pivot", return_value=self._INV_OK),
+                 mock.patch("strategy.day_tier_leverage.inverse_etf_for_order", return_value=_FREE_FUND),
+                 mock.patch.object(run_day_tier, "_record_counter_trend_intent", rec)]
+        result, _bsf, pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="LONG",
+                                      pe_side_effect=_stock_fits({"UBER": 0}))
+        rec.assert_called_once()
+        self.assertEqual(rec.call_args.args[0], "UBER")
+        self.assertEqual([c.args[0] for c in pe.call_args_list], ["UBER", "UBRD"])
+        self.assertEqual({c.kwargs.get("decision_id") for c in pe.call_args_list}, {"CT-UBER-1"})
+        self.assertEqual(result["entered_b"], 1)
+
+    def test_each_attempt_is_charged_to_the_api_budget(self):
+        extra = [mock.patch.object(run_day_tier, "_inverse_pivot", return_value=self._INV_OK),
+                 mock.patch("strategy.day_tier_leverage.inverse_etf_for_order", return_value=_FREE_FUND)]
+        r1, _b, _pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT",
+                                 pe_side_effect=_stock_fits({"UBER": 6}))
+        r2, _b, _pe = self._tick(True, extra=extra, mom_over=self._SHORT, side="SHORT",
+                                 pe_side_effect=_stock_fits({"UBER": 0}))
+        self.assertEqual(r2["calls_est"] - r1["calls_est"], int(getattr(config, "DAYTRADE_CALLS_PER_ENTRY_EST", 15)))
 
     def test_ten_of_ten_short_on_the_stock_gets_max_size(self):
         extra = [mock.patch("strategy.day_tier_leverage.is_ten_of_ten", return_value=(True, "10/10")),

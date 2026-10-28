@@ -149,6 +149,60 @@ def exposure_sign(symbol: str, side: str) -> "tuple[str, int]":
         return str(symbol), 1
 
 
+def fund_leverage(symbol: str) -> "float | None":
+    """|k| (the fund's daily leverage) for a mapped leveraged / inverse fund; None for a stock, an unmapped symbol or a
+    fund whose k is not a usable positive number (TRACKB-SIZE-ETF-1028 A.1: a caller that sees a fund here with no
+    readable k fails closed). Uses the same maps as exposure_sign. Never raises."""
+    try:
+        sym = str(symbol).strip().upper()
+        if sym in set(_DEFAULT_BULL_2X.values()) | set(_DEFAULT_BULL_2X_ALT.values()):
+            return abs(float(_LEVERAGE))
+        for etf, k in list(_DEFAULT_INVERSE.values()) + list(_DEFAULT_INVERSE_ALT.values()):
+            if etf == sym:
+                kk = abs(float(k))
+                return kk if (math.isfinite(kk) and kk > 0) else None
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def fund_stop_floor(entry_px, stop_px, quote) -> "tuple[float | None, float | None, str]":
+    """TRACKB-SIZE-ETF-1028 B.2 — the shared ETF stop floor. A fund lot's stop sits at least
+    max(_INV_MIN_STOP_TICKS ticks, quoted spread / _INV_MAX_SPREAD_OF_STOP) from its entry (the same two constants the
+    live liquidity gate uses, so a floored stop always passes that gate's stop-distance and spread-of-stop checks),
+    rounded AWAY from the entry to the cent. A stop already that far away is returned unchanged. Returns
+    (stop, min_room, why): `min_room` is the floor as a cent-aligned distance from the entry (for the conviction
+    sizing's minimum room); (None, None, why) on an unusable entry/stop/quote (the caller keeps its own rule). Never
+    raises."""
+    try:
+        e, st = _pos(entry_px), _pos(stop_px)
+        if e is None or st is None or st == e:
+            return None, None, "fund stop floor: no usable entry/stop"
+        if not isinstance(quote, dict):
+            return None, None, "fund stop floor: no live quote"
+        bid, ask = _pos(quote.get("bid")), _pos(quote.get("ask"))
+        if bid is None or ask is None or ask < bid:
+            return None, None, "fund stop floor: quote unusable (missing/crossed)"
+        spread = ask - bid
+        need = max(_INV_MIN_STOP_TICKS * _TICK, spread / _INV_MAX_SPREAD_OF_STOP)
+        below = st < e   # a long lot (every fund lot is long): the stop sits below the entry
+        if below:
+            level = math.floor(round((e - need) / _TICK, 6)) * _TICK
+        else:
+            level = math.ceil(round((e + need) / _TICK, 6)) * _TICK
+        level = round(level, 2)
+        room = abs(e - level)   # >= the floor (the level is rounded away from the entry); cent-aligned for a cent entry
+        if not (math.isfinite(level) and level > 0):
+            return None, None, f"fund stop floor: no positive stop at {need:.4f} from {e:.4f}"
+        if abs(e - st) >= room:
+            return st, room, (f"fund stop kept {st:.4f} (distance {abs(e - st):.4f} >= floor {room:.2f}: "
+                              f"max({_INV_MIN_STOP_TICKS} ticks, spread {spread:.4f} / {_INV_MAX_SPREAD_OF_STOP:g}))")
+        return level, room, (f"fund stop floored {st:.4f} -> {level:.2f} (floor {room:.2f}: max({_INV_MIN_STOP_TICKS} "
+                             f"ticks, spread {spread:.4f} / {_INV_MAX_SPREAD_OF_STOP:g}))")
+    except Exception as ex:  # noqa: BLE001
+        return None, None, f"fund stop floor error: {ex!r}"
+
+
 def etf_stop_level(etf_px, underlying_px, level, k: float, inverse: bool, prior_close=None) -> "float | None":
     """ETF stop reference for a stock structural level (see STOP TRANSLATION). None when inputs/geometry are not
     usable. Never raises."""

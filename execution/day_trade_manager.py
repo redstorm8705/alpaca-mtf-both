@@ -378,6 +378,32 @@ def _open_track_b_notional(open_trades: dict, extra_b_lots: "dict | None",
         return None
 
 
+def _is_fund(symbol: str) -> bool:
+    """True when `symbol` is a mapped leveraged / inverse fund (day_tier_leverage.exposure_sign maps it to another
+    underlying). Raises on an unreadable map (callers decide their own fail-safe)."""
+    from strategy import day_tier_leverage as _lev
+    sym = str(symbol or "").strip().upper()
+    return _lev.exposure_sign(sym, "long")[0] != sym
+
+
+def _fund_room_divisor(symbol: str, track: str) -> "float | None":
+    """TRACKB-SIZE-ETF-1028 A.1: the divisor for a Day lot's thin-name and single-name rooms. 1 for anything that is
+    not a Track B lot on a fund (Track A / M fund lots unchanged); |k| (day_tier_leverage.fund_leverage) for a Track B
+    lot on a leveraged / inverse fund, so its underlying exposure matches a stock lot; None when the symbol is a fund
+    whose k cannot be read, or the map is unreadable (the caller fails closed — never uncapped). Never raises."""
+    if str(track or "A").strip().upper() != "B":
+        return 1.0
+    try:
+        if not _is_fund(symbol):
+            return 1.0
+        from strategy import day_tier_leverage as _lev
+        k = _lev.fund_leverage(symbol)
+        return float(k) if (k is not None and math.isfinite(float(k)) and float(k) > 0) else None
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] fund leverage map unreadable (Track B sizing fails closed): %s", symbol, e)
+        return None
+
+
 def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float, equity: float,
                        open_trades: dict, positions_by_symbol: dict, buying_power: float,
                        maintenance_margin: float, maintenance_rate: float,
@@ -483,6 +509,14 @@ def _bounded_entry_qty(requested_qty: int, order_price: float, stop_price: float
         # notional may exceed single_name_pct × equity, so a single-name gap-through stays inside the
         # account kill even at the raised 1.0× aggregate ceiling (the aggregate is reached by ≥2 names).
         rooms["single_name"] = single_name_pct * equity
+        # TRACKB-SIZE-ETF-1028 A.1: a Track B lot on a leveraged / inverse fund gets the thin-name and single-name rooms
+        # divided by |k| (its underlying exposure then matches a stock lot). A fund with no readable k fails closed.
+        _kdiv = _fund_room_divisor(symbol, track)
+        if _kdiv is None:
+            return 0, "track-B fund leverage unreadable — fail closed"
+        for _rk in ("thin_name", "single_name"):
+            if _rk in rooms:
+                rooms[_rk] = rooms[_rk] / _kdiv
         stop_distance = abs(order_price - stop_price)
         if stop_distance <= 0 or not math.isfinite(stop_distance):
             return 0, "invalid stop distance — fail closed"
@@ -2429,6 +2463,17 @@ def _conv_compute(ci: dict, symbol: str, direction: str, size: dict, limit_px: f
         if not is_deep:
             rooms["thin_name"] = float(config.DAYTRADE_THIN_NAME_MAX_NOTIONAL_USD)
         _track = str((size or {}).get("track") or "A").strip().upper()
+        # TRACKB-SIZE-ETF-1028 A.1 (same rule as _bounded_entry_qty): a Track B fund lot's thin-name and single-name
+        # rooms are divided by |k|; a fund with no readable k gets no conviction sizing here, and _bounded_entry_qty
+        # (the fallback) then fails closed on the same check — never uncapped.
+        _kdiv = _fund_room_divisor(symbol, _track)
+        if _kdiv is None:
+            logger.warning("[%s] CONV-1018 track-B fund leverage unreadable — no conviction sizing (fail closed)",
+                           symbol)
+            return plan, None
+        for _rk in ("thin_name", "single_name"):
+            if _rk in rooms:
+                rooms[_rk] = rooms[_rk] / _kdiv
         if _track != "B" and reserve_active:
             from strategy.day_tier_sizing import _DAYTIER_ALLOC_PCT, _TRACK_B_SHARE
             _open_b = _open_track_b_notional(open_trades, None, pos_by_sym)
@@ -2720,12 +2765,17 @@ def _wired_entry(*, symbol: str, direction: str, size: dict, track: str, qty: in
 
 
 def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
-                bar_id: str, equity: float, decision_id: str = "", min_qty: int = 1) -> bool:
+                bar_id: str, equity: float, decision_id: str = "", min_qty: int = 1,
+                pre_order_sentinel: bool = False) -> bool:
     """Place ONE day-tier entry (Track A, or Track B when size["track"]=="B" — exposure-capped at wire time)
     with a confirmed protective stop. Idempotent per (symbol, bar_id). Returns True on a filled+protected entry, False otherwise. NEVER raises into
     the caller (the runner). No-op when DAYTRADE_ENABLED is False. `min_qty`: skip (recorded for last_entry_skip)
-    when fewer shares fit; a leveraged/inverse ETF always needs >= 2 (_min_entry_qty)."""
+    when fewer shares fit; a leveraged/inverse ETF always needs >= 2 (_min_entry_qty). `pre_order_sentinel`
+    (TRACKB-SIZE-ETF-1028, the Track B fund attempt only): a "pre_order" skip record stands until just before the order
+    is submitted, so a False return with a record means no order was sent."""
     _LAST_ENTRY_SKIP.pop(str(symbol), None)
+    if pre_order_sentinel is True:
+        _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "pre_order", "wired": 0, "min": 0}
     if not _enabled():
         return False
     from execution import broker
@@ -2827,9 +2877,11 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         # usable IEX quote (spread <= DAYTRADE_STOP_SPREAD_SANITY_PCT of mid, mid within the live band), a long pays up to max(ask, trade) + slip and a short sells
         # down to min(bid, trade) - slip, never more than DAYTRADE_ENTRY_TOUCH_CAP_PCT through the trade price.
         _touch_src = "trade"
+        _touch_q: "dict | None" = None   # the same quote read, reused by the fund stop floor (TRACKB-SIZE-ETF-1028 B.2)
         try:
             from data.alpaca_data import get_latest_quote as _glq
             _q = _glq(symbol) or {}
+            _touch_q = _q if isinstance(_q, dict) else None
             _bid, _ask = float(_q.get("bid") or 0.0), float(_q.get("ask") or 0.0)
             _sanity = float(_cfg("DAYTRADE_STOP_SPREAD_SANITY_PCT", 0.02))
             _cap = float(_cfg("DAYTRADE_ENTRY_TOUCH_CAP_PCT", 0.01))  # PROV:entry-fill-rate-2026-10-07
@@ -3034,6 +3086,31 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                 stop_px = _capped
                 _ta_geom.update(one_share_stop=_cap_stop, stop=round(float(stop_px), 2),
                                 room_used=round(abs(limit_px - float(stop_px)), 4))
+        # TRACKB-SIZE-ETF-1028 B.2(b) FUND STOP FLOOR: a leveraged / inverse fund lot's stop sits at least max(5 ticks,
+        # quoted spread / 0.25) from the entry limit (day_tier_leverage.fund_stop_floor), applied after every stop rule
+        # above (_room_stop, the watch-day-exempt check on the unfloored stop, the Track A noise stop and its one-share
+        # cap) and BEFORE the share count is set, so shares are sized to the floored stop and the dollar risk does not
+        # rise. Widen-only. An unreadable quote uses the tick floor alone; any floor error skips the entry (fail closed).
+        _fund_room: "float | None" = None
+        try:
+            if _track == "B" and _is_fund(symbol):   # Track B only (Track A fund lots unchanged)
+                from strategy import day_tier_leverage as _lev_f
+                _fs, _fr, _fwhy = _lev_f.fund_stop_floor(limit_px, stop_px, _touch_q)
+                if _fs is None or _fr is None:
+                    # Unreadable quote: the tick floor alone (spread term 0), so the conviction sizing can never
+                    # tighten the stop under 5 ticks (cold review 2026-10-28, FAIL-2).
+                    _fs, _fr, _fwhy = _lev_f.fund_stop_floor(limit_px, stop_px, {"bid": limit_px, "ask": limit_px})
+                    _fwhy = f"quote unreadable — tick floor only: {_fwhy}"
+                if _fs is None or _fr is None:
+                    raise ValueError(f"fund stop floor unavailable ({_fwhy})")
+                if abs(float(_fs) - float(stop_px)) > 0:
+                    logger.info("[%s] track-%s fund stop floored %.4f -> %.2f (%s)", symbol, _track,
+                                float(stop_px), float(_fs), _fwhy)
+                stop_px, _fund_room = float(_fs), float(_fr)
+        except Exception as _ffe:  # noqa: BLE001 — fail closed: a Track B fund lot never trades without its floor
+            logger.warning("[%s] track-B fund entry skipped — fund stop floor error: %s", symbol, _ffe)
+            _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "fund_stop_floor_error", "wired": 0, "min": 0}
+            return False
         _conv_in: "dict | None" = None
         if _track in ("A", "B") and _cfg("DAYTRADE_CONV_SIZING_ENABLED", True) is not False:
             _conv_in = _conv_inputs(symbol, size, decision, _used)
@@ -3041,6 +3118,9 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
                 # TRACK-A-STOP-1026: the conviction sizing's tight stop never goes inside the Track A noise room.
                 # The room actually used (after the one-share cap), so CONV never re-widens past the cap.
                 _conv_in["noise_room"] = float(_ta_geom["room_used"])
+        if _fund_room is not None and isinstance(_conv_in, dict) and _conv_in.get("stage") == "ok":
+            # TRACKB-SIZE-ETF-1028 B.2(b): the conviction sizing's tight stop never goes inside the fund stop floor.
+            _conv_in["noise_room"] = max(float(_conv_in.get("noise_room") or 0.0), _fund_room)
         _w = _wired_entry(symbol=symbol, direction=direction, size=size, track=_track, qty=qty, limit_px=limit_px,
                           stop_px=stop_px, px_base=_px_base, day_start_equity=day_start_equity, live_equity=live_equity,
                           open_trades=open_trades, state_only=_state_only, pos_by_sym=pos_by_sym,
@@ -3053,6 +3133,40 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             return False
         qty, stop_px, size = int(_w["qty"]), float(_w["stop_px"]), _w["size"]
         _min_q, _conv_sized = int(_w["min_q"]), _w["conv_sized"]
+        try:
+            _b_fund = _track == "B" and _is_fund(symbol)
+        except Exception as _bfe:  # noqa: BLE001 — unreadable map: treat as a fund (the volume cap applies; fail closed)
+            logger.warning("[%s] fund map unreadable at the volume cap: %s", symbol, _bfe)
+            _b_fund = _track == "B"
+        if _b_fund:
+            # TRACKB-SIZE-ETF-1028 B.3: a Track B fund lot's wired shares are capped (shrink only) at today's IEX volume /
+            # _INV_MIN_VOL_X_QTY (the route's liquidity rule — the uncapped sizing can wire more shares than the route
+            # checked). The route stamps today's volume on the trigger; missing / unreadable / non-positive -> no entry
+            # (fail closed; the skip is NOT below_min_qty, so the runner's 1-share stock fallback rules still apply).
+            from strategy.day_tier_leverage import _INV_MIN_VOL_X_QTY
+            try:
+                _fvol = float(trigger.get("fund_today_volume"))  # type: ignore[arg-type]  # None caught below
+            except (TypeError, ValueError):
+                _fvol = float("nan")
+            if not (math.isfinite(_fvol) and _fvol > 0):
+                logger.info("[%s] track-B fund entry skipped — today's IEX volume unreadable (%r): fail closed", symbol,
+                            trigger.get("fund_today_volume"))
+                _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "fund_volume_unreadable", "wired": int(qty), "min": _min_q}
+                return False
+            _vcap = math.floor(_fvol / _INV_MIN_VOL_X_QTY)
+            if _vcap < qty:
+                if _vcap < _min_q:
+                    logger.info("[%s] track-B fund entry skipped — today's IEX volume %.0f / %d caps it at %d sh "
+                                "(minimum %d)", symbol, _fvol, _INV_MIN_VOL_X_QTY, _vcap, _min_q)
+                    _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "fund_volume_cap", "wired": int(_vcap), "min": _min_q}
+                    return False
+                _vwhy = (f"; fund volume cap: today's IEX volume {_fvol:.0f} / {_INV_MIN_VOL_X_QTY} -> "
+                         f"{qty}→{_vcap}sh")
+                logger.info("[%s] track-B fund volume cap %d -> %d sh (today's IEX volume %.0f)", symbol, qty, _vcap,
+                            _fvol)
+                qty = int(_vcap)
+                size = {**size, "shares": qty, "notional": round(qty * limit_px, 2),
+                        "wire_cap_reason": str(size.get("wire_cap_reason") or "") + _vwhy}
         if _ta_geom is not None:
             # Decision stack (Rule D): the noise/range inputs and the wired stop and shares, in the logged decision.
             _ta_geom.update(stop=round(stop_px, 2), shares=qty, change="track-a-stop-1026",
@@ -3101,6 +3215,8 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             # as open risk in the daily dollar budget for the rest of the day (cold-2nd 2026-10-04).
             _retire_unsubmitted(state, key)
             return False
+        if pre_order_sentinel is True:
+            _LAST_ENTRY_SKIP.pop(str(symbol), None)   # an order is about to be sent: no pre-order record from here on
         if cohold and bracket_tp is not None:
             order = broker.submit_bracket_entry(
                 symbol, qty, order_side, limit_px, bracket_tp, stop_px, tier="daytrade",

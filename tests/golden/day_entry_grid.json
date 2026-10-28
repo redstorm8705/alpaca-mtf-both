@@ -3731,13 +3731,13 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=2sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=2sh"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -3746,16 +3746,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(0.0, 0.0)|quote=(99.6, 100.4)|rt=3.0": {
-  "logged_shares": 2,
+  "logged_shares": 10,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 10,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -3764,16 +3764,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.6,
-   "qty": 2,
+   "qty": 10,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 10\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 10; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(0.0, 0.0)|quote=(99.6, 100.4)|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 10,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 10,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -3782,16 +3782,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.6,
-   "qty": 2,
+   "qty": 10,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 10\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 10; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(0.0, 0.0)|quote=(99.98, 100.02)|rt=3.0": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -3800,16 +3800,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.22,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(0.0, 0.0)|quote=(99.98, 100.02)|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -3818,16 +3818,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.22,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(0.0, 0.0)|quote=None|rt=3.0": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -3836,16 +3836,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(0.0, 0.0)|quote=None|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -3854,10 +3854,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(110.0, 5.0)|quote=(99.6, 100.4)|rt=3.0": {
   "logged_shares": 2,
@@ -3875,7 +3875,7 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 10\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 10; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 10\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(110.0, 5.0)|quote=(99.6, 100.4)|rt=None": {
   "logged_shares": 2,
@@ -3893,7 +3893,7 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 10\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 10; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 10\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(110.0, 5.0)|quote=(99.98, 100.02)|rt=3.0": {
   "logged_shares": 2,
@@ -3911,7 +3911,7 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 11\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(110.0, 5.0)|quote=(99.98, 100.02)|rt=None": {
   "logged_shares": 2,
@@ -3929,7 +3929,7 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 11\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(110.0, 5.0)|quote=None|rt=3.0": {
   "logged_shares": 2,
@@ -3947,7 +3947,7 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 11\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(110.0, 5.0)|quote=None|rt=None": {
   "logged_shares": 2,
@@ -3965,7 +3965,7 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 11\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|long|res=0|off|bp=20000|used=(124.5, 0.0)|quote=(99.6, 100.4)|rt=3.0": {
   "logged_shares": null,
@@ -4119,10 +4119,10 @@
   "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$300.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 2 sh; wired 2 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 16,
    "risk_per_share": 1.4,
    "side": "long",
    "stop_px": 99.4,
@@ -4132,16 +4132,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 16,
    "side": "buy"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=(99.6, 100.4)|rt=3.0": {
-  "logged_shares": 2,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 16,
    "risk_per_share": 4.2,
    "side": "long",
    "stop_px": 97.0,
@@ -4151,16 +4151,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.6,
-   "qty": 2,
+   "qty": 16,
    "side": "buy"
   },
-  "wire": "conv: S $3.7000 -> d' $3.6000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $4.2000; budget room $125.00 -> 29 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.7000 -> d' $3.6000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $4.2000; budget room $125.00 -> 29 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=(99.6, 100.4)|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 16,
    "risk_per_share": 1.8,
    "side": "long",
    "stop_px": 99.4,
@@ -4170,16 +4170,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.6,
-   "qty": 2,
+   "qty": 16,
    "side": "buy"
   },
-  "wire": "conv: S $3.7000 -> d' $1.2000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.8000; budget room $125.00 -> 69 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.7000 -> d' $1.2000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.8000; budget room $125.00 -> 69 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=(99.98, 100.02)|rt=3.0": {
-  "logged_shares": 2,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 16,
    "risk_per_share": 3.82,
    "side": "long",
    "stop_px": 97.0,
@@ -4189,16 +4189,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.22,
-   "qty": 2,
+   "qty": 16,
    "side": "buy"
   },
-  "wire": "conv: S $3.3200 -> d' $3.2200 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8200; budget room $125.00 -> 32 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3200 -> d' $3.2200 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8200; budget room $125.00 -> 32 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=(99.98, 100.02)|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 16,
    "risk_per_share": 1.42,
    "side": "long",
    "stop_px": 99.4,
@@ -4208,16 +4208,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.22,
-   "qty": 2,
+   "qty": 16,
    "side": "buy"
   },
-  "wire": "conv: S $3.3200 -> d' $0.8200 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4200; budget room $125.00 -> 88 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3200 -> d' $0.8200 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4200; budget room $125.00 -> 88 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=None|rt=3.0": {
-  "logged_shares": 2,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 16,
    "risk_per_share": 3.8,
    "side": "long",
    "stop_px": 97.0,
@@ -4227,16 +4227,16 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 16,
    "side": "buy"
   },
-  "wire": "conv: S $3.3000 -> d' $3.2000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8000; budget room $125.00 -> 32 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $3.2000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8000; budget room $125.00 -> 32 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=None|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 16,
    "risk_per_share": 1.4,
    "side": "long",
    "stop_px": 99.4,
@@ -4246,10 +4246,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 16,
    "side": "buy"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=(99.6, 100.4)|rt=3.0": {
   "logged_shares": 2,
@@ -4271,10 +4271,10 @@
   "wire": "conv: S $3.7000 -> d' $3.6000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $4.2000; budget room $10.00 -> 2 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 2 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=(99.6, 100.4)|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 5,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 5,
    "risk_per_share": 1.8,
    "side": "long",
    "stop_px": 99.4,
@@ -4284,10 +4284,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.6,
-   "qty": 2,
+   "qty": 5,
    "side": "buy"
   },
-  "wire": "conv: S $3.7000 -> d' $1.2000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.8000; budget room $10.00 -> 5 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 5; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.7000 -> d' $1.2000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.8000; budget room $10.00 -> 5 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 5 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=(99.98, 100.02)|rt=3.0": {
   "logged_shares": 2,
@@ -4309,10 +4309,10 @@
   "wire": "conv: S $3.3200 -> d' $3.2200 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8200; budget room $10.00 -> 2 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 2 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=(99.98, 100.02)|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 7,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 7,
    "risk_per_share": 1.42,
    "side": "long",
    "stop_px": 99.4,
@@ -4322,10 +4322,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.22,
-   "qty": 2,
+   "qty": 7,
    "side": "buy"
   },
-  "wire": "conv: S $3.3200 -> d' $0.8200 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4200; budget room $10.00 -> 7 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 7; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3200 -> d' $0.8200 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4200; budget room $10.00 -> 7 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 7 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=None|rt=3.0": {
   "logged_shares": 2,
@@ -4347,10 +4347,10 @@
   "wire": "conv: S $3.3000 -> d' $3.2000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8000; budget room $10.00 -> 2 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 2 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=None|rt=None": {
-  "logged_shares": 2,
+  "logged_shares": 7,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 7,
    "risk_per_share": 1.4,
    "side": "long",
    "stop_px": 99.4,
@@ -4360,10 +4360,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 7,
    "side": "buy"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $10.00 -> 7 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 7; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $10.00 -> 7 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 7 rooms=conv"
  },
  "B|max=0|AAPL|long|res=0|proven|bp=20000|used=(124.5, 0.0)|quote=(99.6, 100.4)|rt=3.0": {
   "logged_shares": null,
@@ -4513,13 +4513,13 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=2sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=2sh"
  },
  "B|max=0|AAPL|long|res=0|unproven|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -4528,10 +4528,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=1|off|bp=1250": {
   "logged_shares": null,
@@ -4561,13 +4561,13 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=2sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=2sh"
  },
  "B|max=0|AAPL|long|res=1|off|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -4576,10 +4576,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|long|res=1|proven|bp=1250": {
   "logged_shares": null,
@@ -4613,10 +4613,10 @@
   "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$300.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 2 sh; wired 2 rooms=conv"
  },
  "B|max=0|AAPL|long|res=1|proven|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 16,
    "risk_per_share": 1.4,
    "side": "long",
    "stop_px": 99.4,
@@ -4626,10 +4626,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 16,
    "side": "buy"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|long|res=1|unproven|bp=1250": {
   "logged_shares": null,
@@ -4659,13 +4659,13 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=2sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=2sh"
  },
  "B|max=0|AAPL|long|res=1|unproven|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -4674,10 +4674,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=1250": {
   "logged_shares": null,
@@ -4707,13 +4707,13 @@
    "qty": 3,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=3sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=3sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -4722,16 +4722,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(0.0, 0.0)|quote=(99.6, 100.4)|rt=3.0": {
-  "logged_shares": 3,
+  "logged_shares": 10,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 10,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -4740,16 +4740,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.4,
-   "qty": 3,
+   "qty": 10,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 10\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 10; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(0.0, 0.0)|quote=(99.6, 100.4)|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 10,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 10,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -4758,16 +4758,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.4,
-   "qty": 3,
+   "qty": 10,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 10\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 10; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(0.0, 0.0)|quote=(99.98, 100.02)|rt=3.0": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -4776,16 +4776,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.78,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(0.0, 0.0)|quote=(99.98, 100.02)|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -4794,16 +4794,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.78,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(0.0, 0.0)|quote=None|rt=3.0": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -4812,16 +4812,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(0.0, 0.0)|quote=None|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -4830,10 +4830,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(110.0, 5.0)|quote=(99.6, 100.4)|rt=3.0": {
   "logged_shares": 2,
@@ -4851,7 +4851,7 @@
    "qty": 2,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 10\u21923sh; daily risk budget \u2192 3\u21922sh (golden, budget $125.00)"
+  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 10; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 10\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(110.0, 5.0)|quote=(99.6, 100.4)|rt=None": {
   "logged_shares": 2,
@@ -4869,7 +4869,7 @@
    "qty": 2,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 10\u21923sh; daily risk budget \u2192 3\u21922sh (golden, budget $125.00)"
+  "wire": "requested 5 \u2192 risk-basis 10sh (risk 1.50%\u00d7$2500/stop $3.7000) \u2192 wired 10; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 10\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(110.0, 5.0)|quote=(99.98, 100.02)|rt=3.0": {
   "logged_shares": 2,
@@ -4887,7 +4887,7 @@
    "qty": 2,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh; daily risk budget \u2192 3\u21922sh (golden, budget $125.00)"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 11\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(110.0, 5.0)|quote=(99.98, 100.02)|rt=None": {
   "logged_shares": 2,
@@ -4905,7 +4905,7 @@
    "qty": 2,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh; daily risk budget \u2192 3\u21922sh (golden, budget $125.00)"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3200) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 11\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(110.0, 5.0)|quote=None|rt=3.0": {
   "logged_shares": 2,
@@ -4923,7 +4923,7 @@
    "qty": 2,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh; daily risk budget \u2192 3\u21922sh (golden, budget $125.00)"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 11\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(110.0, 5.0)|quote=None|rt=None": {
   "logged_shares": 2,
@@ -4941,7 +4941,7 @@
    "qty": 2,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh; daily risk budget \u2192 3\u21922sh (golden, budget $125.00)"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; daily risk budget \u2192 11\u21922sh (golden, budget $125.00)"
  },
  "B|max=0|AAPL|short|res=0|off|bp=20000|used=(124.5, 0.0)|quote=(99.6, 100.4)|rt=3.0": {
   "logged_shares": null,
@@ -5095,10 +5095,10 @@
   "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$300.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 3 sh; wired 3 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 16,
    "risk_per_share": 1.4,
    "side": "short",
    "stop_px": 100.6,
@@ -5108,16 +5108,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 16,
    "side": "sell"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=(99.6, 100.4)|rt=3.0": {
-  "logged_shares": 3,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 16,
    "risk_per_share": 4.2,
    "side": "short",
    "stop_px": 103.0,
@@ -5127,16 +5127,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.4,
-   "qty": 3,
+   "qty": 16,
    "side": "sell"
   },
-  "wire": "conv: S $3.7000 -> d' $3.6000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $4.2000; budget room $125.00 -> 29 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.7000 -> d' $3.6000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $4.2000; budget room $125.00 -> 29 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=(99.6, 100.4)|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 16,
    "risk_per_share": 1.8,
    "side": "short",
    "stop_px": 100.6,
@@ -5146,16 +5146,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.4,
-   "qty": 3,
+   "qty": 16,
    "side": "sell"
   },
-  "wire": "conv: S $3.7000 -> d' $1.2000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.8000; budget room $125.00 -> 69 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.7000 -> d' $1.2000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.8000; budget room $125.00 -> 69 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=(99.98, 100.02)|rt=3.0": {
-  "logged_shares": 3,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 16,
    "risk_per_share": 3.82,
    "side": "short",
    "stop_px": 103.0,
@@ -5165,16 +5165,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.78,
-   "qty": 3,
+   "qty": 16,
    "side": "sell"
   },
-  "wire": "conv: S $3.3200 -> d' $3.2200 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8200; budget room $125.00 -> 32 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3200 -> d' $3.2200 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8200; budget room $125.00 -> 32 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=(99.98, 100.02)|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 16,
    "risk_per_share": 1.42,
    "side": "short",
    "stop_px": 100.6,
@@ -5184,16 +5184,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.78,
-   "qty": 3,
+   "qty": 16,
    "side": "sell"
   },
-  "wire": "conv: S $3.3200 -> d' $0.8200 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4200; budget room $125.00 -> 88 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3200 -> d' $0.8200 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4200; budget room $125.00 -> 88 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=None|rt=3.0": {
-  "logged_shares": 3,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 16,
    "risk_per_share": 3.8,
    "side": "short",
    "stop_px": 103.0,
@@ -5203,16 +5203,16 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 16,
    "side": "sell"
   },
-  "wire": "conv: S $3.3000 -> d' $3.2000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8000; budget room $125.00 -> 32 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $3.2000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8000; budget room $125.00 -> 32 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(0.0, 0.0)|quote=None|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 16,
    "risk_per_share": 1.4,
    "side": "short",
    "stop_px": 100.6,
@@ -5222,10 +5222,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 16,
    "side": "sell"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=(99.6, 100.4)|rt=3.0": {
   "logged_shares": 2,
@@ -5247,10 +5247,10 @@
   "wire": "conv: S $3.7000 -> d' $3.6000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $4.2000; budget room $10.00 -> 2 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 2 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=(99.6, 100.4)|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 5,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 5,
    "risk_per_share": 1.8,
    "side": "short",
    "stop_px": 100.6,
@@ -5260,10 +5260,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.4,
-   "qty": 3,
+   "qty": 5,
    "side": "sell"
   },
-  "wire": "conv: S $3.7000 -> d' $1.2000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.8000; budget room $10.00 -> 5 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 5; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.7000 -> d' $1.2000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.8000; budget room $10.00 -> 5 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 5 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=(99.98, 100.02)|rt=3.0": {
   "logged_shares": 2,
@@ -5285,10 +5285,10 @@
   "wire": "conv: S $3.3200 -> d' $3.2200 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8200; budget room $10.00 -> 2 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 2 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=(99.98, 100.02)|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 7,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 7,
    "risk_per_share": 1.42,
    "side": "short",
    "stop_px": 100.6,
@@ -5298,10 +5298,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.78,
-   "qty": 3,
+   "qty": 7,
    "side": "sell"
   },
-  "wire": "conv: S $3.3200 -> d' $0.8200 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4200; budget room $10.00 -> 7 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 7; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3200 -> d' $0.8200 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4200; budget room $10.00 -> 7 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 7 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=None|rt=3.0": {
   "logged_shares": 2,
@@ -5323,10 +5323,10 @@
   "wire": "conv: S $3.3000 -> d' $3.2000 (realtime); A $0.6000 (G 0.000); J 0.5000%; per-share risk $3.8000; budget room $10.00 -> 2 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 2 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(110.0, 5.0)|quote=None|rt=None": {
-  "logged_shares": 3,
+  "logged_shares": 7,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 7,
    "risk_per_share": 1.4,
    "side": "short",
    "stop_px": 100.6,
@@ -5336,10 +5336,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 7,
    "side": "sell"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $10.00 -> 7 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 7; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $10.00 -> 7 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 7 rooms=conv"
  },
  "B|max=0|AAPL|short|res=0|proven|bp=20000|used=(124.5, 0.0)|quote=(99.6, 100.4)|rt=3.0": {
   "logged_shares": null,
@@ -5489,13 +5489,13 @@
    "qty": 3,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=3sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=3sh"
  },
  "B|max=0|AAPL|short|res=0|unproven|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -5504,10 +5504,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=1|off|bp=1250": {
   "logged_shares": null,
@@ -5537,13 +5537,13 @@
    "qty": 3,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=3sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=3sh"
  },
  "B|max=0|AAPL|short|res=1|off|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -5552,10 +5552,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|AAPL|short|res=1|proven|bp=1250": {
   "logged_shares": null,
@@ -5589,10 +5589,10 @@
   "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$300.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 3 sh; wired 3 rooms=conv"
  },
  "B|max=0|AAPL|short|res=1|proven|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 16,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 16,
    "risk_per_share": 1.4,
    "side": "short",
    "stop_px": 100.6,
@@ -5602,10 +5602,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 16,
    "side": "sell"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$2500.00,single_name:$1625.00 -> 16 sh; wired 16 rooms=conv"
  },
  "B|max=0|AAPL|short|res=1|unproven|bp=1250": {
   "logged_shares": null,
@@ -5635,13 +5635,13 @@
    "qty": 3,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=3sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$300.00,maintenance:$6166.67,single_name:$1625.00; notional cap=3sh"
  },
  "B|max=0|AAPL|short|res=1|unproven|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -5650,10 +5650,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$2500.00,buying_power:$18800.00,maintenance:$6166.67,single_name:$1625.00; notional cap=16sh"
  },
  "B|max=0|XYZQ|long|res=0|off|bp=1250": {
   "logged_shares": null,
@@ -5683,13 +5683,13 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=2sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=2sh"
  },
  "B|max=0|XYZQ|long|res=0|off|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -5698,10 +5698,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=12sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=12sh"
  },
  "B|max=0|XYZQ|long|res=0|proven|bp=1250": {
   "logged_shares": null,
@@ -5735,10 +5735,10 @@
   "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$300.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 2 sh; wired 2 rooms=conv"
  },
  "B|max=0|XYZQ|long|res=0|proven|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 12,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 12,
    "risk_per_share": 1.4,
    "side": "long",
    "stop_px": 99.4,
@@ -5748,10 +5748,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 12,
    "side": "buy"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 12 sh; wired 12; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 12 sh; wired 12 rooms=conv"
  },
  "B|max=0|XYZQ|long|res=0|unproven|bp=1250": {
   "logged_shares": null,
@@ -5781,13 +5781,13 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=2sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=2sh"
  },
  "B|max=0|XYZQ|long|res=0|unproven|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -5796,10 +5796,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=12sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=12sh"
  },
  "B|max=0|XYZQ|long|res=1|off|bp=1250": {
   "logged_shares": null,
@@ -5829,13 +5829,13 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=2sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=2sh"
  },
  "B|max=0|XYZQ|long|res=1|off|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -5844,10 +5844,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=12sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=12sh"
  },
  "B|max=0|XYZQ|long|res=1|proven|bp=1250": {
   "logged_shares": null,
@@ -5881,10 +5881,10 @@
   "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$300.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 2 sh; wired 2 rooms=conv"
  },
  "B|max=0|XYZQ|long|res=1|proven|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 12,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 12,
    "risk_per_share": 1.4,
    "side": "long",
    "stop_px": 99.4,
@@ -5894,10 +5894,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 12,
    "side": "buy"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 12 sh; wired 12; track-B exposure cap $300.00 (open $0.00) -> 2 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 12 sh; wired 12 rooms=conv"
  },
  "B|max=0|XYZQ|long|res=1|unproven|bp=1250": {
   "logged_shares": null,
@@ -5927,13 +5927,13 @@
    "qty": 2,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=2sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=2sh"
  },
  "B|max=0|XYZQ|long|res=1|unproven|bp=20000": {
-  "logged_shares": 2,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 2,
+   "qty": 11,
    "side": "long",
    "stop_px": 96.9,
    "track": "B"
@@ -5942,10 +5942,10 @@
   "submit": {
    "kind": "limit",
    "px": 100.2,
-   "qty": 2,
+   "qty": 11,
    "side": "buy"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 2; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=12sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 2sh \u2192 wired 11\u21922sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=12sh"
  },
  "B|max=0|XYZQ|short|res=0|off|bp=1250": {
   "logged_shares": null,
@@ -5975,13 +5975,13 @@
    "qty": 3,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=3sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=3sh"
  },
  "B|max=0|XYZQ|short|res=0|off|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -5990,10 +5990,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=13sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=13sh"
  },
  "B|max=0|XYZQ|short|res=0|proven|bp=1250": {
   "logged_shares": null,
@@ -6027,10 +6027,10 @@
   "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$300.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 3 sh; wired 3 rooms=conv"
  },
  "B|max=0|XYZQ|short|res=0|proven|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 13,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 13,
    "risk_per_share": 1.4,
    "side": "short",
    "stop_px": 100.6,
@@ -6040,10 +6040,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 13,
    "side": "sell"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 13 sh; wired 13; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 13 sh; wired 13 rooms=conv"
  },
  "B|max=0|XYZQ|short|res=0|unproven|bp=1250": {
   "logged_shares": null,
@@ -6073,13 +6073,13 @@
    "qty": 3,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=3sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=3sh"
  },
  "B|max=0|XYZQ|short|res=0|unproven|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -6088,10 +6088,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=13sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=13sh"
  },
  "B|max=0|XYZQ|short|res=1|off|bp=1250": {
   "logged_shares": null,
@@ -6121,13 +6121,13 @@
    "qty": 3,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=3sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=3sh"
  },
  "B|max=0|XYZQ|short|res=1|off|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -6136,10 +6136,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=13sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=13sh"
  },
  "B|max=0|XYZQ|short|res=1|proven|bp=1250": {
   "logged_shares": null,
@@ -6173,10 +6173,10 @@
   "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$300.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 3 sh; wired 3 rooms=conv"
  },
  "B|max=0|XYZQ|short|res=1|proven|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 13,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 13,
    "risk_per_share": 1.4,
    "side": "short",
    "stop_px": 100.6,
@@ -6186,10 +6186,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 13,
    "side": "sell"
   },
-  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 13 sh; wired 13; track-B exposure cap $300.00 (open $0.00) -> 3 sh rooms=conv"
+  "wire": "conv: S $3.3000 -> d' $0.8000 (atr); A $0.6000 (G 0.000); J 0.5000%; per-share risk $1.4000; budget room $125.00 -> 89 sh; account rooms global_gross:$6250.00,buying_power:$18800.00,maintenance:$6166.67,day_gross:$1500.00,single_name:$1625.00,thin_name:$1300.00 -> 13 sh; wired 13 rooms=conv"
  },
  "B|max=0|XYZQ|short|res=1|unproven|bp=1250": {
   "logged_shares": null,
@@ -6219,13 +6219,13 @@
    "qty": 3,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=3sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$300.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=3sh"
  },
  "B|max=0|XYZQ|short|res=1|unproven|bp=20000": {
-  "logged_shares": 3,
+  "logged_shares": 11,
   "ok": false,
   "record": {
-   "qty": 3,
+   "qty": 11,
    "side": "short",
    "stop_px": 103.1,
    "track": "B"
@@ -6234,10 +6234,10 @@
   "submit": {
    "kind": "limit",
    "px": 99.8,
-   "qty": 3,
+   "qty": 11,
    "side": "sell"
   },
-  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 3; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=13sh; track-B budget cap: requested 5sh, open-B $0.00 of $300.00 \u2192 room 3sh \u2192 wired 11\u21923sh"
+  "wire": "requested 5 \u2192 risk-basis 11sh (risk 1.50%\u00d7$2500/stop $3.3000) \u2192 wired 11; rooms=global_gross:$6250.00,day_gross:$1500.00,buying_power:$18800.00,maintenance:$6166.67,thin_name:$1300.00,single_name:$1625.00; notional cap=13sh"
  },
  "B|max=1|AAPL|long|res=0|off|bp=1250": {
   "logged_shares": null,
