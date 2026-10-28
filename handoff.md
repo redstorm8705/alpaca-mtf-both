@@ -19,7 +19,20 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 **⏩ EXACT NEXT ACTION (OpenAI Codex):** finish approved `F6-SIM-1023` and prepare
 Rafael's one-page F6 enablement decision. Do not enable F6 before that decision.
 
-## ⏩ LATEST (2026-10-27 PM, Claude signed) — SNDK-TRACK-B-1027 + readable post-live digest deployed (#781, cb73926)
+## ⏩ LATEST (2026-10-27 evening, Claude signed) — DAY-UNIVERSE-1027 deployed (#784, 1fa1273), unexercised
+
+- One 18-name Day list (`config.DAY_TIER_UNIVERSE`) read by Track A, Track B and `data/gex.py` refresh. OCI check after
+  restart: `18 18 18 True` (Track A list, Track B list, GEX list, same object). Record:
+  `logs/design_records/day_shared_universe_2026-10-27.md`; post-live record `logs/post_live/expect/day-universe-1027.json`.
+- Owner questions open (2026-10-27): Track B re-entry after a trade closes (draft `logs/design_records/
+  track_b_reentry_2026-10-27.md`, 1-year replay: re-entries n=361 mean 0.00R vs first signals n=1,107 -0.01R); size up
+  confirmed trades via the 2x ETF instead of a 2-share stock cap; owner wants confirmation tested on 6 years of data.
+- Stale docstring: `strategy/day_tier_track_b.track_b_in_window` still says 11:05 ET; live window is ~15:35 ET.
+
+**⏩ EXACT NEXT ACTION (Claude):** post-live check of DAY-UNIVERSE-1027 on 2026-10-28 (all 18 names in writer + runner
+logs); then the confirmation + sizing study on 6 years of data for the owner.
+
+## ⏩ EARLIER (2026-10-27 PM, Claude signed) — SNDK-TRACK-B-1027 + readable post-live digest deployed (#781, cb73926)
 
 - SNDK added to `DAYTRADE_TRACK_B_UNIVERSE` (owner "Yes, add it"); OCI check: `track_b_universe()` -> SNDK in list, 16
   names. Record: `logs/design_records/sndk_track_b_2026-10-27.md`. The daily post-live Slack digest is now Block Kit.
