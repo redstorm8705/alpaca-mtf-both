@@ -75,3 +75,31 @@ F1/F2/F3 were replayed before build and withdrawn: holding Swing lots through re
 both halves (A +162.4R / +58.2R vs trim/close/size-down), and the Day-tier report-morning noise rule showed no
 consistent gain. See `logs/design_records/earnings_risk_1029.md` "Review round 1". Open: B3 (F4), B4 (F5), QHM
 ratification.
+
+## B4 diagnosis (ledger false page after a QHM stop fill)
+- GOOGL's QHM GTC stop (order 80cc0070, recorded as `stop_order_id` in `quarterly_holds.json`) filled at 13:30:42 UTC.
+- QHM's first cycle of the day ran at 14:07 UTC (`QHM GOOGL broker position is flat`, then `stopped out (own GTC stop
+  filled)`), so QHM recorded its own exit 37 minutes after the fill.
+- In between, the 20-minute `ledger_sync` (13:40, 14:00 UTC) saw GOOGL/qhm 1 → 0 with net 0 and paged CRITICAL
+  "protected floor shrink … need OPERATOR CONFIRMATION". It cleared at 14:20 after QHM's authorized reduction.
+- Root cause: the ledger sync cannot tell a protected tier's OWN stop fill from an unexplained shrink until that tier
+  runs. Candidate fix: treat a shrink as authorized when the broker shows the tier's recorded stop order filled for
+  exactly that quantity. The fix belongs in `execution/ownership_guard.py` (1,824 lines, safety-critical), so it needs
+  the full gate (full read, board with the masked-loss seat, GAI + Codex) before an approval package.
+- Separate open item: every 20 minutes since 14:00 UTC the sync logs "reattributed impossible negative protected
+  replay GOOGL/qhm=-2"; the fill replay attributes two more GOOGL sells to QHM than buys. Not yet root-caused.
+
+## GE question (owner, 2026-10-29): +$30, no profit taken, stop looks old
+- GE is a QHM hold: 3 sh, average 302.50 (first tranche 320.90 on 09-29, then the owner's 10-23 add lowered the
+  average), stop 272.71 GTC (`quarterly_holds.json`). Last 313.20 (IEX, 10-29 ~13:00 PT) → +3.5%, ≈ +$32.
+- QHM never sells for profit on a schedule; it holds for the quarter. Its only profit mechanism is the trailing lock
+  (`quarterly_hold_manager.py:4316`, `_TRAIL_LOCK_MIN_GAIN_PCT = 0.05`): once a hold is ≥ +5% over its average it raises
+  the stop to average + ½ of the gain. GE needs ≥ 317.62 to start; at +3.5% nothing moves.
+- The stop was set from the first tranche and is not re-derived when the owner adds shares. Only bot tranche adds may
+  raise it ("raise protection to the design stop for the new average", L3330), and never loosen it.
+- Re-deriving GE's stop the way the post-earnings re-anchor does (`_resubmit_post_earnings_stop`, L2450: max(price −
+  2.5 × 14-week ATR, price × 0.85)) at 313.20 gives 266.22 (ATR 20.74 from Alpaca weekly bars) — lower than today's
+  272.71, so the old stop is the tighter one and a raise-only rule would leave it.
+- Finding: that post-earnings re-anchor runs only from `PENDING_EARNINGS`, which is set only when the pre-earnings stop
+  cancel runs (L2381); with `QHM_EARNINGS_STOP_CANCEL_ENABLED = False` no QHM stop is ever updated around a report.
+  Owner direction 10-29: "stops should be updated around earnings but not removed" → design owed (QHM-EARN-STOP).
