@@ -69,3 +69,9 @@ after ("next/after"). A report concentrates variance in the week that contains i
   names stay ≤1.08 / ≤1.47. One snapshot, 24 names — the cut-off must be derived from a history of snapshots, not set
   from this table. TSLA, NFLX, AVGO, MU, BRK.B, LLY were cut off by HTTP 429 (rate limit) in this probe.
 - Production note: the probe's 429s mean the detector must ride the existing GEX refresh cadence, not a separate burst.
+
+## Outcome of the fix plan (same day)
+F1/F2/F3 were replayed before build and withdrawn: holding Swing lots through reports at full size earned the most in
+both halves (A +162.4R / +58.2R vs trim/close/size-down), and the Day-tier report-morning noise rule showed no
+consistent gain. See `logs/design_records/earnings_risk_1029.md` "Review round 1". Open: B3 (F4), B4 (F5), QHM
+ratification.
