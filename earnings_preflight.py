@@ -16,6 +16,7 @@ Cron (via cron_tz_wrapper.py DST-safe pattern):
 
 import json
 import logging
+import math
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -32,6 +33,8 @@ _CACHE = _BASE / "data" / "cache"
 _TRADE_LOG       = _STATE / "trade_log.json"
 _EARNINGS_CACHE  = _CACHE / "earnings_week.json"
 _WATCHLIST_STATE = _STATE / "watchlist_state.json"
+_OWNERSHIP_LEDGER = _STATE / "ownership_ledger.json"   # every tier's held shares (Swing, Day, QHM, F6)
+_LOOKAHEAD_DAYS  = 35   # QHM's 21-day trim window + slack (the cache refresh and the per-symbol check share it)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -56,7 +59,8 @@ def _fmt_pt(dt: datetime) -> str:
 # ---------------------------------------------------------------------------
 # Load tracked symbols (open positions + watchlist if available)
 # ---------------------------------------------------------------------------
-def _load_tracked_symbols() -> set[str]:
+def _load_tracked_symbols(problems: list[str]) -> set[str]:
+    """Symbols to check; any ledger read problem is appended to `problems` (shown in Slack, never a silent all-clear)."""
     symbols: set[str] = set()
 
     if _TRADE_LOG.exists():
@@ -67,6 +71,30 @@ def _load_tracked_symbols() -> set[str]:
             logger.info(f"Open positions: {sorted(symbols) or 'none'}")
         except Exception as e:
             logger.warning(f"trade_log.json read error: {e}")
+
+    # PREFLIGHT-LEDGER-1029: trade_log.json holds only the legacy tracker's trades, so this reported "0 tracked
+    # symbols" every week while Swing/QHM lots were held (10-25 log). The ownership ledger lists every tier's shares.
+    if _OWNERSHIP_LEDGER.exists():
+        try:
+            data = json.loads(_OWNERSHIP_LEDGER.read_text())
+            held: list[str] = []
+            for sym, rec in (data.get("positions") or {}).items():
+                try:
+                    qty = float(rec.get("alpaca_net_qty") or 0) if isinstance(rec, dict) else 0.0
+                    if math.isfinite(qty) and qty != 0:
+                        held.append(str(sym).upper())
+                except (TypeError, ValueError) as e:   # one malformed row never drops the others
+                    logger.warning(f"ownership_ledger.json row {sym!r} unreadable: {e}")
+                    problems.append(f"ledger row {sym!r} unreadable")
+            held.sort()
+            symbols.update(held)
+            logger.info(f"Ledger positions: {held or 'none'}")
+        except Exception as e:
+            logger.warning(f"ownership_ledger.json read error: {e}")
+            problems.append(f"ownership ledger unreadable ({type(e).__name__})")
+    else:
+        logger.warning(f"{_OWNERSHIP_LEDGER} missing")
+        problems.append("ownership ledger missing")
 
     if _WATCHLIST_STATE.exists():
         try:
@@ -103,13 +131,15 @@ def main() -> None:
     now_pt = _fmt_pt(datetime.now(ET))
     logger.info(f"=== Earnings Pre-Flight — {now_pt} ===")
 
-    symbols = _load_tracked_symbols()
+    ledger_problems: list[str] = []
+    symbols = _load_tracked_symbols(ledger_problems)
     logger.info(f"Total tracked symbols: {len(symbols)} — {sorted(symbols) or 'none'}")
 
     # Step 1 — Refresh FMP earnings cache
     try:
         sys.path.insert(0, str(_BASE))
-        from data.fmp_client import preload_earnings_week, get_cached_earnings_dates
+        from data.fmp_client import (EARNINGS_DATED, EARNINGS_NONE_IN_WINDOW, get_earnings_info,
+                                      get_symbol_earnings_info, preload_earnings_week)
     except ImportError as e:
         logger.error(f"Cannot import fmp_client: {e} — aborting.")
         sys.exit(1)
@@ -125,7 +155,7 @@ def main() -> None:
         # tracked symbols happened to be 0 each of those weeks; would have
         # left the earnings cache permanently stale once positions existed.
         # 35 days (QHM's 21-day trim window + slack); the cache write is a per-symbol merge, never a narrowing overwrite.
-        preload_earnings_week(sorted(symbols), lookahead_days=35)
+        preload_earnings_week(sorted(symbols), lookahead_days=_LOOKAHEAD_DAYS)
         logger.info("FMP earnings cache refreshed successfully.")
     except Exception as e:
         logger.error(f"preload_earnings_week() raised: {e} — will use stale cache if present.")
@@ -154,8 +184,15 @@ def main() -> None:
 
     for sym in sorted(symbols):
         try:
-            dates = get_cached_earnings_dates(sym)
-            if dates:
+            # UNKNOWN (plan-blocked or failed lookup) is not "no earnings"; only a per-symbol NONE_IN_WINDOW is.
+            info = get_earnings_info(sym, min_horizon_days=_LOOKAHEAD_DAYS)
+            if info.get("state") == EARNINGS_NONE_IN_WINDOW and info.get("source") == "fmp_batch":
+                # The batch calendar is sparse on this plan, so its "none" is not authoritative for a held symbol;
+                # the per-symbol answer is (fmp_client.get_symbol_earnings_info docstring).
+                info = get_symbol_earnings_info(sym)
+            state = info.get("state")
+            dates = [d for d in (info.get("dates") or []) if isinstance(d, date) and d >= date.today()]
+            if state == EARNINGS_DATED and dates:
                 covered.append(sym)
                 # AWP audit fix (2026-06-30): get_cached_earnings_dates()
                 # returns date objects, but trading_days is a list[str] (from
@@ -173,9 +210,12 @@ def main() -> None:
                         break
                 else:
                     logger.info(f"[{sym}] earnings dates: {dates} — none within 3 trading days")
-            else:
+            elif state in (EARNINGS_DATED, EARNINGS_NONE_IN_WINDOW):
+                covered.append(sym)
+                logger.info(f"[{sym}] FMP per-symbol: no upcoming earnings date (state={state})")
+            else:   # UNKNOWN (plan block, lookup error) or any unexpected state
                 uncovered.append(sym)
-                logger.warning(f"[{sym}] NOT IN FMP CACHE — no earnings coverage")
+                logger.warning(f"[{sym}] earnings date {state} (source={info.get('source')}) — no earnings coverage")
         except Exception as e:
             uncovered.append(sym)
             logger.warning(f"[{sym}] earnings check error: {e}")
@@ -208,7 +248,7 @@ def main() -> None:
                 f":warning: *No FMP earnings coverage ({len(uncovered)} symbols):*"
             )
             for sym in uncovered:
-                lines.append(f"  • `{sym}` — not in FMP calendar for this window")
+                lines.append(f"  • `{sym}` — earnings date unknown (FMP plan block or lookup error)")
 
         if not imminent and not uncovered and symbols:
             lines.append(
@@ -216,7 +256,9 @@ def main() -> None:
                 f"coverage. None reporting within 3 trading days."
             )
 
-        if not symbols:
+        if ledger_problems:
+            lines.append(":warning: *Holdings not fully checked:* " + "; ".join(ledger_problems))
+        elif not symbols:
             lines.append(":zzz: No open positions or watchlist symbols found — nothing to check.")
 
         send_slack("\n".join(lines))
