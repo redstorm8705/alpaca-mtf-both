@@ -1,0 +1,73 @@
+Nightly Gemini Audit — 2026-10-28
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['config.py', 'run_day_tier.py', 'scripts/post_live_eval.py', 'data/gex.py', 'strategy/run_cycle.py', 'strategy/day_tier_leverage.py', 'execution/f6_cycle.py', 'execution/day_trade_manager.py', 'research/f6_full_path_simulation.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there is a recurring P&L drift and a potential logic issue in the Track B fund sizing.
+
+### LOG ANOMALIES
+*   **FIFO Orphan Warnings**: `execution.portfolio_tracker` repeatedly logs `FIFO orphan: closing fill for TSLQ has no prior lot and no tracker record`. This indicates a mismatch between the broker's fill stream and the internal tracker's state, likely due to the same-day settlement behavior of paper accounts.
+*   **EOD P&L DRIFT**: `EOD P&L DRIFT: Alpaca=$8.03 tracker=$0.00 drift=$+8.03` (and later `+$11.20`). While the provenance header states this is expected telemetry, the persistence of this drift across multiple cycles suggests the ledger sync is not fully reconciling the paper account's fill history.
+*   **DRAM Daily Data**: `[DRAM] No daily data — short entry blocked (fail-closed)` appears repeatedly. This is a fail-closed safety mechanism, but it indicates a persistent data gap for this symbol.
+
+### PERFORMANCE AUDIT
+*   **P&L Sign Correctness**: Checked the 2026-10-28 trades (e.g., PLTR long, META short, TSLQ long). The P&L signs are consistent with the directions (e.g., PLTR long entry 181.71, exit 193.70 = +11.99 profit).
+*   **Score Correlation**: The strategy continues to favor high-score setups (e.g., SPY LONG 12/12, UBER SHORT 12/12). Performance remains mixed, consistent with the `all_time_stats` profit factor of 0.83.
+*   **Stop Rate**: The stop-hit rate remains high relative to the win rate, which is expected given the current market regime and the "fail-closed" nature of the risk management.
+
+### TRADE INTEGRITY
+*   **No issues found**: Trade events and P&L calculations appear to be recorded correctly in the provided JSON.
+
+### MODIFIED FILE FINDINGS
+*   **execution/day_trade_manager.py**:
+    *   **Function**: `_bounded_entry_qty`
+    *   **Issue**: The new `_fund_room_divisor` logic divides `thin_name` and `single_name` rooms by `_kdiv`. If `_kdiv` is 0 or non-finite, the code returns `0, "track-B fund leverage unreadable — fail closed"`. This is a robust fail-closed, but it relies on `_lev.fund_leverage` returning a valid `k`. If `k` is missing, the entry is skipped. This is correct behavior for risk management.
+*   **strategy/day_tier_leverage.py**:
+    *   **Function**: `fund_stop_floor`
+    *   **Issue**: The logic uses `math.floor` and `math.ceil` to round the stop level. If `need` (the floor distance) is very small, the rounding could potentially result in a stop level that is effectively the entry price. However, the `if abs(e - st) >= room` check ensures the stop is at least the required distance away.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: OBSOLETE (PDT deleted)
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+*   **P5-M1**: UNTOUCHED
+*   **P5-M2**: UNTOUCHED
+*   **P5-M3**: UNTOUCHED
+*   **P5-L1**: UNTOUCHED
+*   **P5-L2**: UNTOUCHED
+*   **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/day_trade_manager.py | Potential volume cap skip logic |** In `place_entry`, the volume cap logic (`_vcap < qty`) uses `_min_q` to decide whether to skip or fallback. If `_vcap` is less than `_min_q`, it logs and returns `False`. This logic correctly prevents sub-minimum orders but may cause a "fail-closed" skip when a smaller order might have been acceptable under different risk parameters.
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Investigate FIFO Orphan Warnings**: The `FIFO orphan` logs for TSLQ and META suggest the tracker is missing initial fill data. Verify if the `ledger_sync` process is correctly capturing all fills from the Alpaca paper account.
+2.  **Monitor DRAM Data**: The "No daily data" warning for DRAM is blocking entries. Ensure the data provider is correctly feeding daily bars for this symbol.
+3.  **Review Track B Fund Sizing**: Monitor the new `fund_stop_floor` and `fund_today_volume` logic in `day_trade_manager.py` to ensure it does not overly restrict Track B entries during high-volatility periods.
+================================================================================
+BROKER GROUND TRUTH (2026-10-28, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AMD    COVERED                  owners=day exposed=82m no-broker-stop=0m [11:36-11:36, 12:58-12:58] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  META   COVERED                  owners=day exposed=317m no-broker-stop=0m [07:40-07:40, 12:58-12:58] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MUU    COVERED                  owners=day exposed=68m no-broker-stop=0m [11:50-11:50, 12:58-12:58] rejected_stop_orders=0
+  NOW    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   COVERED                  owners=day exposed=9m no-broker-stop=0m [07:06-07:06] rejected_stop_orders=0
+  TSLQ   COVERED                  owners=day exposed=63m no-broker-stop=0m [07:06-07:06] rejected_stop_orders=0
+  UBER   COVERED                  owners=day exposed=73m no-broker-stop=0m [07:26-07:26] rejected_stop_orders=0
+  XOM    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

@@ -1,0 +1,332 @@
+{
+  "audit_date": "2026-10-28",
+  "run_ts": "2026-10-28T10:30:01.785589-07:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 3,
+    "partial_count": 2,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "TSLQ",
+      "PLTR",
+      "UBER",
+      "META"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 25,
+    "levels": {
+      "ELEVATED": 25
+    },
+    "last_score": 40,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 69,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-10-28 16:09:06,315 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-10-28 16:09:06,317 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-10-28 16:09:56,506 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for TSLQ has no prior lot and no tracker record \u2014 fill un",
+      "2026-10-28 16:09:56,506 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for META has no prior lot and no tracker record \u2014 fill un",
+      "2026-10-28 16:10:09,982 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$8.03 tracker=$0.00 drift=$+8.03"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 0,
+    "losses": 3,
+    "total_pnl": -5.501000000000044,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -1.8336666666666812,
+    "best": {
+      "symbol": "TSLQ",
+      "pnl": -0.7709999999999972,
+      "entry_price": 14.7922,
+      "exit_price": 14.638,
+      "size": 5.0,
+      "exit_event": "partial_exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 14.63,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "UBER",
+      "pnl": -3.130000000000024,
+      "entry_price": 64.95,
+      "exit_price": 65.263,
+      "size": 10.0,
+      "exit_event": "partial_exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 65.24,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "TSLQ",
+        "pnl": -0.7709999999999972,
+        "entry_price": 14.7922,
+        "exit_price": 14.638,
+        "size": 5.0,
+        "exit_event": "partial_exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 14.63,
+        "target": 0.0
+      },
+      {
+        "symbol": "PLTR",
+        "pnl": -1.6000000000000227,
+        "entry_price": 193.7,
+        "exit_price": 195.3,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 195.3,
+        "target": 0.0
+      },
+      {
+        "symbol": "UBER",
+        "pnl": -3.130000000000024,
+        "entry_price": 64.95,
+        "exit_price": 65.263,
+        "size": 10.0,
+        "exit_event": "partial_exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 65.24,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "META": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 169,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:40-10:40"
+        ],
+        "uncovered_windows_pt": [
+          "07:40-07:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NOW": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "PLTR": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 9,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:06-10:06"
+        ],
+        "uncovered_windows_pt": [
+          "07:06-07:06"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "TSLQ": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 63,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:06-10:06"
+        ],
+        "uncovered_windows_pt": [
+          "07:06-07:06"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "UBER": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 73,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:26-10:26"
+        ],
+        "uncovered_windows_pt": [
+          "07:26-07:26"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "XOM": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-10-28",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 17,
+    "symbols": [
+      "META",
+      "PLTR",
+      "TSLQ",
+      "UBER"
+    ],
+    "by_symbol": {
+      "UBER": {
+        "buy": 5,
+        "sell": 0
+      },
+      "TSLQ": {
+        "buy": 2,
+        "sell": 6
+      },
+      "META": {
+        "buy": 0,
+        "sell": 0
+      },
+      "PLTR": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}
