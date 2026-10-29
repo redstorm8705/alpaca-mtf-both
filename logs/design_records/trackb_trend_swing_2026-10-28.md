@@ -155,3 +155,18 @@ ledger-aware promotion code that already exists; every Track B trade is still ta
 Q1 ownership/co-hold with the Day-tier Track B lot on the same symbol; Q2 shorts overnight (borrow, Swing short support);
 Q3 SPY 200-day source (T1 daily bars) and fail-closed when unreadable; Q4 interaction with the overnight K cap;
 Q5 daily-bar stop check vs the live GTC stop (replay assumption).
+
+## REOPENED 2026-10-29 as a Swing-tier design (owner: "We can open the 5-day as swing tier design")
+Status: DESIGN — reopened, not built, not approved. Scope: the v2 LONG-ONLY rule as a Swing-tier entry source
+(SPY prior close > 200-day SMA; 1.0 × 14-day ATR GTC stop; out at the stop or the 5th session's close; 0.5% equity
+risk per lot; cap 3; one lot per symbol; earnings block), with v3 promotion kept as the ownership answer when the Day
+tier already holds the symbol.
+Owed before an approval package (in order):
+1. **Earnings coverage on every name.** 2026-10-29 audit: FMP's plan returns HTTP 402 for NOW (and AVGO, MU, SMCI, SNDK
+   per round 2), and the calendar endpoint returns only 28–48 rows. A fail-closed block on FMP alone silently removes
+   those names from the source. The block needs a date (or an event detector) for every universe name; candidate: the
+   option chain's earnings-spanning expiry (implied move vs the next expiry, `data/gex.py` already prices ATM straddles).
+2. Point-in-time earnings block inside the v2 portfolio replay (cap 3, daily-marked).
+3. Live-gated signal replay (Track B trend gate, watch-day rule, min-stop skip).
+4. Confirmation on sessions never consulted (after 2026-10-26); first 40 closed live lots carry the reversal rule.
+5. Board (full + masked-loss seat) → GAI + Codex → owner approval package with the Required-questions section.
