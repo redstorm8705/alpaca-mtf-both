@@ -64,14 +64,14 @@ spread checks, 30-session hold vs 3-week horizon, candidate coverage, logging sc
 REJECT (detector gives a week not a date; FMP-blind ≠ CLEAR; UNKNOWN has no sizing rule; size-down is risk-path;
 growth value not shown — "persistent undersizing reduces positive expectancy more than it reduces losses").
 Codex's last point was tested first (`swing_earn.py`, 6-year daily SIP, live 55-day breakout rule, 2.5 ATR GTC stop,
-20-day-low / 30-session exits, unit risk, 5 bps; FMP report dates for the 14 covered stocks):
+20-day-low / 30-session exits, unit risk, 5 bps; FMP report dates; 12 stocks had lots spanning a report):
 | Book total R | A hold (today) | B size by gap at entry | C trim before report | D close before report |
 |---|---|---|---|---|
 | discovery 2020–24 (257 lots, 65 span a report) | **+162.4** | +134.1 | +153.9 | +141.5 |
 | test 2024–26 (123 lots, 24 span a report) | **+58.2** | +51.2 | +56.6 | +57.1 |
 - Holding from the close before the report to the lot's exit added +0.321R per report (n 65, t 1.49) / +0.046R (n 24,
   t 0.12); worst −2.32R / −1.81R; right-skewed (max +4.88R / +6.90R). Every reduction loses R in both halves.
-- Limits: 14 large-cap stocks (survivorship toward names with positive post-report drift); FMP-blind AVGO/MU/SMCI/SNDK
+- Limits: 12 large-cap stocks (survivorship toward names with positive post-report drift); FMP-blind AVGO/MU/SMCI/SNDK
   have no dates and are not in the spanning set; NOW (−2.63R on 10-29) is worse than any replayed report loss.
 Day-tier report-morning rule (`ta_today.py`, rebuilt Track A signals, live geometry): noise = max(5-session time-of-day
 ATR, today's completed-bar ATR) — all signals −0.048 → −0.035R (disc), −0.016 → −0.029R (test); first ENTER per
