@@ -1,0 +1,67 @@
+Midday Gemini Audit — 2026-10-28
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+
+---
+
+### PERFORMANCE AUDIT
+* **Entry/Exit Integrity**: Entry/Exit execution values match price data structures. Short trade P&L calculation for `PLTR` ($193.70 entry → $195.30 exit = $-1.60 loss) and `TSLQ` ($14.79 entry → $14.64 exit = $-0.77 loss on a short/inverse instrument) are directional and correct in sign.
+* **Matched-Pair Accounting vs Broker Fills**: As documented in the audit context, the `trade_events.jsonl` entry log is degraded (known issue D1), leading to 3 matched closed trades in the summary while the Alpaca ground-truth ledger processed 17 fills with total actual daily P&L of $-9.34.
+* **Stop-Hit Rate**: 0% stop hits recorded in intraday matched logs, but actual session losses reflect soft-exit/partial logic triggers taking small losses.
+* **Score-to-Outcome Correlation**: Intraday Day-tier trades bypassed 12-point scoring by design (per system rules), preventing score-outcome correlation testing on today's closed intraday subset.
+
+---
+
+### ENTRY QUALITY
+* **Filter Gate Block Rate**: Entry logic correctly blocked multiple late-day short entries (`NFLX`, `RIVN`, `MARA`, `COIN`, `SOFI`, `UBER`, `HOOD`, `TSLL`) via the ORB gate check when market condition rules (`SPY 771.28 ≥ ORB_L 770.41`) were not fulfilled.
+* **Data Gate Blocks**: `DRAM` long and short signals were properly blocked fail-closed on warning: `No daily data — long entry blocked (fail-closed)`.
+* **Cap Blocks**: `GEV` Tranche 1 entry was correctly blocked at 17:24:24 PT due to hitting the Quarterly Hold Manager aggregate cap (`would breach QHM cap (new-money agg 40%/name 20%): need 1 sh, room 0`).
+
+---
+
+### EXIT QUALITY
+* **FIFO Orphan Unmatched Fills**: At session end (17:26:50 PT), `portfolio_tracker` encountered FIFO orphan logs on closing fills for `TSLQ` and `META` (`FIFO orphan: closing fill for TSLQ/META has no prior lot and no tracker record`).
+* **Partial Exits**: Partial exits executed on `TSLQ` and `UBER` without orphan errors during session runtime, but closed out unmatched at post-session summary due to tracking ledger sync gaps.
+
+---
+
+### MRI ALIGNMENT
+* Session MRI operated at `ELEVATED` (40/100) across all 25 samples.
+* Sizing adjustments were correctly applied by code context (`MRI ELEVATED (score=40) — size floor 0.85x applied`, and dynamic `MIN_SCORE` was raised to `9/12` effective threshold).
+* Dynamic score gating correctly filtered 4 sub-threshold signals automatically.
+
+---
+
+### LOG ANOMALIES
+* `2026-10-28 17:26:50,645 | WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for TSLQ has no prior lot and no tracker record — fill unmatched.`
+* `2026-10-28 17:26:50,645 | WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for META has no prior lot and no tracker record — fill unmatched.`
+* `2026-10-28 17:27:04,100 | WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$8.03 tracker=$0.00 drift=$+8.03` (Note: ledger authoritative intraday was $-9.34).
+
+---
+
+### NEW BUGS / CONCERNS
+
+#### 1. CATEGORY: EXECUTION BUG | SEVERITY: HIGH
+* **Description**: FIFO orphan logs generated on EOD reconciliation due to unlinked closing fills for `TSLQ` and `META`, causing EOD FIFO P&L calculation drift ($+8.03 vs actual $-9.34 ledger).
+* **Exact Condition**: Occurs during post-session `Alpaca FIFO EOD` runs when closing fills arrive for positions whose initial entry event records were missed due to `trade_events.jsonl` logger gaps (Issue D1). The tracker sets lot balance to 0, leaving closing fills orphaned.
+
+#### 2. CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM
+* **Description**: Unnecessary CPU/time overhead caused by repeated execution of identical scan loops during late-day cycles (17:24:38 through 17:25:44 PT).
+* **Exact Condition**: `confluence` module outputs identical `VOLSHADOW` evaluation log blocks for all 40 tickers twice within ~30 seconds (e.g., `NVDA` evaluated at 17:24:38.563 and again at 17:25:29.768), slowing down main loop execution duration to 190 seconds.
+
+---
+
+### FIX VALIDATION
+* No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **[EXECUTION]** Complete and deploy the pending fix for Issue D1 (entry event log emission) to prevent unrecorded entry lots from causing `FIFO orphan` errors and EOD P&L drift warnings in `execution/portfolio_tracker.py`.
+2. **[INFRASTRUCTURE]** Optimize the main strategy loop in `strategy/run_cycle.py` / `confluence.py` to prevent redundant full-universe `VOLSHADOW` scans from executing twice within the same cycle.
