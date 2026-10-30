@@ -1,0 +1,64 @@
+Nightly Gemini Audit — 2026-10-29
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but the persistent `pnl_unreconciled` state and the `FIFO orphan` warnings indicate a breakdown in the portfolio tracker's ability to map fills to internal lots.
+
+### LOG ANOMALIES
+*   **`execution.portfolio_tracker`**: Recurring `FIFO orphan` warnings for `GOOGL` and `NOW`. These indicate that the tracker is receiving fill events for which it has no corresponding entry record, leading to the `pnl_ledger` drift.
+*   **`execution.portfolio_tracker`**: `pnl_ledger` invariant failure (`drift=$5.39` to `$5.43`). This confirms the tracker is failing to reconcile with the broker's authoritative data.
+*   **`execution.ownership_guard`**: `reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday`. This suggests a state-sync error where the `QuarterlyHoldManager` (QHM) and the intraday tracker are fighting over the same position ID.
+*   **`execution.entry_logic`**: `RULE 1 — PREMARKET RED LOCKOUT` is triggering correctly, but the log shows repeated attempts to signal `PANW` and `SOXS` despite the lockout, which is correct behavior (blocking), but the frequency of these signals during a lockout suggests the `strategy.run_cycle` is not checking the lockout state before generating signals.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `GOOGL` exit on `2026-10-29T07:07:04` shows `price: null` and `price_pending: true`. This is a data integrity issue where the exit was processed by the `qhm_stop_out` logic without a confirmed execution price.
+*   **P&L Analysis**: The `MSFT` trade on `2026-10-29` resulted in a loss of `-30.57` on 3 shares (entry `537.99`, exit `527.80`). This is a loss of `~3.39` per share. The stop was set at `527.98`. The exit price `527.80` is below the stop, indicating slippage of `0.18` per share, which is within expected bounds for a stop-out.
+*   **Score Correlation**: The `PANW` signal (score 11/12) is consistently blocked by Rule 1. The system is correctly prioritizing the macro-lockout over the high confluence score.
+
+### TRADE INTEGRITY
+*   **Recording Bug**: The `GOOGL` exit event (`2026-10-29T07:07:04`) lacks a valid price. This will cause the `pnl_ledger` to remain unverified.
+*   **FIFO Orphanage**: The `NOW` long position (entry `157.59`) was stopped out at `116.81` and `116.02` (per EOD telemetry), but the tracker logged it as an orphan. This suggests the tracker lost the link between the entry `IN-NOW-b-1793023959685-07b0ef77` and the subsequent fills.
+
+### MODIFIED FILE FINDINGS
+No source files were modified in the last 24h.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H2: UNTOUCHED
+*   P5-H3: TRIGGERED (Orphaned GTC stops are likely contributing to the FIFO orphan logs)
+*   P5-H4: UNTOUCHED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+*   P5-L1: UNTOUCHED
+*   P5-L2: UNTOUCHED
+*   P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | HIGH | execution/portfolio_tracker.py | QHM/Intraday state crosstalk | The `ownership_guard` is reattributing QHM positions to intraday, causing the tracker to lose the original lot reference, leading to `FIFO orphan` errors.**
+*   **EXECUTION BUG | MEDIUM | execution/entry_logic.py | Redundant signal generation | `strategy.run_cycle` generates signals for `PANW`/`SOXS` even when Rule 1 is active, wasting compute and cluttering logs.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Immediate**: Investigate `execution/portfolio_tracker.py` to determine why QHM-managed positions (like `GOOGL`) are being re-processed by the intraday FIFO logic.
+2.  **High**: Add a pre-check in `strategy.run_cycle` to verify `Rule 1` status before calculating confluence scores for long positions.
+3.  **Medium**: Manually reconcile the `NOW` and `GOOGL` positions in the `pnl_ledger` to clear the `pnl_unreconciled` flag for the next session.
+4.  **Low**: Update `qhm_stop_out` to ensure it cannot trigger an exit event without a valid `price` field from the broker.
+================================================================================
+BROKER GROUND TRUTH (2026-10-29, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=1m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core/day exposed=390m no-broker-stop=0m [06:46-06:46] rejected_stop_orders=0
+  NOW    COVERED                  owners=core exposed=3m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  XOM    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
