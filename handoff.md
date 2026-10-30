@@ -8,6 +8,28 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-10-29, Claude signed) — 10-29 audit follow-ups; EARN-SOURCE-1029 awaiting owner approval
+
+- PREFLIGHT-LEDGER-1029 shipped (#801, 7ff74f2). The Sunday 17:55 ET earnings warning now reads held symbols from the
+  ownership ledger. Deployed, unexercised.
+- Docs (#802):
+  - `logs/research/trade_audit_2026-10-29.md`: B4 diagnosis, GE stop answer, and the finding that the QHM post-earnings
+    re-anchor never runs while stop-cancel is OFF;
+  - `logs/research/qhm_postmortem_2026-10-29.md` (GOOGL/NOW);
+  - `logs/research/earnings_sources_2026-10-29.md`;
+  - `logs/research/day_deep_search_r1_2026-10-29.md`.
+- EARN-SOURCE-1029 (`logs/design_records/earnings_source_finnhub_2026-10-29.md`, v4): Finnhub per-symbol earnings dates,
+  FMP fallback, plus a warmer cron.
+  - Board 2 seats approve-with-changes; GAI and Codex approve-with-changes after 3 rounds.
+  - One open item: Codex wants QHM's `src=fmp` label changed now; v4 defers it to QHM-EARN-STOP.
+  - Waiting on the owner's APPROVE before any code.
+- Owner directions 10-29, not yet built:
+  - "stops should be updated around earnings but not removed" → design QHM-EARN-STOP (also takes the QHM src label);
+  - QHM report template upgrade (12 sections, in the post-mortem report);
+  - Day tier: keep searching, testing one strategy a day against the current logic.
+- Day search round 2 is running (scratchpad harness `day_search/`). Next action: confirm the ETF RSI-60m candidate on
+  2016-2020 data, then write `logs/research/day_deep_search_r2_2026-10-29.md`.
+
 ## ⏩ PARALLEL (2026-10-28, OpenAI Codex signed) — F6 full-path proof live, F6 OFF
 
 - `F6-SIM-1023` shipped in PR #790 and is live on OCI at `70caa70`. CI passed; all
