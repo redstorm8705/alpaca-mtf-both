@@ -1,78 +1,88 @@
-# Overnight strength hold — SWING-OVERNIGHT-1029 (signed: Claude, 2026-10-29) — DRAFT v1, not approved
+# Trend-night QQQ overnight hold — SWING-OVERNIGHT-1029 (signed: Claude, 2026-10-29) — DRAFT v2, not approved
 
 Approval-ID: SWING-OVERNIGHT-1029
 Covers: execution/swing_overnight.py, run_swing_overnight.py, config.py, tests/test_swing_overnight.py, server-ops
 
 Owner, 2026-10-29: "You need to find a winning day tier strategy ... and not stop until you do ... think dynamically on
-the compositions and combinations ... Is R profit the best way to backtest?"
+the compositions and combinations."
 
-## What the research found (logs/research/day_deep_search_r1..r4_2026-10-29.md)
-- 30,235 same-day rules tested; none survives adjusted significance.
-- On trend-up days the measured drift is overnight, not intraday (round 3, discovery means per session):
-  | Universe | Overnight (prior close → open) | Open → close |
-  |---|---|---|
-  | 51 stocks | +6.7 bps | +1.0 bps |
-  | 20 ETFs | +8.9 bps | −0.7 bps |
-- Round 4 finalist (picked on discovery; test read once; 2016-2020 confirmation set never consulted before):
-  - Rule: when SPY's prior close is above its 200-day average, take the top quintile of a large-cap universe by
-    return from the prior close to 15:25. Buy at the close, sell at the next open. 5 bps cost.
-  - Results at 2× overnight buying power, 10 slots:
-    | | Discovery 2020-24 | Test 2024-26 | Confirmation 2016-20 |
-    |---|---|---|---|
-    | net bps / stock-night | +8.6 (t 2.74) | +4.8 (t 0.78) | +10.5 (t 3.86) |
-    | $ / night | $3.24 | $2.16 | $2.57 |
-    | Sharpe | 1.35 | 0.60 | 1.75 |
-    | worst night | −$247 | −$310 | −$128 |
-    | beta to SPY overnight | 1.15 | 1.49 | 1.14 |
-    | alpha t | 1.01 | −0.60 | 2.71 |
-  - Bonferroni p over 5 finalists: test 1.0; confirmation < 0.001; test + confirmation combined 0.001.
-  - Deflated Sharpe on discovery alone does not pass (1.35 vs ~2.1 needed for 30k tries); the untouched confirmation
-    set carries it.
-- Independent re-derivation (Claude, own code, raw Alpaca SIP daily bars, different 30-name list, full-day strength
-  proxy), 2016-2020: strong quintile +10.06 bps gross / +5.06 net, t 4.74; all names +6.66 bps gross.
-- Most of the return is market drift (all names held overnight on trend-up days: +1.5 / +3.5 / +2.3 bps net). Picking
-  the strongest adds about 5-8 bps per night, significant only in 2016-2020.
+## What the research found (logs/research/day_deep_search_r1..r4_2026-10-29.md; 30,239 candidates in all)
+- **No same-day rule survives** adjusted significance (rounds 1-3, about 30,000 rules).
+- **The trend-day drift is overnight.** On days when SPY's prior close is above its 200-day average, the measured
+  drift is overnight (prior close → open), not open → close:
+  - stocks: +6.7 vs +1.0 bps;
+  - ETFs: +8.9 vs −0.7 bps (discovery).
+  - Independent re-derivation from raw Alpaca daily bars, 2016-2020: overnight +6.7 bps gross on 30 large caps.
+- **Picking the strongest stocks adds nothing significant** once SPY's overnight move is removed (beta-hedged net
+  +0.04 / −0.87 / +0.59 bps). The edge is the market's overnight drift on trend days, so the simplest instrument is
+  the index.
+- **Index variant, the selected candidate.** Pre-declared, 4 instruments, every period read once; 0.5× equity; whole
+  shares; $2,555 start, compounding:
+  | QQQ | Discovery 2020-24 | Test 2024-26 | Confirmation 2016-20 |
+  |---|---|---|---|
+  | bps of equity / night | 1.53 (t 1.78) | 1.91 (t 1.63) | 1.44 (t 1.95) |
+  | Sharpe | 0.89 | 1.16 | 0.90 |
+  | annual % | 3.8 | 4.8 | 3.6 |
+  | max drawdown | −9.2% | −4.7% | −6.3% |
+  | worst night (% equity) | −2.5 | −1.4 | −1.8 |
+  - Trend nights per year: about 184-224.
+  - Without the trend filter: worst night down to −5.1% and drawdowns to −18%. The filter mainly cuts the tail.
+  - Significance: pooled test + confirmation, Bonferroni over 4 instruments, p = 0.023 (QQQ), TQQQ 0.030,
+    SPXL 0.041, SPY 0.089. No single period is significant alone.
+  - Consistent sign and size in all three periods.
 
-## Proposed rule (Swing tier, a new overnight sub-strategy; Day-tier trades unchanged)
-1. Regime: SPY's prior session close > its 200-day average, from settled Alpaca daily bars. Off otherwise. No shorts.
-2. Universe: liquid large caps. Proposed: the tested 50-stock set, minus any name reporting earnings that night or the
-   next morning. Earnings come from fmp_client (EARN-SOURCE-1029 when approved); UNKNOWN → excluded.
-3. At 15:25 ET rank by return from the prior close (IEX/SIP 5-min bars, T1). Take the top quintile, at most N names.
-4. Entry: market-on-close (`time_in_force=cls`) submitted 15:30-15:45 ET.
-5. Exit: market-on-open sell (`opg`) the next session.
-6. Protection overnight (stop on every position):
-   - a GTC stop at the entry minus k × the name's own 99th-percentile overnight loss, measured from its last 250
-     nights;
-   - cancelled at 09:25 ET before the opg sell is placed, since Alpaca holds shares for both orders.
-   - Open question for the board: cancel-then-opg, or skip opg and sell at 09:30 with a market order after cancelling
-     the stop.
-7. Size:
-   - total overnight notional for this strategy so that the worst historical night is ≤ about 3% of equity; at today's
-     $2,555 equity that is ~0.5× equity, versus the research's 2×;
-   - split equally across the selected names;
-   - bounded by the existing K overnight limb (Architecture Invariant #11) and every other cap;
-   - fractional shares not used: the 1-share floor applies, so expensive names may not fit and are skipped for that
-     night (stated, not hidden).
-8. Logging: one decision line per night with the regime, rank table, selected names, sizes, stop levels, and the
-   entry and exit fills (trade_events.jsonl, tier "swing", strategy "overnight_strength").
+## Proposed rule (Swing tier, new overnight sub-strategy "trend_night"; Day-tier trades unchanged)
+1. **Regime:** SPY's latest settled daily close > its 200-day simple average (T1 Alpaca daily bars). Otherwise no
+   entry that night. Long only.
+2. **Instrument:** QQQ.
+   - Highest bps of the four in discovery and test; TQQQ was higher in confirmation (1.70 vs 1.44).
+   - QQQ has a smaller worst night than TQQQ in every period, and there is no leveraged-ETF decay or rebalance risk.
+3. **Entry:** buy QQQ at the close. Market-on-close if the broker accepts it; otherwise a market order at the 15:55 ET
+   5-minute bar.
+4. **Exit:** sell at the next session's open (09:30 ET). Market-on-open if accepted; else a market order on the first
+   cycle at or after 09:30.
+5. **Stop on every position:**
+   - A GTC stop rests from entry until the exit sequence at a level from QQQ's own 99th-percentile overnight loss
+     over the last 250 nights (point-in-time).
+   - Alpaca stops do not trigger outside regular hours, so in a gap the stop fills at the open, which is the planned
+     exit anyway. It is the safety backstop if the exit order fails.
+   - The exit sequence cancels the stop, confirms the cancel, then sends the sell. On any failure the stop stays and
+     the position is paged.
+6. **Size:** shares = floor(0.5 × equity / QQQ price), whole shares only so the GTC stop can rest.
+   - Alpaca allows fractional shares only on DAY orders.
+   - Measured 10-29: QQQ 707.35 (IEX) and equity ~$2,555 → 1 share = 0.28× equity.
+   - 2 shares once equity ≥ ~$2,830; the replay assumed exact 0.5×.
+   - The design rule is that the worst historical trend night must cost no more than 3% of equity. At 0.5× it was
+     2.5%.
+   - Bounded by the K overnight limb (Architecture Invariant #11) and all existing caps. If the cap leaves less than
+     one share, that night is skipped and logged.
+   - QQQ is not in FOREVER6_UNIVERSE. Day-tier Track M also buys QQQ on Monday gap-downs (same-day). Shared-symbol
+     ownership is handled by the ownership ledger with tier tag `swing`. Cross-tier exits are qty-bounded to the
+     strategy's own lot.
+7. **Earnings / events:** none for the ETF. FOMC/CPI nights are not excluded; the replay includes them.
+8. **Logging:** one decision line per session in trade_events.jsonl (tier "swing", strategy "trend_night") with:
+   - SPY close, its 200-day average and the regime;
+   - size inputs and the K-limb room;
+   - the entry and exit order ids and fills;
+   - the stop id and level;
+   - the reason for any skip.
 
 ## Size / frequency / concurrency (Rule B)
-- New trades: about 5-10 entries per trend-up session.
-- New overnight exposure: about 0.5× equity.
-- This is a risk-path diff on all three axes: board with the masked-loss seat, GAI + Codex, owner approval.
+- About 200 entries a year, 0.5× equity overnight on trend nights.
+- Risk-path on all three axes → board with the masked-loss seat, GAI + Codex, owner approval.
 
-## Expected effect and reversal criterion
-- Expected at 0.5× equity: about $0.50-0.80 per trend-up night at today's equity; it grows with equity.
-- It is data collection for an edge that confirmed only on one never-used period.
-- Reversal:
-  - after 60 live nights, a net mean below 0 bps with t < −1;
-  - or any single night losing more than 3% of equity, which triggers a size review.
+## Expected effect, reversal
+- Expected: about +1.5-1.9 bps of equity per trend night ≈ $0.40-0.50 per night at today's equity. That is about
+  4% a year at 0.5×, scaling with equity and size.
+- Reversal: after 100 live trend nights, a mean below 0 with t < −1 → off. Any night losing more than 3% of equity →
+  size review.
 
 ## Open questions for the board
-1. Stop design overnight, and the cancel/exit sequence (Alpaca holds shares for both a resting stop and an exit order).
-2. Size: 0.5× equity (worst night ≈ 3%) vs larger for growth.
-3. Universe: the 50 tested names vs the current Swing/Day universes.
-4. Beta-hedged variant: also short SPY at the close. Not tested yet; would need its own replay.
+1. **Size:** 0.5× (worst night ~2.5%) vs 1.0× (expected ~8%/yr, worst night ~5%). Paper growth goal.
+2. **Execution:** market-on-close / market-on-open order support in Alpaca paper vs the 15:55 / 09:30 market-order
+   fallback. Fill cost assumed 2 bps.
+3. **Interaction:** whether this replaces or adds to the existing Track B 5-session hold. They are different signals;
+   Track B is a stock-level trend hold.
 
 ## Required questions
-(to be answered in the board / GAI / Codex review)
+(answered in the board / GAI / Codex review)
