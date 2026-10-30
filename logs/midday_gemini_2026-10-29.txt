@@ -1,0 +1,44 @@
+Midday Gemini Audit — 2026-10-29
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+- **Trade Integrity**: 
+    - **GOOGL**: Entry $339.33, Exit $0.00, P&L +$1018.00. This is a recording bug. The exit price is clearly not $0.00, and the P&L is likely derived from a fill that the tracker failed to associate with the correct exit price.
+    - **NOW**: Entry $157.59, Exit $116.81, P&L -$81.56. P&L sign is correct (loss).
+    - **MSFT**: Entry $537.99, Exit $527.80, P&L -$30.57. P&L sign is correct (loss).
+- **Correlation**: The bot is currently struggling with the "Day tier" entries (MSFT, GOOGL), which are not utilizing the 12-point scoring system, leading to a lack of visibility into why these trades were taken.
+- **Stop-hit rate**: 0% stops hit, but 2/3 closed trades were losses, suggesting the bot is exiting via manual/software logic before the hard stop is triggered, or the stop-tracking is failing to record the exit reason correctly.
+
+### ENTRY QUALITY
+- **Entry Logic**: The bot correctly applied the "PREMARKET RED LOCKOUT" (Rule 1), blocking all long entries due to 91% of movers being red. This demonstrates effective risk-gate adherence.
+- **Missing Data**: [DRAM] entry was blocked due to "No daily data," which is a failure in the data pipeline for that specific ticker.
+
+### EXIT QUALITY
+- **FIFO Orphans**: The logs show multiple "FIFO orphan" warnings for NOW and GOOGL. This indicates the `portfolio_tracker` is losing track of the cost basis for these positions, which is likely why the exit prices are recorded as $0.00 or missing in the `CLOSED TRADE DETAILS`.
+
+### MRI ALIGNMENT
+- **Regime**: MRI is consistently ELEVATED (38/100). The bot is correctly applying a size floor (0.85x) and adjusting the `MIN_SCORE` dynamically (raised to 9/12), showing good alignment between macro risk and execution sizing.
+
+### LOG ANOMALIES
+- **FIFO Orphan Warnings**: `2026-10-29 17:15:24,515` and `17:23:42,551` indicate the tracker is failing to match fills to lots.
+- **Ledger Drift**: `pnl_ledger invariant FAIL drift=$5.41` indicates the internal tracker and the Alpaca ledger are out of sync.
+- **Ownership Guard**: `reattributed impossible negative protected replay GOOGL/qhm=-2` suggests a state-sync error in the `quarterly_hold_manager`.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | HIGH | P&L/Price Recording Failure**: The `CLOSED TRADE DETAILS` for GOOGL shows an exit price of $0.00. This is a data corruption issue in the trade-matching engine.
+- **INFRASTRUCTURE | MEDIUM | FIFO Orphan/Ledger Drift**: The `portfolio_tracker` is consistently failing to reconcile fills, leading to "orphan" warnings and P&L drift. This suggests the `ledger_sync` process is not correctly updating the state after fills are processed.
+- **ALPHA ISSUE | LOW | Data Pipeline Gap**: [DRAM] ticker is missing daily data, causing a fail-closed entry block.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Investigate `execution.portfolio_tracker` to determine why fills are being orphaned; the drift between Alpaca and the tracker is now $5.41, which will compound if not resolved.
+2. **EXECUTION**: Patch the `CLOSED TRADE DETAILS` logging logic to prevent $0.00 exit prices from being recorded; ensure the exit fill price is pulled directly from the Alpaca fill object rather than a null-default.
+3. **ALPHA**: Audit the `quarterly_hold_manager` to prevent the "impossible negative protected replay" error, as this indicates a state-sync failure between the QHM and the intraday position tracker.
