@@ -54,18 +54,26 @@ the compositions and combinations."
      shared-symbol netting.
    - The finer share price lets size track the rule.
    - Research used QQQ as the proxy for QQQM (same index; QQQM's own early bars are sparse).
-3. **Size** = the minimum of four limits. No new static: each comes from an existing rule or from data.
-   - **The Swing tier's existing risk-at-stop rule** (≤ 2% of equity at the stop, SWING-OWNER-1025):
-     `floor(0.02 × equity / (price × q))`.
-     - `q` = QQQ's 99.9th-percentile overnight loss over all prior nights (expanding window, point-in-time).
-     - Measured 3.6-4.2%, so this gives about 0.5× equity.
+3. **Size** = the minimum of four limits, priced dynamically every night (owner 10-29: "Make it dynamically
+   priced. I want at least 5%").
+   - **Worst-night budget `b`:** `floor(b × equity / (price × q))`.
+     - `b` = max(5% of equity, ¼ Kelly from the strategy's own fills once it has ≥ 50 closed nights). Kelly is
+       computed from fill-derived nightly mean and variance and re-computed every night.
+     - `q` = QQQ's 99.9th-percentile overnight loss over all prior nights (expanding window, point-in-time),
+       re-measured every night. Measured 3.6-4.2%.
+     - With q ≈ 4%, b = 5% gives about 1.2× equity: today ≈ 10 QQQM shares (≈ $2,900 at $294 on ~$2,555 equity).
+     - This replaces the Swing tier's 2%-at-stop rule for this sub-strategy only (owner override 10-29).
+     - Consequence:
+       - a worst-case night costs ~5% of equity, about 70% of the 7% daily kill budget, which can halt the other
+         tiers' new entries that day (Taleb's kill-switch spillover);
+       - expected return scales to ~9-10% a year at this size.
    - **The K overnight limb room** (Architecture Invariant #11) after QHM/F6/other notional.
    - **All-tier gap check:** Σ over every overnight position (notional × that symbol's own 99th-percentile
      overnight loss), plus QQQM's, must stay within the 7% daily kill threshold. Otherwise size down to fit, or skip.
    - **Buying power.**
-   - Today ≈ 4 QQQM shares (≈ 0.46× equity).
-   - Board seat Thorp computed full Kelly ≈ 13-16× and supports up to 1.0×. GAI and Codex recommend ≤ 0.5×. The
-     existing 2% rule lands at ~0.5×. Going above it needs a separate owner decision.
+   - Board seat Thorp computed full Kelly ≈ 13-16× and supported up to 1.0×. GAI and Codex recommended ≤ 0.5×.
+     The owner chose a ≥ 5% worst-night budget (~1.2×) on 10-29. The K limb, the all-tier gap check (≤ 7%) and
+     buying power still bound it every night.
 4. **Entry:** market-on-close (`time_in_force=cls`) for the computed whole shares.
    - Submitted on the 15:40 ET run. Alpaca rejects close orders 15:50-19:00 ET. Half-days: the close time comes from
      the Alpaca calendar and the run is close − 20 minutes.
@@ -209,11 +217,11 @@ the compositions and combinations."
   Then a read-only probe on OCI: regime, size limits and K room against the real account.
 
 ## Size / frequency / concurrency (Rule B)
-- About 200 entries a year at about 0.5× equity overnight.
+- About 200 entries a year at about 1.2× equity overnight (5% worst-night budget, dynamic).
 - Risk-path on all three axes. Board (with the masked-loss seat), GAI + Codex and owner approval apply.
 
 ## Expected effect and reversal
-- Expected about +1.5-1.9 bps of equity per trend night ≈ $0.40-0.50 a night at today's equity, ~4% a year. Small
+- Expected about +3.5-4.5 bps of equity per trend night ≈ $0.90-1.15 a night at today's equity, ~9-10% a year. Small
   in dollars; its value is a measured, positive-expectancy use of overnight capacity, and it scales with equity.
 - Live confirmation and auto-off:
   - The first 50 live trend nights are the never-consulted confirmation.
