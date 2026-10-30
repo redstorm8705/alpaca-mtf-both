@@ -8,7 +8,33 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-29, Claude signed) — 10-29 audit follow-ups; EARN-SOURCE-1029 awaiting owner approval
+## ⏩ LATEST (2026-10-30 overnight, Claude signed) — owner approvals did not record; designs queued
+
+- The owner typed approvals for EARN-SOURCE-1029 and SWING-OVERNIGHT-1029 (10-29 evening). The capture parser
+  dropped them: its terse-follow-up rule saw the trailing "Period." The fix is a gate change and needs its own
+  approval. The owner must resend `APPROVE <ID>` lines on their own.
+- EARN-SOURCE-1029 code is built and staged, not committed, on branch `claude/earn-source-1029`:
+  - files: `data/fmp_client.py`, `tests/test_earnings_source.py`, `tests/test_qhm_earnings_dates.py`;
+  - status: 54 tests pass; cold-2nd PASS on condition that the warmer (`run_earnings_warm.py` + cron, gated) ships
+    with it;
+  - not shipped.
+- SWING-OVERNIGHT-1029 v8 is designed with the owner's ≥ 5% dynamic worst-night budget. The code is not written
+  (gated paths).
+- New design drafts, not yet through review:
+  - SHORT-ALL-1029 (shorting for every tier except F6);
+  - GAP-EXIT-1029: replay shows waiting does not beat selling at the open on earnings gaps;
+  - MORNING-1029: reviewer round 1 Codex REJECT / GAI approve-with-changes; v2 in progress.
+- Day search rounds 1-6 are in `logs/research/day_deep_search_r*_2026-10-29/30.md`.
+  - 31,533 rules tried. The only measured out-of-sample edge reachable at our latency is the trend-night overnight
+    hold.
+  - Round 7 (0DTE level breaks) is running.
+- Next action:
+  1. owner resends the approvals;
+  2. ship EARN-SOURCE (fmp_client + warmer);
+  3. build SWING-OVERNIGHT;
+  4. review SHORT-ALL / GAP-EXIT / MORNING with the board + GAI + Codex.
+
+## ⏩ EARLIER (2026-10-29, Claude signed) — 10-29 audit follow-ups; EARN-SOURCE-1029 awaiting owner approval
 
 - PREFLIGHT-LEDGER-1029 shipped (#801, 7ff74f2). The Sunday 17:55 ET earnings warning now reads held symbols from the
   ownership ledger. Deployed, unexercised.
