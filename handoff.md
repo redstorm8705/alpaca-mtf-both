@@ -8,7 +8,26 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-30 overnight, Claude signed) — owner approvals did not record; designs queued
+## ⏩ LATEST (2026-10-30 afternoon, Claude signed) — SHORT-ALL and MORNING designs cleared review; owner decisions next
+
+- SHORT-ALL-1029 is at v11 (`logs/design_records/short_all_tiers_2026-10-29.md`). Codex and GAI both APPROVE after
+  confirmation rounds 2-9. Fixes since v4: protection-gap cover when one stop slice is rejected (§3d-2b), a bounded gap
+  protection ladder (fresh stop → capped covers → explicit `unprotected_short` state), stop slices trimmed to the
+  shares still held, a partial resize cover for earnings (§3d-2c), and a Rule 201 bar definition. Owner decides D1-D7
+  (§7), then code.
+- MORNING-1029 is at v7 (`logs/design_records/morning_rundown_2026-10-29.md`). Codex and GAI both APPROVE. The 06:46
+  message is now a watchlist; a new watcher (`scripts/morning_watch.py`) sends a TRIGGERED alert with a fresh limit and
+  stop when a one-minute bar closes beyond a level, processing every bar in order and voiding a side on any data gap.
+  Owner answers questions 1-6 (§11), then build step 0 on OCI.
+- TRACK-A-STOP-1026 is live since 10-27 (#779). Its post-live audit is still owed.
+- Next action:
+  1. owner: D1-D7 for SHORT-ALL, questions 1-6 for MORNING, and resend `APPROVE EARN-SOURCE-1029` /
+     `APPROVE SWING-OVERNIGHT-1029` on their own lines;
+  2. ship EARN-SOURCE (fmp_client WIP + warmer);
+  3. GAP-EXIT-1029 review (not started);
+  4. overdue post-live audits (#779 first).
+
+## ⏩ EARLIER (2026-10-30 overnight, Claude signed) — owner approvals did not record; designs queued
 
 - The owner typed approvals for EARN-SOURCE-1029 and SWING-OVERNIGHT-1029 (10-29 evening). The capture parser
   dropped them: its terse-follow-up rule saw the trailing "Period." The fix is a gate change and needs its own
