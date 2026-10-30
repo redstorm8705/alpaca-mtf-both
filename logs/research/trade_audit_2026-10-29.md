@@ -103,3 +103,5 @@ ratification.
 - Finding: that post-earnings re-anchor runs only from `PENDING_EARNINGS`, which is set only when the pre-earnings stop
   cancel runs (L2381); with `QHM_EARNINGS_STOP_CANCEL_ENABLED = False` no QHM stop is ever updated around a report.
   Owner direction 10-29: "stops should be updated around earnings but not removed" → design owed (QHM-EARN-STOP).
+- Owner 10-29 (evening): the +5% trail-lock start is a static number and must become dynamic; a lower cost average must
+  re-derive stops AND targets on every tier. Tracked as design items, not yet built.
