@@ -243,3 +243,84 @@ confirmation periods count; they are combined with a Stouffer z:
 - QQQ/TQQQ do best. It is about as good as the stock-picking version once that is sized live.
 - **Not significant on any single period; significant only when test and confirmation are pooled (p 0.02–0.04)**,
   except SPY.
+
+## Timestamp-valid re-run (corrected-signal re-run; 2 counted candidates; each period was already read once)
+
+Scripts: `day_search/idx_rerun.py` (output `out/idx_rerun.csv`) and `day_search/qqqm_cost.py`.
+
+**About the reported look-ahead (checked at source).** The original rule did NOT use the same-day 16:00 close.
+- `fam_r3.trend()` builds each day's state as SPY close > 200-day average.
+- It then shifts that state by one session (`lab = up.shift(1)`), so the night after day d uses day d−1's settled
+  state.
+- `idx_overnight.py` uses that label.
+- Proof: the re-run's V2 ("prior settled close vs its 200-day average") reproduces the original QQQ discovery row
+  exactly: +1.53 bps, t 1.78.
+
+Both signals were run as requested:
+- **V1:** SPY's 15:40-bar close (last trade by 15:45 ET) vs the mean of the 200 settled closes before today.
+- **V2:** the prior settled close vs its 200-day mean.
+
+**Trade setup.**
+- Buy at the 16:00 close (market-on-close); sell at the next 09:30 open (market-on-open). Cost 2 bps round trip.
+- Shares = min(floor(0.5 E / P), floor(0.03 E / (P q))), where q is QQQ's 99.9th-percentile overnight loss, expanding
+  window, point-in-time.
+- $2,555 start, compounding.
+
+| Period | Vehicle | Signal | Bps / night | t | Sharpe | Annual % | Max drawdown % | Worst night % equity | Nights per year |
+|---|---|---|---|---|---|---|---|---|---|
+| Discovery 2020-24 | QQQ | V1 | 1.58 | 1.83 | 0.92 | 4.0 | −9.2 | −2.49 | 193 |
+| | QQQ | V2 | 1.53 | 1.78 | 0.89 | 3.8 | −9.2 | −2.50 | 192 |
+| | QQQM | V1 | 0.98 | 1.24 | 0.62 | 2.4 | −9.6 | −2.55 | 145 * |
+| | QQQM | V2 | 0.93 | 1.18 | 0.59 | 2.3 | −9.6 | −2.56 | 145 * |
+| Test 2024-26 | QQQ | V1 | 2.10 | 1.78 | 1.27 | 5.4 | −4.3 | −1.41 | 224 |
+| | QQQ | V2 | 1.91 | 1.63 | 1.16 | 4.8 | −4.7 | −1.41 | 224 |
+| | QQQM | V1 | 2.15 | 1.53 | 1.09 | 5.4 | −5.2 | −1.71 | 221 |
+| | QQQM | V2 | 2.03 | 1.44 | 1.02 | 5.1 | −5.7 | −1.71 | 221 |
+| Confirmation 2016-20 | QQQ | V1 | 1.74 | 2.45 | 1.12 | 4.4 | −5.4 | −1.77 | 184 |
+| | QQQ | V2 | 1.45 | 1.98 | 0.91 | 3.6 | −6.2 | −1.84 | 183 |
+
+\* QQQM (launched 2020-10-13) had too few 5-minute bars on many early days to pass the data check, so fewer
+discovery nights traded. QQQM did not exist in 2016–20.
+
+- **Nights where V1 and V2 disagree:** 24 (discovery), 5 (test), 15 (confirmation).
+- **Tail cap:** never binds in any period. q was 3.6–4.2%, so the cap is 0.71–0.84x equity, above the 0.5x limb.
+- **Adjusted p** (k = 2, test and confirmation pooled with Stouffer; QQQ):
+  - V1: z = 1.78·√(498/1696) + 2.45·√(1198/1696) = 3.02, one-sided p 0.0013, × 2 = **0.003**.
+  - V2: z = 2.55, p 0.0054, × 2 = **0.011**.
+- Not significant in any single period on its own except V1 in confirmation (t 2.45).
+
+**QQQM cost.** SIP, 20 sessions ending 2026-10-26.
+- Average daily volume about 3.06M shares ($921M); QQQ about 36.7M ($26.8B).
+- Median quoted spread: 0.66 bps at 15:55, 1.31 bps at 09:30–09:31. QQQ: 0.28 bps at 15:55.
+- MOC/MOO orders fill at the auction price, so these spreads are an upper bound on crossing cost. The 2 bps
+  assumption is conservative for QQQM.
+- [limitation: one quotes page per window, unpaginated; QQQ 09:30 has a single observation]
+
+**Alpaca order types** (docs page `us/orders-at-alpaca`, read 2026-10-29):
+- `opg` = market/limit-on-open, auction only. Rejected if submitted 09:28–19:00 ET; after 19:00 it is queued for
+  the next open.
+- `cls` = market/limit-on-close. Rejected if submitted 15:50–19:00 ET.
+- Both route to the primary exchange auction.
+- A 15:45 signal therefore leaves 5 minutes to submit the `cls` buy. The `opg` sell must be submitted after 19:00 the
+  same evening or before 09:28 the next morning.
+- **Paper support for opg/cls is not stated on that page**; not verified (needs a paper order probe, which I did not
+  place).
+- **A resting GTC sell stop on the same shares:** the docs say nothing. The repo's own broker handling
+  (`execution/broker.py` lines 50–51, 250, 294: error 40310000 `held_for_orders`) shows Alpaca rejects a sell whose
+  qty is already held by another open sell order. So an `opg` sell cannot coexist with a full-size GTC stop. The stop
+  must be cancelled first, or the position must be left without a stop (which matches the earlier finding that an
+  overnight stop only fills at the open anyway).
+
+**Independent evidence (academic)** [cited from memory: titles, years and main findings believed correct; not
+re-verified this session]:
+- Cliff, Cooper & Gulen (2008), "Return differences between trading and non-trading hours: like night and day": the
+  US equity premium in 1993–2006 was earned almost entirely overnight; intraday returns were near zero or negative.
+- Kelly & Clark (2011), "Returns in trading versus non-trading hours: the difference is day and night" (Journal of
+  Asset Management): index ETFs earn more overnight than intraday on a risk-adjusted basis.
+- Lou, Polk & Skouras (2019), "A tug of war: overnight versus intraday expected returns" (Journal of Financial
+  Economics): momentum profits accrue overnight while other factors' premia accrue intraday, consistent with
+  clientele effects.
+- Hendershott, Livdan & Rösch (2020), "Asset pricing: a tale of night and day" (JFE): beta is priced overnight but
+  not intraday.
+
+**Candidates tried, all rounds: 30,241.**
