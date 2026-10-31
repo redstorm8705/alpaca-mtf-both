@@ -128,6 +128,12 @@ def main() -> None:
     # script is read-only (trade_log.json, watchlist_state.json) and only
     # refreshes its own FMP earnings cache (data/fmp_client.py owns that
     # write) -- no write-contention risk with the live bot's shared state.
+    # PREFLIGHT-ENV-1031: the cron line does not source .env, so FMP/Finnhub keys and the Slack webhook were unset
+    # and every Sunday run was an "[ALERT no-op]" (earnings_preflight_cron.log 2026-07-19..10-25). Load it here,
+    # before fmp_client and alerts read their keys at import; variables already set in the environment win.
+    from dotenv import load_dotenv
+    load_dotenv(_BASE / ".env")
+
     now_pt = _fmt_pt(datetime.now(ET))
     logger.info(f"=== Earnings Pre-Flight — {now_pt} ===")
 
@@ -228,7 +234,7 @@ def main() -> None:
 
     # Step 4 — Slack alert
     try:
-        from alerts import send_slack
+        from alerts import send_slack_delivery
 
         lines: list[str] = [f":calendar: *Earnings Pre-Flight — {now_pt}*"]
 
@@ -261,8 +267,10 @@ def main() -> None:
         elif not symbols:
             lines.append(":zzz: No open positions or watchlist symbols found — nothing to check.")
 
-        send_slack("\n".join(lines))
-        logger.info("Slack alert sent.")
+        if send_slack_delivery("\n".join(lines)):
+            logger.info("Slack alert sent.")
+        else:
+            logger.error("Slack alert NOT delivered (webhook unset or post failed).")
     except Exception as e:
         logger.error(f"Slack alert failed: {e}")
 
