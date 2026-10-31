@@ -8,11 +8,11 @@
   "proof": [
     {
       "log": "logs/live_writer.log",
-      "pattern": "GEX [COIN]"
+      "pattern": "GEX \\[COIN\\]"
     },
     {
       "log": "logs/day_tier_runner_cron.log",
-      "pattern": "[EWY] day-tier TRACK-B SCREEN"
+      "pattern": "\\[EWY\\] day-tier TRACK-B SCREEN"
     }
   ],
   "expected_rate": "every 15-minute options refresh during RTH (GEX [COIN]) and every Track B tick in its window (EWY screen line)",
