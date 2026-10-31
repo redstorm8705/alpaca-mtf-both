@@ -1,0 +1,63 @@
+Nightly Gemini Audit — 2026-10-30
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['earnings_preflight.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+(The bot is operational, but there is a recurring ledger synchronization failure and a persistent, unaddressed P5 critical bug.)
+
+### LOG ANOMALIES
+*   **Ledger Sync Failure**: `execution.ownership_guard sync_ledger` reports "reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday" at 19:40:18 and 20:00:18. This indicates a state mismatch between the QHM (Quarterly Hold Manager) and the ledger.
+*   **FIFO Orphan**: `execution.portfolio_tracker` repeatedly reports "FIFO orphan: closing fill for GOOGL has no prior lot and no tracker record" (e.g., 19:30:46, 19:36:57, 19:46:32, 19:54:30). This suggests the tracker is failing to associate closing fills with the correct entry lots.
+*   **Entry Blocked (Anomaly-2)**: `[ANOMALY-2] [GOOGL] confirm_gate=4 scans but no entry — risk.open_positions=6 vs tracker=0`. This confirms the tracker is out of sync with the actual risk engine.
+*   **Venue Halt**: `[CRITICAL] ⛔ VENUE HALT CONFIRMED` at 20:00:25. This is a correct response to the SPY -2.09% drop, but it confirms the bot is in a defensive state.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `GOOGL` short trade (11:10:46) realized a profit of 1.50 (Entry 278.72, Exit 277.22). The math is correct (1.50 profit for 1 share).
+*   **NVD Trades**: The `NVD` long trades (16:10:36, 18:18:48) show consistent P&L recording.
+*   **Stop Rate**: The bot is currently in a high-volatility, "STRESSED" regime (MRI=50). The high frequency of "Rule 1 — PREMARKET RED LOCKOUT" blocks is consistent with the current market environment.
+*   **R:R**: The `NOW` stop-out (10-29) resulted in an R-multiple of -2.62, which is significantly worse than the target, indicating a failure to respect the stop level (slippage of -25.26).
+
+### TRADE INTEGRITY
+*   **Recording Bug**: The `GOOGL` orphan fills indicate a failure in the `portfolio_tracker` to maintain state, leading to the "impossible negative" ledger reattribution. This is a high-priority state-tracking bug.
+
+### MODIFIED FILE FINDINGS
+*   **earnings_preflight.py**:
+    *   **Bug**: The `preload_earnings_week` call in `main()` is missing the `symbols` argument.
+    *   **Trace**: Line 125: `preload_earnings_week(sorted(symbols), lookahead_days=_LOOKAHEAD_DAYS)`. The function signature in `data/fmp_client.py` requires `symbols` as a positional argument. The current code passes `sorted(symbols)` as the first argument, but the previous audit note suggests this was failing.
+    *   **Failure Condition**: The script fails to refresh the cache for specific symbols, relying on stale data.
+    *   **Fix**: Ensure the `fmp_client` import and function call match the signature exactly.
+
+### P5 STATUS
+*   **P5-C1 (FVG MultiIndex)**: UNTOUCHED.
+*   **P5-C2 (run_movers.py ImportError)**: UNTOUCHED.
+*   **P5-H2 (Fill price crosstalk)**: TRIGGERED (evidenced by GOOGL orphan fills).
+*   **P5-H3 (Orphan GTC 404)**: TRIGGERED (evidenced by tracker/ledger drift).
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | HIGH | execution.portfolio_tracker | FIFO Orphan/Ledger Mismatch | The tracker fails to link closing fills to entry lots, causing "impossible negative" ledger states and P&L drift.**
+*   **ALPHA ISSUE | MEDIUM | earnings_preflight.py | Argument mismatch in `preload_earnings_week` | The function call at line 125 does not correctly pass the symbol list to the FMP client, resulting in stale cache data.**
+
+### FIX VALIDATION
+*   **FIX VALIDATION: FAIL** (Regarding the `earnings_preflight.py` fix mentioned in the source file comments). The code still contains the logic that caused the `TypeError` in previous runs.
+*   **Alternative fix**: Update `earnings_preflight.py` line 125 to: `preload_earnings_week(symbols=list(symbols), lookahead_days=_LOOKAHEAD_DAYS)`.
+
+### RECOMMENDED ACTIONS
+1.  **Immediate**: Investigate `execution.portfolio_tracker` to resolve the FIFO orphan issue; the ledger is currently in an inconsistent state regarding `GOOGL`.
+2.  **High**: Fix the `preload_earnings_week` call in `earnings_preflight.py` to prevent stale earnings data.
+3.  **Medium**: Clear the `ownership_ledger.json` and `trade_log.json` state files to resolve the "impossible negative" reattribution error.
+4.  **Medium**: Address P5-C2 (`run_movers.py` ImportError) to restore premarket scanning capability.
+================================================================================
+BROKER GROUND TRUTH (2026-10-30, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AMZN   COVERED                  owners=day exposed=378m no-broker-stop=0m [06:40-06:40, 12:58-12:58] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=day exposed=41m no-broker-stop=0m [11:10-11:10] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVD    COVERED                  owners=day exposed=372m no-broker-stop=0m [06:40-06:40, 09:10-09:10, 09:16-09:16, 11:18-11:18] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  XOM    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
