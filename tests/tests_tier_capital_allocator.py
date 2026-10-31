@@ -4,13 +4,15 @@
 from __future__ import annotations
 
 import json
+import ast
 import sys
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, patch
+from zoneinfo import ZoneInfo
 
 import config
 from execution import tier_capital_allocator as capital_module
@@ -109,6 +111,9 @@ class AllocatorTests(unittest.TestCase):
             audit_path=self.audit,
             ledger_loader=lambda: self.ledger,
             clock=lambda: self.now,
+            f6_evidence_validator=lambda evidence: (
+                evidence.get("trigger_evidence_sha256") == "cd" * 32
+            ),
         )
 
     def tearDown(self):
@@ -128,9 +133,14 @@ class AllocatorTests(unittest.TestCase):
         if tier == "forever6":
             defaults["overnight"] = True
             defaults["regime_evidence"] = {
-                "regime": "normal",
+                "regime": "crash",
                 "verified": True,
                 "ts": datetime.now(timezone.utc).isoformat(),
+                "source": "f6_crash_trigger",
+                "f6_trigger_armed": True,
+                "f6_trigger_tier": "B",
+                "trigger_sha256": "ab" * 32,
+                "trigger_evidence_sha256": "cd" * 32,
             }
         defaults.update(kw)
         return EntryRequest(**defaults)
@@ -301,18 +311,37 @@ class AllocatorTests(unittest.TestCase):
         assert decision.lease
         self.assertEqual(decision.lease.cash_reserve, 101.0)
 
-    def test_f6_normal_regime_enforces_ten_percent_equity_envelope(self):
+    def test_f6_non_crash_regime_is_rejected_even_when_verified(self):
         self.broker.positions = [
             SimpleNamespace(
                 symbol="NVDA", qty=2, side="long", current_price=100, market_value=200
             )
         ]
         self.ledger = _ledger(NVDA={"forever6": 2})
-        denied = self.alloc.admit_entry(
-            self.req("forever6", qty=1, price_bound=100, overnight=True)
-        )
+        denied = self.alloc.admit_entry(self.req(
+            "forever6", qty=1, price_bound=100, overnight=True,
+            regime_evidence={
+                "regime": "normal", "verified": True,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            },
+        ))
         self.assertFalse(denied.approved)
-        self.assertEqual(denied.reason, "tier capital cap")
+        self.assertEqual(denied.reason, "F6 crash trigger evidence is invalid")
+
+    def test_f6_rejects_non_hex_trigger_digest(self):
+        evidence = {
+            "regime": "crash", "verified": True,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "source": "f6_crash_trigger", "f6_trigger_armed": True,
+            "f6_trigger_tier": "A", "trigger_sha256": "z" * 64,
+            "trigger_evidence_sha256": "cd" * 32,
+        }
+        denied = self.alloc.admit_entry(self.req(
+            "forever6", qty=1, price_bound=100, overnight=True,
+            regime_evidence=evidence,
+        ))
+        self.assertFalse(denied.approved)
+        self.assertEqual(denied.reason, "F6 crash trigger evidence is invalid")
 
     def test_f6_crash_regime_expands_to_thirty_percent_equity_envelope(self):
         self.broker.positions = [
@@ -335,13 +364,116 @@ class AllocatorTests(unittest.TestCase):
                         "regime": "crash",
                         "verified": True,
                         "ts": datetime.now(timezone.utc).isoformat(),
+                        "source": "f6_crash_trigger",
+                        "f6_trigger_armed": True,
+                        "f6_trigger_tier": "C",
+                        "trigger_sha256": "ab" * 32,
+                        "trigger_evidence_sha256": "cd" * 32,
                     },
                 )
             )
         self.assertTrue(approved.approved)
 
+    def test_f6_rejects_digest_not_bound_to_durable_trigger_row(self):
+        evidence = dict(self.req("forever6").regime_evidence)
+        evidence["trigger_evidence_sha256"] = "ef" * 32
+        denied = self.alloc.admit_entry(
+            self.req("forever6", regime_evidence=evidence)
+        )
+        self.assertFalse(denied.approved)
+        self.assertEqual(denied.reason, "F6 crash trigger evidence is invalid")
+
+    def test_live_f6_validator_requires_exact_latest_durable_row(self):
+        trigger_path = Path(self.tmp.name) / "trigger.jsonl"
+        now = datetime.now(ZoneInfo("America/New_York"))
+        payload = {
+            "armed": True,
+            "tier": "B",
+            "prior_record_sha256": "ab" * 32,
+            "as_of_date": now.date().isoformat(),
+            "evaluated_at": now.isoformat(),
+        }
+        row = {"recorded_at": now.isoformat(), **payload}
+        trigger_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        durable_sha = capital_module.hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        evidence = {
+            "f6_trigger_tier": "B",
+            "trigger_sha256": "ab" * 32,
+            "trigger_evidence_sha256": durable_sha,
+        }
+        with patch.object(capital_module, "_F6_TRIGGER_EVIDENCE", trigger_path):
+            self.assertTrue(capital_module._live_f6_evidence_valid(evidence))
+            self.assertFalse(
+                capital_module._live_f6_evidence_valid(
+                    {**evidence, "trigger_evidence_sha256": "ef" * 32}
+                )
+            )
+            stale_payload = {
+                **payload,
+                "as_of_date": (now.date() - timedelta(days=1)).isoformat(),
+                "evaluated_at": (now - timedelta(days=1)).isoformat(),
+            }
+            stale_row = {
+                "recorded_at": (now - timedelta(days=1)).isoformat(),
+                **stale_payload,
+            }
+            trigger_path.write_text(json.dumps(stale_row) + "\n", encoding="utf-8")
+            stale_sha = capital_module.hashlib.sha256(
+                json.dumps(
+                    stale_payload, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            self.assertFalse(
+                capital_module._live_f6_evidence_valid(
+                    {**evidence, "trigger_evidence_sha256": stale_sha}
+                )
+            )
+
+    def test_f6_live_admission_and_submit_share_durable_evidence_lock(self):
+        root = Path(__file__).resolve().parent.parent
+        callers = []
+        manager_lock_covers_broker_submit = False
+        for path in root.rglob("*.py"):
+            rel = path.relative_to(root)
+            if rel.parts[0] in {"tests", "research", ".claude"}:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+                    if (
+                        name == "live_admit"
+                        and node.args
+                        and isinstance(node.args[0], ast.Constant)
+                        and node.args[0].value == "forever6"
+                    ):
+                        callers.append(str(rel))
+                if isinstance(node, ast.With) and any(
+                    isinstance(item.context_expr, ast.Call)
+                    and getattr(
+                        item.context_expr.func,
+                        "id",
+                        getattr(item.context_expr.func, "attr", ""),
+                    )
+                    == "durable_evidence_locked"
+                    for item in node.items
+                ):
+                    names = {
+                        getattr(child.func, "id", getattr(child.func, "attr", ""))
+                        for child in ast.walk(node)
+                        if isinstance(child, ast.Call)
+                    }
+                    manager_lock_covers_broker_submit |= {
+                        "live_admit",
+                        "submit_limit_order",
+                    }.issubset(names)
+        self.assertEqual(callers, ["execution/forever_hold_manager.py"])
+        self.assertTrue(manager_lock_covers_broker_submit)
+
     def test_f6_overnight_request_uses_dynamic_total_book_ceiling(self):
-        self.alloc.policy.targets["normal"]["forever6"] = 1.0
+        self.alloc.policy.targets["crash"]["forever6"] = 1.0
         self.broker.positions = [
             SimpleNamespace(
                 symbol="MSFT", qty=45, side="long", current_price=100, market_value=4500
@@ -359,7 +491,7 @@ class AllocatorTests(unittest.TestCase):
         self.assertEqual(denied.reason, "overnight exposure cap")
 
     def test_f6_rejects_invalid_dynamic_overnight_values_at_boundary(self):
-        self.alloc.policy.targets["normal"]["forever6"] = 1.0
+        self.alloc.policy.targets["crash"]["forever6"] = 1.0
         for value in (float("nan"), float("inf"), 0.0, -1.0):
             with self.subTest(value=value), patch(
                 "execution.overnight_capacity.overnight_k_strict_current",
@@ -381,6 +513,11 @@ class AllocatorTests(unittest.TestCase):
                     "regime": "crash",
                     "verified": True,
                     "ts": "2020-01-03T21:00:00+00:00",
+                    "source": "f6_crash_trigger",
+                    "f6_trigger_armed": True,
+                    "f6_trigger_tier": "B",
+                    "trigger_sha256": "ab" * 32,
+                    "trigger_evidence_sha256": "cd" * 32,
                 },
             )
         )
