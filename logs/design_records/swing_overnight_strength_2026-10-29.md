@@ -267,38 +267,48 @@ broker-atomic handoff so a live stop never disappears even for those seconds.
   take-profit leg be replaced to a marketable price. If it does, that becomes a follow-up improvement to make the
   handoff atomic for every tier, not only this one.
 
-## Required questions (short answers; evidence above)
-- **Q1, goal:** ~4%/yr at ~0.5×, positive in all three periods; it uses idle overnight capacity and scales with
-  equity.
-- **Q2, trade count:** +~200 round trips a year; no tier's trades are reduced.
-- **Q3, simpler way:** the index instead of stock picks; QQQM to avoid shared symbols.
-- **Q4, overlap:** additive to Track B / Track M / F6 / QHM; no symbol overlap.
-- **Q5, static numbers:** size derives from the existing 2% rule, measured `q`, K room and the 7% threshold. The
-  200-day filter and the windows are the tested rule.
-- **Q6, forward pass:** next, VIX-term-structure and earnings-night sizing, tested first.
-- **Q7, cross-use:** the all-tier gap check is a new shared signal for the book.
-- **Q8 / Q25, evidence:** replay-measured; independent stock re-derivation; QQQM spreads measured.
-- **Q9 / Q31 / Q37, testing:**
-  - three periods;
-  - honest multiplicity statement;
-  - the first 50 live nights are the confirmation;
-  - auto-off rule.
-- **Q11, risk path:** size, frequency and concurrency all nonzero (risk-path).
-- **Q12, safety:** stop on every share (invariant), kill switch, paper assertion, fail-closed entry.
-- **Q13, stale data:** stale or missing data → no entry. The exit is never blocked.
-- **Q14, shadow:** none; ships live after the gate.
-- **Q15 / Q16, logging:** state-transition events plus the result check line.
-- **Q17 / Q22 / Q23, proof:** full-path simulation, then an OCI read-only probe; first live night audited.
-- **Q19, approval:** the owner approves the exact design.
-- **Q21, broker in tests:** test-process refusal in the broker plus per-function tests.
-- **Q26, data:** T1 Alpaca daily bars and calendar; no fallback for entry.
-- **Q27, output:** trade_events.jsonl plus atomic lot-state file.
-- **Q28, threading:** a separate cron process.
-- **Q33, cost:** 2 bps assumed vs 0.66-1.31 bps measured spreads; reviewed above 4 bps.
-- **Q34, alpha vs beta:** beta timed into the night (stated).
-- **Q35, tails:** worst night ~1.4-2.5% at 0.5×; book correlation is handled by the gap check.
-- **Q36, capacity:** QQQM ~$921M a day; trivial at $25K.
-- **Q38, decay:** auto-off rule.
-- **Q39, sizing source:** sizing from the stop rule; Kelly from its own fills later.
-- **Q40, outcome check:** the daily result check.
-- **Q42 / Q44, raw data:** broker fills and orders, plus the official-print comparison.
+## Required questions (one line per question, RQ-4)
+- Q1: Adds about four percent a year at half size using idle overnight capacity, positive in all three tested periods; it scales with equity toward the goal.
+- Q2: Adds roughly two hundred round trips a year; no other tier loses any trades.
+- Q3: Simplest form: hold the index (QQQM) overnight on trend nights instead of picking stocks; QQQM avoids sharing symbols with other tiers.
+- Q4: Additive to Track B, Track M, F6 and QHM with no symbol overlap; no open PR or Codex session covers overnight index holds.
+- Q5: Size derives from the existing two percent stop rule, measured gap quantile, K room and the seven percent kill threshold; the trend filter and windows are the tested rule.
+- Q6: Exposes a fixed-size overnight assumption; next build is VIX term structure and earnings-night sizing, tested first.
+- Q7: The all-tier gap check becomes a shared overnight-risk signal that other tiers can read for their own sizing.
+- Q8: Replay-measured returns with independent re-derivation from raw bars; QQQM spreads measured from live quotes.
+- Q9: Tested across three historical periods including selloffs; expected small positive return per night; proven wrong if live nights lose beyond the auto-off rule.
+- Q10: No; the edge is shipping live at its measured size rather than being held back.
+- Q11: Risk-path: size, frequency and concurrency all increase, so board with the masked-loss seat reviewed it.
+- Q12: Every share carries a stop, the kill switch stays armed, paper flag asserted, and entry fails closed.
+- Q13: Stale or missing data means no entry; the exit is never blocked by missing data.
+- Q14: No shadow; ships live after the gate.
+- Q15: Every state transition logs its decision stack to trade_events.jsonl with the result check line.
+- Q16: Entry and exit events on the first night prove it ran; the first live night is audited and replayed against fills.
+- Q17: A full-path simulation then a read-only OCI probe prove the real process works before live.
+- Q18: No anomaly is being explained away by this design.
+- Q19: It changes entry, sizing and routing, so the owner approves this exact design before commit.
+- Q20: Prompts passed the bias gate; board, GAI and Codex reviewed neutrally across rounds.
+- Q21: The broker refuses in a test process and every function test mocks broker calls.
+- Q22: Yes, a read-only OCI run against the real broker and ledger precedes go-live.
+- Q23: A full-path simulation from signal to exit passes before it is called ready.
+- Q24: QQQM tradability and spreads were checked live against Alpaca data.
+- Q25: Overnight gap statistics were measured from Alpaca daily bars, not quoted from memory.
+- Q26: Tier one Alpaca daily bars and market calendar; no fallback source for entry decisions.
+- Q27: Writes trade_events.jsonl plus an atomic lot-state file using temporary file and replace.
+- Q28: Runs as a separate cron process, never on the run_cycle thread, so check_exits is unaffected.
+- Q29: Ranks high: measured positive edge using capacity that currently sits idle overnight.
+- Q30: Frameworks require a book-wide overnight gap budget; our audits underweight cross-tier gap risk, which the gap check covers.
+- Q31: Three separate periods with an honest multiplicity statement; the first live nights serve as confirmation on unseen data.
+- Q32: Replay uses only closed bars at decision time and the current index product, so look-ahead is excluded.
+- Q33: Replay assumes two basis points cost versus measured spreads near one basis point; reviewed if costs exceed four.
+- Q34: Mostly beta timed into the night, stated openly; the residual is the trend-night timing.
+- Q35: Worst night about two percent at half size; correlation with the book is handled by the all-tier gap check.
+- Q36: QQQM trades about nine hundred million dollars daily, so capacity is trivial at twenty-five thousand.
+- Q37: Each night is a trial; the confidence interval narrows with live nights, which inform size but never delay launch.
+- Q38: Decay measured by the auto-off rule on live results; non-working moves it to zero trades and a replacement design.
+- Q39: Size comes from the stop-based risk rule from day one and updates from its own Alpaca fills as they arrive.
+- Q40: Protects overnight index gains; the daily result check compares realized fills with replay expectation.
+- Q41: An expert would also size by implied overnight volatility, which the forward pass adds.
+- Q42: Rawest data is broker fills, orders and daily bars, which the design uses directly.
+- Q43: Professional method is overnight-drift capture with a volatility-scaled size and a hard stop, which this follows.
+- Q44: Independent evidence is broker fills compared with official closing prints.
