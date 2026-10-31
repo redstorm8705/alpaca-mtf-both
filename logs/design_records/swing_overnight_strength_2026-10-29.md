@@ -1,6 +1,6 @@
-# Trend-night overnight hold (QQQM) — SWING-OVERNIGHT-1029 (signed: Claude, 2026-10-29) — v12 amendment, owner re-approval pending
+# Trend-night overnight hold (QQQM) — SWING-OVERNIGHT-1029 (signed: Claude, 2026-10-29) — v12 amendment (re-issued as SWING-OVERNIGHT-1030), owner approval pending
 
-Approval-ID: SWING-OVERNIGHT-1029
+Approval-ID: SWING-OVERNIGHT-1030
 Covers: execution/swing_overnight.py, run_swing_overnight.py, config.py, tests/test_swing_overnight.py, execution/orphan_manager.py, main.py, execution/stop_protection.py, execution/unmanaged_positions.py, server-ops
 
 Owner, 2026-10-29: "You need to find a winning day tier strategy ... and not stop until you do ... think dynamically on
