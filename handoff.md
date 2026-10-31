@@ -8,7 +8,28 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-30 afternoon, Claude signed) — SHORT-ALL and MORNING designs cleared review; owner decisions next
+## ⏩ LATEST (2026-10-30 evening, Claude signed) — owner answered; EARN-SOURCE + SWING-OVERNIGHT approved
+
+- **Owner approvals RECORDED:** EARN-SOURCE-1029 and SWING-OVERNIGHT-1029 (the design records now carry one-line
+  answers to every required question; that was why the 10-29 approvals never recorded). NEXT ACTION: build
+  EARN-SOURCE through the full gate (fmp_client WIP on branch claude/earn-source-1029; warmer + cron still to write),
+  then SWING-OVERNIGHT.
+- **SHORT-ALL v12** (owner 10-30): D2 rally-add ON (mirror of long dip-add, own zones); D3 exploration sizing
+  WITHDRAWN as a shadow (replay-derived short Kelly from day one; memory feedback_no_exploration_sizing); D4 =
+  Alpaca `shortable` + `borrow_status == easy_to_borrow` at order time; D7 = each stock's OWN report gaps, never the
+  pool. D1/D5/D6 as recommended. GAI + Codex re-review of v12 owed before code.
+- **MORNING v8** (owner 10-30): 06:46 watchlist = SPY/QQQ 0DTE levels; message wording "If SPY closes above $X, buy the
+  $K call currently $x.xx / below $Y, buy the $K put currently $x.xx"; highest reward-to-risk contract under the cap;
+  `logs/0dte_recommendations.jsonl`; weekend "0DTE recommendation performance" report after the weekly post-mortem.
+  GAI + Codex re-review owed.
+- **Owner question 10-30 — why QHM/F6 bought nothing on QQQ -3.5%:** F6 has never been on (`FOREVER6_ENABLED = False`
+  since 07-13). QHM: NVDA hit its dip rung A (-7.4% vs cost) but the add to target rounds to 0 shares (1 NVDA share ≈
+  8% of equity, room 3.8%) and returns silently; GOOGL/GEV new entries blocked by the 40% aggregate cap (QHM at ~52%);
+  tranche-2 adds require price ≥ first tranche (buys strength only). dip_zones pooled floor gives NVDA/GOOGL/GE/TSLA/
+  AMZN/META/AAPL the identical -5.06% rung. Designs owed: F6-ACTIVATE, QHM-DIP-BUY (whole-share rounding, cap,
+  re-confirm rule), DIP-ZONES-OWN.
+
+## ⏩ EARLIER (2026-10-30 afternoon, Claude signed) — SHORT-ALL and MORNING designs cleared review; owner decisions next
 
 - SHORT-ALL-1029 is at v11 (`logs/design_records/short_all_tiers_2026-10-29.md`). Codex and GAI both APPROVE after
   confirmation rounds 2-9. Fixes since v4: protection-gap cover when one stop slice is rejected (§3d-2b), a bounded gap
