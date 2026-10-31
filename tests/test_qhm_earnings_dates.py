@@ -41,6 +41,10 @@ class _TmpCache(unittest.TestCase):
         k = mock.patch.object(fc, "_key", return_value="k")
         k.start()
         self.addCleanup(k.stop)
+        # EARN-SOURCE-1029: these tests exercise the FMP path; Finnhub (tested in test_earnings_source.py) is off.
+        fh = mock.patch.object(fc, "_finnhub_key", return_value="")
+        fh.start()
+        self.addCleanup(fh.stop)
 
     def _preload(self, symbols, rows, lookahead=35):
         with mock.patch.object(fc.requests, "get", return_value=_resp(200, rows)):
@@ -49,21 +53,23 @@ class _TmpCache(unittest.TestCase):
 
 class EarningsStates(_TmpCache):
     def test_scanned_empty_is_none_and_unscanned_looks_up(self):
+        # EARN-SOURCE-1029: the batch calendar is a sample, so its "none" never answers; every symbol gets the
+        # per-symbol answer, and a dated batch entry still answers when the per-symbol lookup has no date.
         ge = (TODAY + timedelta(days=8)).isoformat()
         self._preload(["AAPL", "GE"], [{"symbol": "GE", "date": ge}])
         with mock.patch.object(fc, "_fetch_symbol_earnings", return_value=(200, [])) as f:
             self.assertEqual(fc.get_earnings_info("AAPL")["state"], fc.EARNINGS_NONE_IN_WINDOW)
             self.assertEqual(fc.get_earnings_info("GE")["state"], fc.EARNINGS_DATED)
-            f.assert_not_called()                                       # scanned symbols: no network
-            fc.get_earnings_info("LLY")                                 # never scanned -> per-symbol lookup
-            f.assert_called_once_with("LLY")
+            fc.get_earnings_info("LLY")
+            self.assertEqual(sorted(c.args[0] for c in f.call_args_list), ["AAPL", "GE", "LLY"])
 
     def test_short_scan_is_unknown_for_a_longer_horizon(self):
+        # EARN-SOURCE-1029: the per-symbol window (-120..+180 d) covers every horizon; a batch "none" never answers.
         self._preload(["GE"], [], lookahead=10)
         with mock.patch.object(fc, "_fetch_symbol_earnings", return_value=(200, [])) as f:
-            self.assertEqual(fc.get_earnings_info("GE", min_horizon_days=5)["source"], "fmp_batch")
+            self.assertEqual(fc.get_earnings_info("GE", min_horizon_days=5)["source"], "fmp_symbol")
             fc.get_earnings_info("GE", min_horizon_days=21)
-            f.assert_called_once()                                      # 10-day scan cannot answer 21 days
+            f.assert_called_once()                                      # second call served from the cache
 
     def test_second_writer_merges_not_narrows(self):
         d1 = (TODAY + timedelta(days=9)).isoformat()
@@ -81,7 +87,7 @@ class EarningsStates(_TmpCache):
             b = fc.get_earnings_info("LLY")
         self.assertEqual((a["state"], b["state"]), (fc.EARNINGS_UNKNOWN, fc.EARNINGS_UNKNOWN))
         self.assertEqual(g.call_count, 1)                               # <= 1 live call per symbol per 24 h
-        self.assertEqual(sum("plan restriction" in m for m in cm.output), 1)
+        self.assertEqual(sum("earnings date UNKNOWN" in m for m in cm.output), 1)
         self.assertEqual(fc.get_cached_earnings_dates("LLY"), [])      # legacy list contract
 
     def test_negative_result_is_cached(self):
