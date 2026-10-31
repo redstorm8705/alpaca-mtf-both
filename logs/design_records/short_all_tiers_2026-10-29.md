@@ -647,12 +647,12 @@ Every transition (reserve → submit → fill → stop → cover → release) lo
 | # | Decision | Design | Codex | GAI |
 |---|---|---|---|---|
 | D1 | Opposite directions on one symbol | Refuse when held or pending by any tier (§3c); no forced close of another tier | Refuse; a forced close would mix tier results and recreate the flip race | Refuse; the reservation system is preferred over forced closes |
-| D2 | QHM rally-add for shorts | Off in v1 | Off | Off |
-| D3 | Swing short sizing | Exploration r until 30 closed shorts, then short-only Kelly | Same | Same |
-| D4 | Hard-to-borrow names | Excluded | Excluded | Excluded |
+| D2 | QHM rally-add for shorts | **v12 owner: ON, mirror of the long dip-add** (see Owner directions 2026-10-30) | Off (superseded) | Off (superseded) |
+| D3 | Swing short sizing | **v12 owner: REJECTED as a shadow.** Replay-derived short Kelly from day one, updated by live fills | superseded | superseded |
+| D4 | Hard-to-borrow names | **v12 owner: defined** as Alpaca's live per-symbol borrow status (see below) | — | — |
 | D5 | Borrow lost on a held short | Immediate cover during RTH; queued for the first RTH minute outside it, stop kept | Same | Same |
 | D6 | Earnings | Mode A: hold through with the derived report cap; cover if the gap cannot be measured; no overnight short without a known date | Mode A | Mode A |
-| D7 | Pool-wide report gap | D7-a, the K-rule condition (recommended) | — | — |
+| D7 | Pool-wide report gap | **v12 owner: neither D7-a nor D7-b. Each stock's own measured gaps only; no pool** | — | — |
 
 Board panel on D7: Thorp is for D7-a; Taleb is for D7-b. The owner decides.
 
@@ -826,3 +826,28 @@ Codex APPROVE on v11. GAI raised two points (a resize leaving held at 10; no sli
 counter-prompt with §3d-1's `held` definition, test §6-22(a6), and the stop-order parity facts, GAI withdrew both and
 returned APPROVE. Board panel (Thorp, Taleb, Harris seats) reviewed v4; the v5-v11 changes are confined to §3d stop
 and cover sequencing, §3b Rule 201 bar definition, and §3c guard placement. Owner decisions D1-D7 (§7) remain open.
+
+## Owner directions 2026-10-30 (v12) — supersede §7 D2, D3, D4, D7; re-review by GAI + Codex owed before build
+- **D2 (rally-add for QHM shorts): ON.** QHM is averaged up or down on directional conviction (CLAUDE.md paper-account
+  frame). A QHM short adds on a rally against it using the mirror of the long dip-add: the stock's OWN rally zones
+  (its own upper return quantiles, no pooled floor), the same ceiling, quarterly count and spacing rules, and the same
+  stop-adding line (a rally past the first-entry stop-adding line halts adds and pages).
+- **D3 (sizing): the "exploration r until 30 closed shorts" rule is withdrawn.** The owner ruled it a shadow in other
+  words. Swing shorts are sized from day one by the short-side Kelly fraction measured on the front-loaded short replay
+  (win rate and payoff from the replay's short trades), bounded by the existing per-lot stop risk, K and gap checks.
+  Each closed short (Alpaca fills) updates the estimate as it arrives: replay prior blended with live results, weighted
+  by trade count, no sample-count switch. No literal trade-count threshold appears in the code.
+- **D4 (hard to borrow): defined, broker-derived, not a threshold we set.** At order time the bot reads the Alpaca
+  asset record (T1) for the symbol: `shortable` must be true and `borrow_status` must be `easy_to_borrow`. Anything
+  else, or an unreadable record, means no new short (fail closed). The same read on a held short drives D5 (borrow
+  lost → cover). Example read 2026-10-30: SMCI shortable=true, easy_to_borrow=true, borrow_status=easy_to_borrow.
+- **D7 (report gap): each stock's own actual post-report gaps; the pool is never substituted.** `report_gap` = the
+  stock's own largest adverse (upward) post-report one-day move, from Alpaca daily bars on its own report dates (T1
+  bars, dates from EARN-SOURCE-1029). Alpaca daily bars reach back to 2016, roughly 40 reports for a listed large cap
+  [count to be measured per name in the build]. A stock with NO measurable own report (new listing, or dates unknown)
+  gets no report-crossing short: it is covered before the report (fail safe), never sized from other stocks' gaps.
+  - Owner: "Mag7 all have dynamically different gaps. The static gate should've caught this." The static gate scans
+    numeric literals; a pooled substitution carries no literal, so it passed. The same pattern is LIVE in the dip-zones
+    module (lines 84-101): Rung A = the deeper of the stock's own 10th percentile and the POOLED 10th percentile. On
+    2026-10-30 NVDA, GOOGL, GE, TSLA, AMZN, META and AAPL all carried the identical pooled Rung A (-5.06%).
+    Follow-up design: DIP-ZONES-OWN (own-stock zones only) plus a gate check that flags pooled substitution.

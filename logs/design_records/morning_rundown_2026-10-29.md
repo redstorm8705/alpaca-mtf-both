@@ -590,3 +590,27 @@ Q44: Phase 2 evidence: archived live asks plus the owner's actual fills.
 ## Review round 7
 
 Codex APPROVE, GAI APPROVE (2026-10-30). Codex nit applied: the lock's scope is stated precisely and the decision cutoff bar is logged.
+
+## Owner directions 2026-10-30 (v8) — answers to §11 Q2 and Q5; re-review by GAI + Codex owed before build
+- **Q2 confirmed:** the 06:46 PT "watchlist" IS the day's 0DTE levels for SPY and QQQ (trigger, out level and target
+  for each side). 06:00 PT stays the reference send; TRIGGERED alerts follow.
+- **Q5 message wording (per symbol, both sides every day):**
+  - "If SPY closes above $T_up, buy the SPY $K_c call, currently $x.xx."
+  - "If SPY closes below $T_dn, buy the SPY $K_p put, currently $x.xx."
+  - Same two lines for QQQ. "Closes" = a completed 1-minute bar close (the §3b watcher rule). The TRIGGERED alert
+    repeats the line with the live ask, the limit and the stop.
+- **Selection rule: low risk, high reward.** The contract printed is the one with the highest reward-to-risk among
+  those whose ask is inside the owner's premium cap: reward = modelled premium at the target level minus the ask;
+  risk = the ask minus the modelled premium at the out level (the stop). Premiums are modelled from the chain's
+  implied volatility with Black-Scholes (as the GEX module already does). Ties go to the cheaper ask. No fixed delta
+  and no fixed out-of-the-money distance.
+- **Recommendation log:** every printed line (06:46) and every TRIGGERED alert writes one row to
+  `logs/0dte_recommendations.jsonl`: date, symbol, side, trigger, out, target, contract, ask at print, ask at
+  trigger, triggered yes/no and time, and the levels' sources. Atomic append under a lock.
+- **Weekly report "0DTE recommendation performance":** runs on the weekend right after the weekly post-mortem cron.
+  For each logged line: did it trigger; the option's highest price after the trigger (max potential gain, from the
+  option quotes the watcher archives each minute after a trigger, since Alpaca has no historical option quotes); the
+  result at the printed stop or target, whichever printed first; and for lines that never triggered, the move the
+  underlying made past the trigger later anyway (aggregate move missed). Totals by symbol, side and week; the
+  running record builds the methodology. Slack plus a section on the weekly page.
+- **Later (separate design):** the bot trades these and longer-dated options itself; this log is its evidence base.
