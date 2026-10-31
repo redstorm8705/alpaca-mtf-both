@@ -49,6 +49,27 @@ def _manager(*, now, quote):
         api, clock=lambda: now, quote_loader=quote_loader,
     )
     manager._trigger_evidence_is_current = lambda _evidence: True
+    prior_sessions = []
+    candidate = now.date() - timedelta(days=1)
+    while len(prior_sessions) < 5:
+        if candidate.weekday() < 5:
+            prior_sessions.append(candidate.isoformat())
+        candidate -= timedelta(days=1)
+    prior_sessions.reverse()
+    manager._test_trigger_evidence = {
+        "tier": "B", "max_names": 3, "cash_fraction": 0.20,
+        "bypass_monthly_cap": False,
+        "as_of_date": now.date().isoformat(),
+        "prior_session_dates": prior_sessions,
+    }
+    raw_execute = manager.execute_starter
+    manager.execute_starter = lambda *args, **kwargs: raw_execute(
+        *args,
+        trigger_evidence=kwargs.pop(
+            "trigger_evidence", manager._test_trigger_evidence
+        ),
+        **kwargs,
+    )
     return manager
 
 
@@ -177,7 +198,7 @@ def test_crossed_quote_blocks_before_order_or_journal(monkeypatch):
 def test_same_session_quote_without_newer_update_is_stale(monkeypatch):
     now = datetime(2026, 10, 16, 19, 59, tzinfo=f6.ET)
     stale = {"bid": 100.0, "ask": 100.01,
-             "ts": datetime(2026, 10, 16, 16, 5, tzinfo=f6.ET).isoformat()}
+             "ts": datetime(2026, 10, 16, 16, 16, tzinfo=f6.ET).isoformat()}
     manager = _manager(now=now, quote=stale)
     monkeypatch.setattr(broker, "get_open_orders", lambda *_args, **_kwargs: [])
     called = []
@@ -217,11 +238,11 @@ def test_yesterday_observation_cannot_arm_today_stale_quote():
     f6._F6_QUOTE_OBSERVATIONS["NVDA"] = now - timedelta(days=1)
     stale_today = {
         "bid": 100.0, "ask": 100.01,
-        "ts": datetime(2026, 10, 16, 16, 5, tzinfo=f6.ET).isoformat(),
+        "ts": datetime(2026, 10, 16, 16, 16, tzinfo=f6.ET).isoformat(),
     }
     advanced_today = {
         "bid": 100.0, "ask": 100.01,
-        "ts": datetime(2026, 10, 16, 16, 6, tzinfo=f6.ET).isoformat(),
+        "ts": datetime(2026, 10, 16, 16, 17, tzinfo=f6.ET).isoformat(),
     }
 
     assert f6._observe_advancing_quote("NVDA", stale_today, now) is None
@@ -331,6 +352,55 @@ def test_event_reservation_is_serialized_across_callers(monkeypatch):
     assert len([value for value in outcomes if "another F6 event" in value]) == 1
 
 
+def test_tier_a_cooldown_is_rechecked_at_execution_and_atomic_reservation(
+    monkeypatch,
+):
+    now = datetime(2026, 10, 16, 17, 0, tzinfo=f6.ET)
+    manager = _manager(now=now, quote=_fresh_quotes(now))
+    evidence = dict(manager._test_trigger_evidence)
+    evidence.update({
+        "tier": "A", "max_names": 2, "cash_fraction": 0.10,
+    })
+    prior_session = evidence["prior_session_dates"][-1]
+    manager._save_state({"events": [{
+        "event_id": "prior-a",
+        "date": prior_session,
+        "status": "submitted",
+        "trigger_evidence": {"tier": "A"},
+    }]})
+    submitted = []
+    monkeypatch.setattr(
+        broker, "submit_limit_order", lambda *_args, **_kwargs: submitted.append(True)
+    )
+
+    result = manager.execute_starter(
+        [{"symbol": "NVDA", "price": 100}], 100, trigger_evidence=evidence
+    )
+
+    assert result["reason"] == "Tier A five-session cooldown active"
+    assert submitted == []
+    with pytest.raises(RuntimeError, match="Tier A cooldown"):
+        manager._reserve_event_intent(
+            None, "NVDA", "F6-NVDA-b-cooldown", 100.01, evidence
+        )
+
+
+def test_tier_a_cooldown_fails_closed_when_provider_omits_event_session():
+    sessions = [
+        f6.date(2026, 10, 9), f6.date(2026, 10, 12),
+        f6.date(2026, 10, 14), f6.date(2026, 10, 15),
+        f6.date(2026, 10, 16), f6.date(2026, 10, 19),
+    ]
+    state = {"events": [{
+        "event_id": "omitted-session-a",
+        "date": "2026-10-13",
+        "status": "submitted",
+        "trigger_evidence": {"tier": "A"},
+    }]}
+
+    assert f6.ForeverHoldManager._tier_a_cooldown_active(state, sessions) is True
+
+
 def test_exact_limit_is_reserved_submitted_and_not_reported_spent(monkeypatch):
     now = datetime(2026, 10, 16, 17, 0, tzinfo=f6.ET)
     manager = _manager(
@@ -351,6 +421,30 @@ def test_exact_limit_is_reserved_submitted_and_not_reported_spent(monkeypatch):
     assert row["order_type"] == "limit"
     assert row["time_in_force"] == "day"
     assert row["extended_hours"] is True
+
+
+def test_tier_a_budget_is_recomputed_at_money_boundary(monkeypatch):
+    now = datetime(2026, 10, 16, 17, 0, tzinfo=f6.ET)
+    manager = _manager(now=now, quote=_fresh_quotes(now, ask=200.0))
+    manager._test_trigger_evidence.update({
+        "tier": "A", "max_names": 2, "cash_fraction": 0.10,
+        "bypass_monthly_cap": False,
+    })
+    exact = _exact_order()
+    _wire_clean_boundary(monkeypatch, exact)
+    submitted = []
+    monkeypatch.setattr(
+        broker, "submit_limit_order",
+        lambda *_args, **_kwargs: submitted.append(True),
+    )
+
+    result = manager.execute_starter(
+        [{"symbol": "NVDA", "price": 200.0}], 300.0, settled_cash=1_000.0,
+    )
+
+    assert submitted == []
+    assert result["placed"] == []
+    assert "event capacity" in result["skipped"][-1]["skip"]
 
 
 def test_boundary_response_after_session_close_submits_nothing(monkeypatch):
@@ -381,7 +475,8 @@ def test_session_close_after_journals_releases_without_broker_call(monkeypatch):
     after_close = datetime(2026, 10, 16, 20, 0, tzinfo=f6.ET)
     manager = _manager(now=before_close, quote=_fresh_quotes(before_close))
     clock_values = iter([
-        before_close, before_close, before_close, before_close, after_close,
+        before_close, before_close, before_close, before_close, before_close,
+        after_close, after_close,
     ])
     manager.clock = lambda: next(clock_values)
     exact = _exact_order()

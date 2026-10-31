@@ -1,4 +1,4 @@
-"""Completed-bar empirical trigger for the F6 cash-only starter."""
+"""Completed-bar, broad-market crash trigger for the F6 cash-only tier."""
 
 from __future__ import annotations
 
@@ -6,11 +6,12 @@ import hashlib
 import json
 import math
 from dataclasses import asdict, dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
+_TIERS = frozenset({"A", "B", "C"})
 
 
 @dataclass(frozen=True)
@@ -18,43 +19,95 @@ class EmpiricalStarterVerdict:
     armed: bool
     reason: str
     as_of_date: str = ""
-    current_return_pct: float | None = None
-    return_cutoff_pct: float | None = None
-    current_stress_ratio: float | None = None
-    stress_cutoff_ratio: float | None = None
-    tail_probability: float | None = None
+    tier: str = ""
+    close_return_pct: float | None = None
+    low_return_pct: float | None = None
+    three_session_return_pct: float | None = None
+    vix_close: float | None = None
+    vix_prior_20d_avg: float | None = None
+    vix_to_prior_avg: float | None = None
+    vix3m_close: float | None = None
+    vix_term_ratio: float | None = None
+    price_gate: bool = False
+    vix_confirmed: bool = False
+    cash_fraction: float | None = None
+    max_names: int = 0
+    bypass_monthly_cap: bool = False
     history_observations: int = 0
     history_start: str = ""
     history_end: str = ""
+    prior_session_dates: tuple[str, ...] = ()
     prior_record_sha256: str = ""
 
     def evidence(self) -> dict[str, Any]:
-        return {"schema_version": 1, **asdict(self)}
+        payload = {"schema_version": 2, **asdict(self)}
+        payload["prior_session_dates"] = list(self.prior_session_dates)
+        return payload
 
 
 def _fail(reason: str) -> EmpiricalStarterVerdict:
     return EmpiricalStarterVerdict(armed=False, reason=reason)
 
 
+def fetch_completed_vix_history(expected_session_date: date) -> tuple[Any, Any]:
+    """Load VIX/VIX3M daily closes from the permitted T4 source."""
+    import yfinance as yf
+
+    start = expected_session_date - timedelta(days=90)
+    end = expected_session_date + timedelta(days=1)  # yfinance end is exclusive
+    vix = yf.download(
+        "^VIX", start=start, end=end, interval="1d", progress=False,
+        auto_adjust=False,
+    )
+    vix3m = yf.download(
+        "^VIX3M", start=start, end=end, interval="1d", progress=False,
+        auto_adjust=False,
+    )
+    return vix, vix3m
+
+
+def _daily_close(frame: Any, label: str) -> Any:
+    import pandas as pd
+
+    if frame is None or getattr(frame, "empty", True):
+        raise ValueError(f"{label} history unavailable")
+    if not isinstance(frame.index, pd.DatetimeIndex):
+        raise ValueError(f"{label} history lacks a datetime index")
+    if frame.index.has_duplicates:
+        raise ValueError(f"{label} history contains duplicate bars")
+    out = frame.copy().sort_index()
+    if isinstance(out.columns, pd.MultiIndex):
+        out.columns = out.columns.get_level_values(0)
+    close_name = next(
+        (name for name in out.columns if str(name).lower() == "close"), None
+    )
+    if close_name is None:
+        raise ValueError(f"{label} history lacks close")
+    values = pd.to_numeric(out[close_name], errors="coerce")
+    if values.isna().any() or not values.map(
+        lambda value: math.isfinite(float(value)) and float(value) > 0
+    ).all():
+        raise ValueError(f"{label} history contains invalid closes")
+    session_dates = [stamp.date() for stamp in out.index]
+    if len(session_dates) != len(set(session_dates)):
+        raise ValueError(f"{label} history has duplicate session dates")
+    return pd.Series(values.to_numpy(dtype=float), index=session_dates, name=label)
+
+
 def evaluate_empirical_starter(
     bars: Any,
     *,
     expected_session_date: date,
-    monthly_event_cap: int,
+    vix_bars: Any,
+    vix3m_bars: Any,
 ) -> EmpiricalStarterVerdict:
-    """Classify the latest completed SPY bar against strictly prior history.
-
-    The lower-tail probability is derived from the existing monthly event cap
-    and the history's own median number of sessions per month.  A distinct
-    completed-volume stress series must independently cross the mirrored upper
-    tail.
-    """
+    """Classify completed SPY/VIX/VIX3M observations using the locked crash map."""
     try:
         import pandas as pd
 
         if bars is None or getattr(bars, "empty", True):
             return _fail("SPY history unavailable")
-        required = {"open", "high", "low", "close", "volume"}
+        required = {"open", "high", "low", "close"}
         if not required.issubset(set(bars.columns)):
             return _fail("SPY history missing OHLC columns")
         if not isinstance(bars.index, pd.DatetimeIndex) or bars.index.tz is None:
@@ -65,92 +118,137 @@ def evaluate_empirical_starter(
         frame.index = frame.index.tz_convert(_ET)
         for column in required:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
-        values = frame.loc[:, sorted(required)]
-        if values.isna().any().any():
+        if frame.isna().any().any():
             return _fail("SPY history contains nonnumeric bars")
-        valid = all(
-            values[column].map(
-                lambda value: math.isfinite(float(value)) and value > 0
+        if not all(
+            frame[column].map(
+                lambda value: math.isfinite(float(value)) and float(value) > 0
             ).all()
-            for column in values.columns
-        )
-        if not valid:
+            for column in required
+        ):
             return _fail("SPY history contains invalid prices")
-        if (frame["high"] < frame["low"]).any():
-            return _fail("SPY history contains inverted bars")
-
-        session_dates = frame.index.date
+        if (
+            (frame["high"] < frame[["open", "close", "low"]].max(axis=1)).any()
+            or (frame["low"] > frame[["open", "close", "high"]].min(axis=1)).any()
+        ):
+            return _fail("SPY history contains internally inconsistent OHLC bars")
+        session_dates = list(frame.index.date)
+        if len(session_dates) != len(set(session_dates)):
+            return _fail("SPY history has duplicate session dates")
         if session_dates[-1] != expected_session_date:
             return _fail("latest SPY bar is not the expected completed session")
+        if len(frame) < 21:
+            return _fail("SPY history lacks crash lookback")
 
-        prior_close = frame["close"].shift(1)
-        return_fraction = frame["close"] / prior_close - 1.0
-        returns = return_fraction * 100.0
-        prior_volume_median = frame["volume"].expanding().median().shift(1)
-        stress = frame["volume"] / prior_volume_median
-        usable = pd.DataFrame({"return_pct": returns, "stress_ratio": stress}).dropna()
-        if usable.empty or usable.index[-1] != frame.index[-1]:
-            return _fail("latest SPY return/stress is unavailable")
-        history = usable.iloc[:-1]
-        if history.empty:
-            return _fail("SPY prior distribution is empty")
+        vix = _daily_close(vix_bars, "VIX")
+        vix3m = _daily_close(vix3m_bars, "VIX3M")
+        required_dates = session_dates[-21:]
+        if any(day not in vix.index for day in required_dates):
+            return _fail("VIX history is not aligned to the last 21 SPY sessions")
+        if expected_session_date not in vix3m.index:
+            return _fail("VIX3M latest session is missing")
 
-        history_months = set(history.index.month.tolist())
-        if history_months != set(range(1, 13)):
-            return _fail("SPY prior distribution lacks a full calendar cycle")
-        month_keys = history.index.tz_localize(None).to_period("M")
-        monthly_counts = history.groupby(month_keys).size()
-        median_sessions = float(monthly_counts.median())
-        if median_sessions <= 0 or monthly_event_cap <= 0:
-            return _fail("monthly frequency evidence is invalid")
-        tail_probability = float(monthly_event_cap) / median_sessions
-        if not 0.0 < tail_probability < 1.0:
-            return _fail("derived tail probability is outside (0, 1)")
-
-        return_cutoff = float(
-            history["return_pct"].quantile(tail_probability, interpolation="lower")
-        )
-        stress_cutoff = float(
-            history["stress_ratio"].quantile(
-                1.0 - tail_probability, interpolation="higher"
-            )
-        )
-        current_return = float(usable["return_pct"].iloc[-1])
-        current_stress = float(usable["stress_ratio"].iloc[-1])
+        prior_close = float(frame["close"].iloc[-2])
+        close_return = (float(frame["close"].iloc[-1]) / prior_close - 1.0) * 100.0
+        low_return = (float(frame["low"].iloc[-1]) / prior_close - 1.0) * 100.0
+        three_session_return = (
+            float(frame["close"].iloc[-1]) / float(frame["close"].iloc[-4]) - 1.0
+        ) * 100.0
+        vix_close = float(vix.loc[expected_session_date])
+        vix_prior_avg = float(vix.loc[required_dates[:-1]].mean())
+        vix3m_close = float(vix3m.loc[expected_session_date])
         if not all(
-            math.isfinite(value)
-            for value in (return_cutoff, stress_cutoff, current_return, current_stress)
+            math.isfinite(value) and value > 0
+            for value in (prior_close, vix_close, vix_prior_avg, vix3m_close)
         ):
-            return _fail("empirical trigger produced nonfinite evidence")
+            return _fail("crash trigger produced invalid market evidence")
+        vix_to_avg = vix_close / vix_prior_avg
+        term_ratio = vix_close / vix3m_close
+
+        dynamic_close_floor = -max(2.0, 0.15 * vix_close)
+        price_gate = (
+            close_return <= dynamic_close_floor
+            or low_return <= -3.5
+            or three_session_return <= -10.0
+        )
+        vix_confirmed = vix_to_avg >= 1.3 or term_ratio > 1.0
+        depth = min(close_return, low_return)
+        tier = ""
+        cash_fraction = None
+        max_names = 0
+        bypass = False
+        if close_return < 0 and price_gate and vix_confirmed:
+            if (
+                (depth <= -7.0 or three_session_return <= -10.0)
+                and vix_close > 35.0
+            ):
+                # Zero means the whole reviewed universe; it avoids a sentinel
+                # count that could silently become a cap if the universe grows.
+                tier, cash_fraction, max_names, bypass = "C", 0.30, 0, True
+            elif -7.0 < depth <= -4.0 and term_ratio > 1.0:
+                tier, cash_fraction, max_names = "B", 0.20, 3
+            elif -4.0 < depth <= -2.0:
+                tier, cash_fraction, max_names = "A", 0.10, 2
+
+        armed = tier in _TIERS
+        if armed:
+            reason = f"broad-market crash tier {tier} confirmed by SPY and VIX"
+        elif close_return >= 0:
+            reason = "SPY did not close negative"
+        elif not price_gate:
+            reason = "SPY price damage did not reach the crash gate"
+        elif not vix_confirmed:
+            reason = "SPY selloff lacked heightened VIX confirmation"
+        else:
+            reason = "SPY/VIX evidence did not map to an approved crash tier"
 
         records = [
             {
-                "date": idx.date().isoformat(),
-                "return_pct": float(row.return_pct),
-                "stress_ratio": float(row.stress_ratio),
+                "date": day.isoformat(),
+                "spy_close": float(frame["close"].iloc[-21 + offset]),
+                "vix_close": float(vix.loc[day]),
             }
-            for idx, row in history.iterrows()
+            for offset, day in enumerate(required_dates[:-1])
         ]
+        records.append(
+            {
+                "date": expected_session_date.isoformat(),
+                "spy_open": float(frame["open"].iloc[-1]),
+                "spy_high": float(frame["high"].iloc[-1]),
+                "spy_low": float(frame["low"].iloc[-1]),
+                "spy_close": float(frame["close"].iloc[-1]),
+                "vix_close": vix_close,
+                "vix3m_close": vix3m_close,
+            }
+        )
         digest = hashlib.sha256(
             json.dumps(records, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         return EmpiricalStarterVerdict(
-            armed=current_return <= return_cutoff and current_stress >= stress_cutoff,
-            reason=(
-                "empirical return and stress tails confirmed"
-                if current_return <= return_cutoff and current_stress >= stress_cutoff
-                else "empirical return/stress pair not confirmed"
-            ),
+            armed=armed,
+            reason=reason,
             as_of_date=expected_session_date.isoformat(),
-            current_return_pct=current_return,
-            return_cutoff_pct=return_cutoff,
-            current_stress_ratio=current_stress,
-            stress_cutoff_ratio=stress_cutoff,
-            tail_probability=tail_probability,
-            history_observations=len(history),
-            history_start=history.index[0].date().isoformat(),
-            history_end=history.index[-1].date().isoformat(),
+            tier=tier,
+            close_return_pct=close_return,
+            low_return_pct=low_return,
+            three_session_return_pct=three_session_return,
+            vix_close=vix_close,
+            vix_prior_20d_avg=vix_prior_avg,
+            vix_to_prior_avg=vix_to_avg,
+            vix3m_close=vix3m_close,
+            vix_term_ratio=term_ratio,
+            price_gate=price_gate,
+            vix_confirmed=vix_confirmed,
+            cash_fraction=cash_fraction,
+            max_names=max_names,
+            bypass_monthly_cap=bypass,
+            history_observations=len(required_dates) - 1,
+            history_start=required_dates[0].isoformat(),
+            history_end=required_dates[-2].isoformat(),
+            prior_session_dates=tuple(
+                session.isoformat() for session in required_dates[-6:-1]
+            ),
             prior_record_sha256=digest,
         )
     except Exception as exc:
-        return _fail(f"empirical trigger failed: {exc}")
+        return _fail(f"crash trigger failed: {exc}")

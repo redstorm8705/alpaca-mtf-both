@@ -24,7 +24,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -605,6 +605,15 @@ def _bars(as_of: datetime) -> pd.DataFrame:
     return frame
 
 
+def _volatility(as_of: datetime) -> tuple[pd.DataFrame, pd.DataFrame]:
+    index = pd.date_range(
+        "2024-01-02", as_of.date().isoformat(), freq="B"
+    ).tz_localize(None)
+    vix = pd.DataFrame({"Close": [20.0] * (len(index) - 1) + [45.0]}, index=index)
+    vix3m = pd.DataFrame({"Close": [22.0] * (len(index) - 1) + [38.0]}, index=index)
+    return vix, vix3m
+
+
 def _ledger(
     qty: float,
     avg_cost: float = 0.0,
@@ -871,7 +880,11 @@ def _run_simulation_inner(
 
     broker = OfflineBroker()
     scenarios: list[dict[str, Any]] = []
-    now = datetime.combine(datetime.now(f6.ET).date(), datetime.min.time(), f6.ET).replace(hour=17)
+    session_date = datetime.now(f6.ET).date()
+    while session_date.weekday() >= 5:
+        session_date -= timedelta(days=1)
+    now = datetime.combine(session_date, datetime.min.time(), f6.ET).replace(hour=17)
+    clock_now = [now]
     quote_times = iter((now - timedelta(seconds=2), now - timedelta(seconds=1), now))
     idem_counts: dict[tuple[str, str], int] = {}
 
@@ -884,6 +897,12 @@ def _run_simulation_inner(
 
     def quote(_symbol: str) -> dict[str, Any]:
         return {"bid": 99.99, "ask": 100.0, "ts": next(quote_times).isoformat()}
+
+    class SimulationDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            current = clock_now[0]
+            return current.astimezone(tz) if tz is not None else current.replace(tzinfo=None)
 
     capital_allocator = allocator.TierCapitalAllocator(
         broker,
@@ -950,13 +969,17 @@ def _run_simulation_inner(
             mock.patch.object(broker_module, "get_order_by_client_order_id", broker.get_order_by_client_order_id),
             mock.patch.object(broker_module, "get_open_position", broker.get_open_position),
             mock.patch.object(allocator, "_LIVE_ALLOCATOR", capital_allocator),
+            # TierCapitalAllocator intentionally imports datetime inside the
+            # admission method.  Patch the standard-library binding so that
+            # that local import sees the simulated completed market session.
+            mock.patch("datetime.datetime", SimulationDateTime),
             mock.patch.object(
                 allocator,
                 "_load_regime_evidence",
                 lambda: {
                     "regime": "crash",
                     "verified": True,
-                    "ts": datetime.now(timezone.utc).isoformat(),
+                        "ts": now.astimezone(timezone.utc).isoformat(),
                 },
             ),
             mock.patch(
@@ -976,7 +999,10 @@ def _run_simulation_inner(
         f6._F6_QUOTE_OBSERVATIONS.clear()
         if inject_failure:
             raise RuntimeError("injected F6 simulation failure")
-        manager = f6.ForeverHoldManager(broker, clock=lambda: now, quote_loader=quote)
+        manager = f6.ForeverHoldManager(
+            broker, clock=lambda: clock_now[0], quote_loader=quote,
+            volatility_loader=lambda _date: _volatility(now),
+        )
         manager._fetch_prices = lambda: {"NVDA": 100.0}  # type: ignore[method-assign]
 
         startup = manager.reconcile_on_startup()
@@ -992,29 +1018,6 @@ def _run_simulation_inner(
         ))
         f6._STARTUP_READY = True
 
-        floor_calls = len(broker.order_calls)
-        floor = manager.execute_starter(
-            [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=100.0
-        )
-        scenarios.append(_scenario(
-            "cash_floor_blocks",
-            floor["reason"] == "cash-floor/budget guard" and len(broker.order_calls) == floor_calls,
-            {"reason": floor["reason"], "orders": len(broker.order_calls) - floor_calls},
-        ))
-
-        etf_calls = len(broker.order_calls)
-        with mock.patch.object(config, "FOREVER6_UNIVERSE", ["NVDA", "EWY"]):
-            etf = manager.execute_starter(
-                [{"symbol": "EWY", "price": 50.0}], 200.0, settled_cash=1_000.0
-            )
-        scenarios.append(_scenario(
-            "etf_blocks_before_reservation",
-            etf["reason"] == "no admissible F6 starter names"
-            and len(broker.order_calls) == etf_calls
-            and not ppb.load()["reservations"],
-            {"reason": etf["reason"], "orders": len(broker.order_calls) - etf_calls},
-        ))
-
         bars = _bars(now)
         plan = manager.maybe_start_accumulation(
             bars,
@@ -1027,6 +1030,34 @@ def _run_simulation_inner(
             "empirical_trigger_plans",
             plan.get("triggered") is True and [row["symbol"] for row in plan.get("plan", [])] == ["NVDA"],
             {"reason": plan.get("reason"), "symbols": [row["symbol"] for row in plan.get("plan", [])]},
+        ))
+        trigger_evidence = plan.get("trigger_evidence")
+        if not isinstance(trigger_evidence, dict):
+            raise RuntimeError("F6 simulation did not receive trigger evidence")
+
+        floor_calls = len(broker.order_calls)
+        floor = manager.execute_starter(
+            [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=100.0,
+            trigger_evidence=trigger_evidence,
+        )
+        scenarios.append(_scenario(
+            "cash_floor_blocks",
+            floor["reason"] == "cash-floor/budget guard" and len(broker.order_calls) == floor_calls,
+            {"reason": floor["reason"], "orders": len(broker.order_calls) - floor_calls},
+        ))
+
+        etf_calls = len(broker.order_calls)
+        with mock.patch.object(config, "FOREVER6_UNIVERSE", ["NVDA", "EWY"]):
+            etf = manager.execute_starter(
+                [{"symbol": "EWY", "price": 50.0}], 200.0,
+                settled_cash=1_000.0, trigger_evidence=trigger_evidence,
+            )
+        scenarios.append(_scenario(
+            "etf_blocks_before_reservation",
+            etf["reason"] == "no admissible F6 starter names"
+            and len(broker.order_calls) == etf_calls
+            and not ppb.load()["reservations"],
+            {"reason": etf["reason"], "orders": len(broker.order_calls) - etf_calls},
         ))
 
         first = run_f6_after_close(
@@ -1043,26 +1074,45 @@ def _run_simulation_inner(
             {"reason": first["reason"], "orders": len(broker.order_calls)},
         ))
 
+        clock_now[0] = now + timedelta(minutes=5)
         second = run_f6_after_close(
             enabled=True,
             is_after_close=True,
-            now_et=now,
+            now_et=clock_now[0],
             block_starter=False,
             fetch_bars=lambda *_args, **_kwargs: bars,
             manager=manager,
         )
         pending = ppb.load()["reservations"]
         allocator_state = capital_allocator._load_state() or {}
+        pending_values = list(pending.values())
+        event_rows = manager._load_state_strict().get("events", [])
+        event_row = event_rows[0] if event_rows else {}
+        event_timestamp = str(event_row.get("ts", ""))
+        event_session_matches = (
+            event_row.get("date") == trigger_evidence.get("as_of_date")
+            and bool(event_timestamp)
+            and datetime.fromisoformat(event_timestamp).astimezone(f6.ET).date()
+            == date.fromisoformat(str(trigger_evidence.get("as_of_date")))
+        )
         scenarios.append(_scenario(
             "bounded_entry_reserved",
             len(second.get("submitted", [])) == 1
             and second["reserved"] == 100.0
-            and list(pending.values())[0]["status"] == "submitted"
-            and len(allocator_state["reservations"]) == 1,
+            and bool(pending_values)
+            and pending_values[0]["status"] == "submitted"
+            and len(allocator_state["reservations"]) == 1
+            and event_session_matches,
             {
+                "reason": second.get("reason"),
                 "submitted": second.get("submitted"),
-                "reservation_status": list(pending.values())[0]["status"],
+                "reservation_status": (
+                    pending_values[0]["status"] if pending_values else None
+                ),
                 "allocator_state": allocator_state,
+                "event_date": event_row.get("date"),
+                "event_ts": event_timestamp,
+                "trigger_as_of_date": trigger_evidence.get("as_of_date"),
             },
         ))
 
