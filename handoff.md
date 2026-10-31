@@ -10,6 +10,11 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 
 ## ⏩ LATEST (2026-10-30 evening, Claude signed) — owner answered; EARN-SOURCE + SWING-OVERNIGHT approved
 
+- **EARN-SOURCE-1029 SHIPPED** (PR #808, b2f14ea; deployed + restarted, HEALTH_OK). Warmer cron installed on OCI
+  (weekdays 08:30/09:15/12:30 ET, Sun 17:45 ET). First live warm 10-31 03:56 UTC: 95 symbols, 83 Finnhub, 1 FMP,
+  11 UNKNOWN (9 ETFs, ASML, GOOG). The warmer has run; QHM's live read is unexercised until Monday's session.
+  Post-live audit due after 2026-11-02. NEXT ACTION: build SWING-OVERNIGHT-1029.
+
 - **Owner approvals RECORDED:** EARN-SOURCE-1029 and SWING-OVERNIGHT-1029 (the design records now carry one-line
   answers to every required question; that was why the 10-29 approvals never recorded). NEXT ACTION: build
   EARN-SOURCE through the full gate (fmp_client WIP on branch claude/earn-source-1029; warmer + cron still to write),
