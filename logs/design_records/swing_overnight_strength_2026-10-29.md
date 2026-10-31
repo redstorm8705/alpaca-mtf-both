@@ -1,7 +1,7 @@
-# Trend-night overnight hold (QQQM) — SWING-OVERNIGHT-1029 (signed: Claude, 2026-10-29) — DRAFT v6, not approved
+# Trend-night overnight hold (QQQM) — SWING-OVERNIGHT-1029 (signed: Claude, 2026-10-29) — v12 amendment, owner re-approval pending
 
 Approval-ID: SWING-OVERNIGHT-1029
-Covers: execution/swing_overnight.py, run_swing_overnight.py, config.py, tests/test_swing_overnight.py, server-ops
+Covers: execution/swing_overnight.py, run_swing_overnight.py, config.py, tests/test_swing_overnight.py, execution/orphan_manager.py, main.py, execution/stop_protection.py, execution/unmanaged_positions.py, server-ops
 
 Owner, 2026-10-29: "You need to find a winning day tier strategy ... and not stop until you do ... think dynamically on
 the compositions and combinations."
@@ -312,3 +312,147 @@ broker-atomic handoff so a live stop never disappears even for those seconds.
 - Q42: Rawest data is broker fills, orders and daily bars, which the design uses directly.
 - Q43: Professional method is overnight-drift capture with a volatility-scaled size and a hard stop, which this follows.
 - Q44: Independent evidence is broker fills compared with official closing prints.
+
+
+## Amendment v8 (2026-10-30, after the build and review round 7) — owner re-approval needed
+Review of v7 (Codex found blocking defects and GAI requested changes) agreed on two gaps; v8 replaces v7.
+
+1. **QQQM is reserved for this sub-strategy everywhere, unconditionally.**
+   - `execution.swing_overnight.trend_night_symbols()` returns `{config.SWING_TREND_NIGHT_SYMBOL}` always: no state
+     file read, so a lost or corrupt state file can never un-protect a held lot (Codex RQ-13).
+   - Every path that can adopt, re-stop, close or mis-attribute a symbol excludes it (Codex Q-A, file:line cited):
+     - `main.py` startup position count / dedicated-manager inputs (L869-881);
+     - `execution/orphan_manager.py` `reconcile_positions()` orphan set (L1331-1334) and the closed-market emergency
+       stop sweep (L800-803);
+     - `execution/stop_protection.py` sweep exclusions next to QHM/F6 (L593-610);
+     - `execution/unmanaged_positions.py` manager-source list gains `("swing_trend_night", …)` (L173-174), so a held
+       QQQM is credited to this sub-strategy, never flagged or credited to `swing_tracker`.
+   - The Day tier, QHM, F6 and Swing-breakout never trade QQQM (not in any of their universes); the entry paths also
+     refuse it explicitly via the same set.
+   - Full-path test: a simulated main restart with QQQM held and the state file deleted → no tracker adoption, no
+     second stop, no non-TN sell; the trend_night result check asserts this every session.
+2. **Small-sample statistics use the replay as the prior (fixes the n = 1 undefined / n ≥ 2 zero-variance cases).**
+   - The prior is recomputed every night, point-in-time, from T1 Alpaca daily bars: QQQ's overnight returns on every
+     prior trend night (the regime rule applied to SPY with the prior settled close), net of the 2 bps assumed cost.
+     It is the replay itself, not a stored constant.
+   - **Kelly (a):** pooled sufficient statistics of prior + live nights (count, sum, sum of squares; the pooled
+     variance includes the between-means term). b = max(owner 5% floor, ¼ × pooled mean / pooled variance × q).
+     The final size is still the minimum of b, K room, the all-tier gap check and buying power. No count switch.
+   - **QQQM's own q (b):** max(QQQ q, QQQM q over whatever QQQM nights exist); the max only tightens (both reviewers).
+   - **Auto-off (c):** evaluated every night: live mean < prior mean − 2 × SE, where SE = prior standard deviation /
+     √(live nights). With one night SE equals the prior SD (≈ 1 % of notional), so a single normal night cannot fire it;
+     identical nights cannot shrink SE to zero. The v6 `cum < 0` extra condition is dropped (not in any approved text).
+     Every night logs live n, live mean, prior mean, prior SD, SE and the threshold.
+   - **Night-loss review (d):** a night losing more than that night's own persisted `b × equity` (from the entry-night
+     sizing snapshot, never recomputed) pages a size review.
+   - **Fill-cost review (e):** live mean round-trip fill cost > 2 bps + 2 × SE, SE = SD of the measured quoted
+     spreads (SIP, last 20 sessions, refreshed nightly) / √(live nights). A page only; never blocks entry.
+   - GAI's suggested 20% hard cap on Kelly is not adopted: K room, the gap check (≤ 7% modeled worst night) and buying
+     power already bound size every night (Codex Q-B); a fixed cap would be a new static threshold.
+3. **Numbers listed for approval** (owner/rule or broker mechanics): the 200-day regime average (the tested rule), the
+   5% worst-night floor (owner 10-29), ¼ Kelly (project standard), the 99.9th / 99th percentile levels (the q and
+   gap definitions), the 2-standard-error band, the 2 bps replay cost, and the clock timings that follow Alpaca's
+   order rules (cls refused from close−10; opg cutoff open−2). Execution-SLA timings (5 s poll, 60 s market-sell
+   cancel, page after 3 failed exits, 30-min page repeat) are listed as owner numbers now; deriving them from
+   measured broker latency is the forward pass once live acknowledgements exist.
+4. **Server setup:** `ALPACA_PAPER_ACCOUNT_NUMBER` added to the OCI `.env` from the paper account's own
+   `account_number` (read-only) before go-live. `SWING_TREND_NIGHT_ENABLED` ships False and flips True only after
+   items 1 and 4 are deployed and the read-only OCI probe passes.
+
+Owner numbers: config.py SWING_TREND_NIGHT_SMA_SESSIONS=200; config.py SWING_TREND_NIGHT_MIN_BUDGET_PCT=0.05; config.py SWING_TREND_NIGHT_KELLY_FRACTION=0.25; config.py SWING_TREND_NIGHT_Q_LEVEL=0.999; config.py SWING_TREND_NIGHT_GAP_LEVEL=0.99; config.py SWING_TREND_NIGHT_AUTO_OFF_ALPHA=0.05; config.py SWING_TREND_NIGHT_REPLAY_COST_FRAC=0.0002; config.py SWING_TREND_NIGHT_ENTRY_START_MIN=20; config.py SWING_TREND_NIGHT_ENTRY_END_MIN=11; config.py SWING_TREND_NIGHT_FALLBACK_MIN=5; config.py SWING_TREND_NIGHT_CLOSE_POLL_MIN=10; config.py SWING_TREND_NIGHT_SWAP_MIN=10; config.py SWING_TREND_NIGHT_OPG_OUTCOME_MIN=3; config.py SWING_TREND_NIGHT_OPG_CUTOFF_MIN=2; config.py SWING_TREND_NIGHT_OPEN_POLL_MIN=10; config.py SWING_TREND_NIGHT_RESULT_CHECK_MIN=5; config.py SWING_TREND_NIGHT_MKT_SELL_SECONDS=60; config.py SWING_TREND_NIGHT_EXIT_PAGE_FAILURES=3; config.py SWING_TREND_NIGHT_CLOCK_FALLBACK_SECONDS=60; config.py SWING_TREND_NIGHT_FALLBACK_OPEN_MIN_ET=570; config.py SWING_TREND_NIGHT_POLL_SECONDS=5; config.py SWING_TREND_NIGHT_PAGE_REPEAT_SECONDS=1800; config.py SWING_TREND_NIGHT_SPREAD_SESSIONS=20
+
+## Changes after review round 8 (v9) — supersede the matching v8 text
+1. **Order ids use the Swing tier's recognised encoding** (Codex r8 #1: `ownership_guard.tier_of_coid()` would not
+   recognise a `TN-` prefix, so ledger sync would misattribute fills). Every trend_night order id is
+   `IN-QQQM-<b|s>-<night_close_epoch_ms>-tn<step><n>` (built with `ownership_guard.make_coid("intraday", …)`), so the
+   ledger credits the Swing tier exactly as it does for Swing-breakout orders. It stays deterministic per night, step
+   and attempt (idempotent), and `IN-QQQM-` identifies trend_night because QQQM is reserved to it (v8 item 1). No
+   change to `ownership_guard.py`. Tests cover entry, stop, opg, market exit and stop-fill attribution through
+   `tier_of_coid()` and a ledger-sync replay.
+2. **Auto-off uses an anytime-valid boundary** (Codex r8 #2: a fixed 2-SE test checked every night inflates the false
+   shut-off rate). The live mean is compared with the replay prior mean through a normal-mixture confidence sequence
+   (Robbins 1970; Howard, Ramdas, McAuliffe & Sekhon 2021):
+   auto-off when `live mean < prior mean − σ · sqrt( 2(n+ρ)/n² · ln( sqrt((n+ρ)/ρ) / α ) )`, where σ = the replay
+   prior's standard deviation (recomputed nightly from T1 bars), n = live nights, and ρ is set so the boundary is
+   tightest at one year of trend nights (counted from the replay). This holds its false shut-off probability at α
+   across ALL nights checked, from night one; no minimum count. α is an owner number (proposed 5% over the
+   strategy's life). Every night logs n, live mean, prior mean, σ, ρ, α and the boundary.
+3. **Fill-cost review uses realized costs** (Codex r8 Q-B(e): quoted-spread variance is not realized fill-cost
+   variance). Its variance is pooled from the live realized costs plus one pseudo-observation at the measured
+   quoted-spread variance (so night one is defined), with the same anytime-valid boundary against the 2 bps
+   assumption. It pages only; it never blocks entry.
+4. **Kelly detail** (Codex r8 Q-B(a)): a non-positive pooled mean gives the 5% floor; pooled variance is clamped at
+   zero against round-off; both the uncapped b and the binding final limit are logged.
+5. **Restart test additions** (Codex r8 Q-A): with QQQM held and the state file deleted, a simulated main restart
+   leaves the ledger tier as Swing, does not inflate `risk.open_positions`, and `check_exits` / shutdown / pre-close
+   paths submit zero QQQM orders; the closed-market emergency stop loop also skips QQQM explicitly.
+
+The owner-numbers line above replaces the 2-standard-error band with the false shut-off rate α (AUTO_OFF_ALPHA).
+
+## Changes after confirmation round 9 (v10) — supersede the matching v9 text
+1. **trend_night's own order parser follows the new ids** (Codex r9 #1). `parse_coid()` accepts only
+   `IN-QQQM-<b|s>-<night_close_epoch_ms>-tn<step><n>`: it validates the symbol QQQM, the side, a numeric epoch, a known
+   step and a numeric attempt, and returns night (ET date of the epoch), step and attempt. Any other id is not a
+   trend_night order. The broker-first reconcile lists QQQM orders and keeps only ids that parse. Tests feed
+   new-format broker orders (entry, stop, opg, market exit, stop fill) through `reconcile()`, restart recovery and
+   ledger sync, not only through `tier_of_coid()`.
+2. **The edge check pages the owner; it does not switch the strategy off by itself** (Codex r9 #2: no boundary
+   built from replay estimates can promise an exact lifetime false shut-off rate when overnight returns are
+   heavy-tailed; paper-account frame: no new automatic halt without the owner). Each night the check computes the
+   normal-mixture boundary below and, if the live mean crosses it, pages the owner with the evidence (n, live mean,
+   prior mean, σ, ρ, α, boundary, the nightly returns). Turning the strategy off stays the owner's decision
+   (`SWING_TREND_NIGHT_ENABLED`). The boundary is stated as an approximation designed for about α under a normal
+   model, not a guarantee:
+   - `boundary_n = prior mean − sqrt( σ² · 2(n+ρ)/n² · ln( sqrt((n+ρ)/ρ) / α ) + σ²/N_prior )`, which adds the
+     replay mean's own sampling variance (σ²/N_prior; Codex r9 #2);
+   - σ = the replay prior's standard deviation, and N_prior = its night count, both recomputed nightly from T1 bars;
+   - ρ = n* / (2·ln(1/α) + ln(1 + 2·ln(1/α))) with n* = the median number of trend nights per calendar year in the
+     replay (Howard et al. 2021, the ρ that makes the boundary tightest near n*). n*, ρ and the boundary are logged
+     every night (Codex r9 #3).
+   - The fill-cost review uses the same boundary form on realized costs (v9 item 3) and also only pages.
+3. v9 items 3-5 stand. Owner numbers are unchanged: α (AUTO_OFF_ALPHA) is now the edge-check page rate.
+
+## Changes after confirmation round 10 (v11) — supersede the matching v9/v10 text
+1. **Fill-cost review, defined in cost units** (Codex r10 #1). The prior is a cost sample, not a variance: for each of
+   the last `SWING_TREND_NIGHT_SPREAD_SESSIONS` (20) sessions, the quoted round-trip cost proxy = (half the QQQM
+   quoted spread at the close bar + half the quoted spread at the next open bar) / mid, from SIP quotes. From that
+   sample: prior_mean, σ (its sample standard deviation) and N_prior (its count), recomputed nightly. Each live night
+   contributes its realized round-trip cost = (entry fill − official close + official open − exit fill) / notional,
+   from Alpaca fills and official prints. The page fires when the live mean cost exceeds
+   `prior_mean + sqrt( σ² · 2(n+ρ)/n² · ln( sqrt((n+ρ)/ρ) / α ) + σ²/N_prior )` (same ρ and α as the edge check).
+   If the prior sample has fewer than two sessions, the review logs "prior unavailable" and does not page. It pages
+   only; it never blocks entry. The fixed 2 bps stays only as the replay's cost assumption inside the edge prior.
+2. **Entries are admitted by the shared capital allocator** (Codex r10 #2). Before every entry submit (cls and the
+   fallback), the run calls `execution.tier_capital_allocator.live_admit("swing", "intraday", "QQQM", "buy", qty,
+   price_bound, stop_price=…, overnight=True, order_type=…, time_in_force=…, client_order_id=<the IN-QQQM id>)`, as
+   the Swing-breakout path does (swing_breakout_manager L958), binds the lease to the order with `live_bind`, and
+   releases it with `live_release` / `live_release_proven_no_order` on a terminal non-fill. A refused admission skips
+   the entry for the night and is logged. This is the same cross-process reservation every other entry path uses,
+   so two tiers cannot spend the same room at once.
+3. **Parser detail** (Codex r10 notes, GAI r10 #2): `parse_coid()` uses a fully anchored pattern, rejects an epoch
+   outside the strategy's live dates (before 2026-10-29 or more than one day ahead), and rejects unknown steps, a side
+   that does not match its step, a wrong symbol, malformed attempts and ids over Alpaca's length limit; tests cover
+   each.
+4. **Prior data check** (GAI r10 #1): if the nightly T1 fetch yields too few prior trend nights to compute σ (fewer
+   than two), the edge check logs "prior unavailable" and does not page, and sizing falls back to the owner floor b
+   with q from the last good measurement; entry still requires a fresh regime reading. No hard-coded replay
+   constants are used as a fallback.
+
+## Changes after confirmation round 11 (v12) — supersede the matching v11 text
+1. **Realized cost formula, in fraction-of-price units** (Codex r11 #3): realized round-trip cost per night =
+   ((entry fill price − official close) + (official open − exit fill price)) / official close, using quantity-weighted
+   average fill prices per side (same units as the quoted-spread prior, which is a fraction of mid).
+2. **Capital admission, stated as it actually behaves** (Codex r11 #1/#2):
+   - `TIER_CAPITAL_ALLOCATOR_ENABLED` is False for every tier today (`tier_capital_allocator.live_admit` returns
+     "allocator disabled" with no lease); its re-enablement is a separate redesign (comment at live_admit). Every
+     existing entry path (Swing-breakout, Day, QHM) runs without a cross-process reservation today. trend_night calls
+     `live_admit` exactly like Swing-breakout so it joins the allocator automatically when that redesign ships; that
+     redesign must size the Swing cap for this sub-strategy (today's normal-regime cap ≈ $639 would refuse the ~$2,900
+     position) and is out of this design's scope.
+   - Until then, the concurrency exposure is bounded as follows, and this design adds nothing new to it: trend_night
+     re-reads K room, the all-tier gap book and buying power from the broker immediately (same second) before each
+     submit; Alpaca rejects an order the account cannot afford (insufficient buying power), which the run logs and
+     treats as a terminal non-fill (no entry that night). The K limb (Invariant #11) is block-only, so a same-second
+     race can at most let the book exceed K by the smaller of the two simultaneous orders until the next entry check;
+     it never forces a sale and never masks a loss. The entry window (close−20 to close−11) does not overlap the
+     Swing-breakout entry run (07:12 PT).
