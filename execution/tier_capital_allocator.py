@@ -374,6 +374,18 @@ class TierCapitalAllocator:
         self, state: dict, snap: dict, ledger: dict, req: EntryRequest
     ) -> Decision:
         regime = str(req.regime_evidence.get("regime", ""))
+        if req.tier == "forever6" and (
+            regime != "crash"
+            or req.regime_evidence.get("source") != "f6_crash_trigger"
+            or req.regime_evidence.get("f6_trigger_armed") is not True
+            or req.regime_evidence.get("f6_trigger_tier") not in {"A", "B", "C"}
+            or len(str(req.regime_evidence.get("trigger_sha256", ""))) != 64
+            or any(
+                char not in "0123456789abcdef"
+                for char in str(req.regime_evidence.get("trigger_sha256", "")).lower()
+            )
+        ):
+            return self._decision(False, "F6 crash trigger evidence is invalid", req)
         targets = self.policy.targets.get(regime)
         if (
             not isinstance(targets, dict)

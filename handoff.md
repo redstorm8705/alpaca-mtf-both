@@ -30,6 +30,24 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - Day search round 2 is running (scratchpad harness `day_search/`). Next action: confirm the ETF RSI-60m candidate on
   2016-2020 data, then write `logs/research/day_deep_search_r2_2026-10-29.md`.
 
+## ⏩ PARALLEL (2026-10-31, OpenAI Codex signed) — F6 crash-only correction approved, F6 OFF
+
+- Rafael approved exact design `F6-CRASH-1028`. The corrected F6 starter requires both completed broad-market
+  SPY damage and heightened VIX evidence, begins only after the 4:15 PM ET VIX calculation is complete, and
+  classifies the existing A/B/C crash ladder. Ordinary stock weakness or a VIX spike by itself cannot arm F6.
+- The allocator and final order boundary independently require the same armed durable crash evidence and cap spend
+  to the tier's fresh-settled-cash fraction. Missing, stale, misaligned, pre-close, malformed, or forged evidence
+  fails closed. F6 remains cash-only and excludes leveraged/inverse products.
+- Refreshed 2020-current replay: 1,715 completed sessions, 25 eligible crash observations, 20 affordable reference
+  plans, A/B/C counts 7/12/6, and zero fires in 2021, 2023 and 2026. Refreshed source-bound full-path simulation is
+  20/20 PASS. OCI Python 3.10 focused gate is 221 tests plus four subtests; full suite is 2,981 passed plus 186
+  subtests with the same unrelated Day-promotion fixture failure.
+- `FOREVER6_ENABLED=False` remains binding. This approval authorizes the corrected prerequisite only; it does not
+  authorize enabling F6 or placing an F6 order.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** finish exact-byte BGGN markers, CI, merge and OCI deployment of
+`F6-CRASH-1028`; then prepare the separate F6 enablement decision. Do not enable F6.
+
 ## ⏩ PARALLEL (2026-10-28, OpenAI Codex signed) — F6 full-path proof live, F6 OFF
 
 - `F6-SIM-1023` shipped in PR #790 and is live on OCI at `70caa70`. CI passed; all

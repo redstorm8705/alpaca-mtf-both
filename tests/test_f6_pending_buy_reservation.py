@@ -78,6 +78,10 @@ def execution_ready_manager(f6_module):
         },
     )
     manager._trigger_evidence_is_current = lambda _evidence: True
+    manager._test_trigger_evidence = {
+        "tier": "B", "max_names": 3, "cash_fraction": 0.20,
+        "bypass_monthly_cap": False,
+    }
     return manager
 
 
@@ -546,6 +550,7 @@ def test_f6_starter_exception_recovers_and_binds_exact_order(monkeypatch):
     monkeypatch.setattr(manager, "_verify_ledger_reflects", lambda *_args: None)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=1_000.0,
+        trigger_evidence=manager._test_trigger_evidence,
     )
 
     assert result["placed"][0]["order_id"] == "order-1"
@@ -585,9 +590,10 @@ def test_f6_definitive_buy_reject_releases_both_intents_and_stops_batch(monkeypa
 
     manager = execution_ready_manager(f6)
     result = manager.execute_starter(
-            [{"symbol": "NVDA", "price": 100.0}, {"symbol": "META", "price": 100.0}],
+        [{"symbol": "NVDA", "price": 100.0}, {"symbol": "META", "price": 100.0}],
         300.0,
         settled_cash=1_000.0,
+        trigger_evidence=manager._test_trigger_evidence,
     )
 
     assert result["placed"] == []
@@ -630,6 +636,7 @@ def test_allocator_release_failure_keeps_f6_rejection_reservation_active(monkeyp
     manager = execution_ready_manager(f6)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=1_000.0,
+        trigger_evidence=manager._test_trigger_evidence,
     )
 
     assert result["placed"] == []
@@ -665,6 +672,7 @@ def test_f6_ambiguous_timeout_keeps_protected_intent_active(monkeypatch):
     manager = execution_ready_manager(f6)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=1_000.0,
+        trigger_evidence=manager._test_trigger_evidence,
     )
 
     assert result["placed"] == []
@@ -710,6 +718,7 @@ def test_f6_starter_recovers_after_pending_bind_then_allocator_bind_raises(monke
     monkeypatch.setattr(manager, "_verify_ledger_reflects", lambda *_args: None)
     result = manager.execute_starter(
         [{"symbol": "NVDA", "price": 100.0}], 200.0, settled_cash=1_000.0,
+        trigger_evidence=manager._test_trigger_evidence,
     )
 
     assert result["placed"][0]["order_id"] == "order-1"

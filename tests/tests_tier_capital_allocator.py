@@ -128,9 +128,13 @@ class AllocatorTests(unittest.TestCase):
         if tier == "forever6":
             defaults["overnight"] = True
             defaults["regime_evidence"] = {
-                "regime": "normal",
+                "regime": "crash",
                 "verified": True,
                 "ts": datetime.now(timezone.utc).isoformat(),
+                "source": "f6_crash_trigger",
+                "f6_trigger_armed": True,
+                "f6_trigger_tier": "B",
+                "trigger_sha256": "ab" * 32,
             }
         defaults.update(kw)
         return EntryRequest(**defaults)
@@ -301,18 +305,36 @@ class AllocatorTests(unittest.TestCase):
         assert decision.lease
         self.assertEqual(decision.lease.cash_reserve, 101.0)
 
-    def test_f6_normal_regime_enforces_ten_percent_equity_envelope(self):
+    def test_f6_non_crash_regime_is_rejected_even_when_verified(self):
         self.broker.positions = [
             SimpleNamespace(
                 symbol="NVDA", qty=2, side="long", current_price=100, market_value=200
             )
         ]
         self.ledger = _ledger(NVDA={"forever6": 2})
-        denied = self.alloc.admit_entry(
-            self.req("forever6", qty=1, price_bound=100, overnight=True)
-        )
+        denied = self.alloc.admit_entry(self.req(
+            "forever6", qty=1, price_bound=100, overnight=True,
+            regime_evidence={
+                "regime": "normal", "verified": True,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            },
+        ))
         self.assertFalse(denied.approved)
-        self.assertEqual(denied.reason, "tier capital cap")
+        self.assertEqual(denied.reason, "F6 crash trigger evidence is invalid")
+
+    def test_f6_rejects_non_hex_trigger_digest(self):
+        evidence = {
+            "regime": "crash", "verified": True,
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "source": "f6_crash_trigger", "f6_trigger_armed": True,
+            "f6_trigger_tier": "A", "trigger_sha256": "z" * 64,
+        }
+        denied = self.alloc.admit_entry(self.req(
+            "forever6", qty=1, price_bound=100, overnight=True,
+            regime_evidence=evidence,
+        ))
+        self.assertFalse(denied.approved)
+        self.assertEqual(denied.reason, "F6 crash trigger evidence is invalid")
 
     def test_f6_crash_regime_expands_to_thirty_percent_equity_envelope(self):
         self.broker.positions = [
@@ -335,13 +357,17 @@ class AllocatorTests(unittest.TestCase):
                         "regime": "crash",
                         "verified": True,
                         "ts": datetime.now(timezone.utc).isoformat(),
+                        "source": "f6_crash_trigger",
+                        "f6_trigger_armed": True,
+                        "f6_trigger_tier": "C",
+                        "trigger_sha256": "ab" * 32,
                     },
                 )
             )
         self.assertTrue(approved.approved)
 
     def test_f6_overnight_request_uses_dynamic_total_book_ceiling(self):
-        self.alloc.policy.targets["normal"]["forever6"] = 1.0
+        self.alloc.policy.targets["crash"]["forever6"] = 1.0
         self.broker.positions = [
             SimpleNamespace(
                 symbol="MSFT", qty=45, side="long", current_price=100, market_value=4500
@@ -359,7 +385,7 @@ class AllocatorTests(unittest.TestCase):
         self.assertEqual(denied.reason, "overnight exposure cap")
 
     def test_f6_rejects_invalid_dynamic_overnight_values_at_boundary(self):
-        self.alloc.policy.targets["normal"]["forever6"] = 1.0
+        self.alloc.policy.targets["crash"]["forever6"] = 1.0
         for value in (float("nan"), float("inf"), 0.0, -1.0):
             with self.subTest(value=value), patch(
                 "execution.overnight_capacity.overnight_k_strict_current",
@@ -381,6 +407,10 @@ class AllocatorTests(unittest.TestCase):
                     "regime": "crash",
                     "verified": True,
                     "ts": "2020-01-03T21:00:00+00:00",
+                    "source": "f6_crash_trigger",
+                    "f6_trigger_armed": True,
+                    "f6_trigger_tier": "B",
+                    "trigger_sha256": "ab" * 32,
                 },
             )
         )

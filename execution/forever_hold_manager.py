@@ -33,7 +33,10 @@ from typing import Callable, cast
 from zoneinfo import ZoneInfo
 
 import config
-from execution.f6_empirical_trigger import evaluate_empirical_starter
+from execution.f6_empirical_trigger import (
+    evaluate_empirical_starter,
+    fetch_completed_vix_history,
+)
 from execution.instrument_policy import (
     f6_live_asset_eligible,
     f6_symbol_eligible,
@@ -65,7 +68,9 @@ _EPS = 1e-6
 # Process-local half of the startup interlock.  Durable state protects restarts;
 # this boolean also fails closed if persisting that state itself fails.
 _STARTUP_READY = False
-_F6_ENTRY_START = time.fromisoformat("16:05")
+# Cboe calculates spot VIX through 16:15 ET.  Starting one minute later keeps
+# the starter classifier away from a still-forming volatility observation.
+_F6_ENTRY_START = time.fromisoformat("16:16")
 _F6_ENTRY_END = time.fromisoformat("20:00")
 _F6_QUOTE_OBSERVATIONS: dict[str, datetime] = {}
 _F6_QUOTE_OBSERVATIONS_LOCK = threading.Lock()
@@ -233,7 +238,7 @@ def _observe_advancing_quote(
 
     The first current-session observation arms the symbol but cannot authorize a
     buy.  A later cycle must observe a strictly newer exchange timestamp.  An
-    unchanged 4:05 PM quote therefore remains blocked at 7:59 PM, while ordinary
+    unchanged 4:16 PM quote therefore remains blocked at 7:59 PM, while ordinary
     REST calls do not depend on a quote changing within a few milliseconds.
     """
     confirmed, _ = _observe_advancing_basket(
@@ -327,6 +332,7 @@ class ForeverHoldManager:
         *,
         clock: Callable[[], datetime] | None = None,
         quote_loader: Callable[[str], dict | None] | None = None,
+        volatility_loader: Callable[[date], tuple[object, object]] | None = None,
     ) -> None:
         self.broker = broker
         self.universe = list(config.FOREVER6_UNIVERSE)
@@ -335,6 +341,7 @@ class ForeverHoldManager:
             from data.alpaca_data import get_latest_quote
             quote_loader = get_latest_quote
         self.quote_loader = quote_loader
+        self.volatility_loader = volatility_loader or fetch_completed_vix_history
 
     def reconcile_on_startup(self) -> F6StartupReconcileResult:
         """Rebuild and verify F6 ownership before any F6 action after restart.
@@ -493,15 +500,57 @@ class ForeverHoldManager:
             raise RuntimeError("F6 event state is malformed")
         return state
 
-    def _events_this_month(self, state: dict) -> int:
-        ym = datetime.now(PT).strftime("%Y-%m")
+    def _events_this_month(self, state: dict, ym: str | None = None) -> int:
+        ym = ym or self.clock().astimezone(PT).strftime("%Y-%m")
         return sum(
             1
             for e in state.get("events", [])
             if isinstance(e, dict)
             and str(e.get("date", "")).startswith(ym)
             and e.get("status") != "released_no_order"
+            and str((e.get("trigger_evidence") or {}).get("tier", "")) != "C"
         )
+
+    @staticmethod
+    def _tier_a_cooldown_active(state: dict, session_dates: list[date]) -> bool:
+        """Five completed sessions after a filled/reserved Tier-A event."""
+        if not session_dates:
+            return True
+        current = session_dates[-1]
+        recent = set(session_dates[-6:-1])
+        if not recent:
+            return True
+        window_start = min(recent)
+        for event in state.get("events", []):
+            if not ForeverHoldManager._event_counts(event):
+                continue
+            evidence = event.get("trigger_evidence") or {}
+            if evidence.get("tier") != "A":
+                continue
+            try:
+                event_day = date.fromisoformat(str(event.get("date", "")))
+            except ValueError:
+                return True
+            # Exact membership handles normal evidence.  The calendar interval
+            # is the fail-closed backstop when a provider omits a completed SPY
+            # session that already has a durable F6 event.
+            if window_start <= event_day <= current:
+                return True
+        return False
+
+    @staticmethod
+    def _evidence_session_dates(evidence: dict | None) -> list[date]:
+        """Return the five prior sessions plus the evidence session, or fail closed."""
+        if not isinstance(evidence, dict):
+            raise ValueError("F6 trigger evidence is missing")
+        raw = evidence.get("prior_session_dates")
+        if not isinstance(raw, list) or len(raw) != 5:
+            raise ValueError("F6 cooldown session evidence is malformed")
+        prior = [date.fromisoformat(str(value)) for value in raw]
+        current = date.fromisoformat(str(evidence.get("as_of_date", "")))
+        if prior != sorted(set(prior)) or any(day >= current for day in prior):
+            raise ValueError("F6 cooldown session evidence is inconsistent")
+        return [*prior, current]
 
     @staticmethod
     def _event_counts(event: object) -> bool:
@@ -515,15 +564,38 @@ class ForeverHoldManager:
         price_by_sym: dict[str, float] | None = None,
         held_qty_by_sym: dict[str, float] | None = None,
         settled_cash: float | None = None,
+        vix_daily_bars=None,
+        vix3m_daily_bars=None,
     ) -> dict:
-        """Evaluate the F6 starter from completed SPY empirical distributions.
+        """Evaluate the F6 starter from completed SPY/VIX crash evidence.
         Returns {"triggered": bool, "reason": str, "plan": [{symbol, price, why}], "budget": float}."""
+        evaluation_now = self.clock().astimezone(ET)
+        if (
+            not _f6_entry_session(evaluation_now)
+            or evaluation_now.date() != expected_session_date
+        ):
+            return {
+                "triggered": False,
+                "reason": "outside completed-VIX starter session",
+                "plan": [],
+                "budget": 0.0,
+            }
+        if vix_daily_bars is None or vix3m_daily_bars is None:
+            try:
+                vix_daily_bars, vix3m_daily_bars = self.volatility_loader(
+                    expected_session_date
+                )
+            except Exception as exc:
+                logger.error("[F6] VIX/VIX3M history unavailable: %s", exc)
+                vix_daily_bars, vix3m_daily_bars = None, None
         verdict = evaluate_empirical_starter(
             spy_daily_bars,
             expected_session_date=expected_session_date,
-            monthly_event_cap=config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH,
+            vix_bars=vix_daily_bars,
+            vix3m_bars=vix3m_daily_bars,
         )
         evidence = verdict.evidence()
+        evidence["evaluated_at"] = evaluation_now.isoformat()
         if not self._append_trigger_evidence(evidence):
             return {"triggered": False, "reason": "trigger evidence write failed", "plan": [],
                     "budget": 0.0, "trigger_evidence": evidence}
@@ -536,17 +608,26 @@ class ForeverHoldManager:
         # place again. This is the definitive anti-double-place guard for the run_cycle after-close
         # hook, which re-evaluates every closed-market cycle (and could otherwise re-fire after a
         # mid-evening restart). State-based → survives restarts, unlike an in-process flag.
-        _today_str = datetime.now(PT).strftime("%Y-%m-%d")
+        _today_str = evaluation_now.astimezone(PT).strftime("%Y-%m-%d")
         if any(self._event_counts(e) and str(e.get("date", "")) == _today_str
                for e in state.get("events", [])):
             return {"triggered": True, "reason": f"already ran today ({_today_str})", "plan": [], "budget": 0.0}
-        n_month = self._events_this_month(state)
-        if n_month >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH:
+        n_month = self._events_this_month(
+            state, evaluation_now.astimezone(PT).strftime("%Y-%m")
+        )
+        if (not verdict.bypass_monthly_cap
+                and n_month >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH):
             return {"triggered": True, "reason": f"per-month cap hit ({n_month}/{config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH})", "plan": [], "budget": 0.0}
+
+        session_dates = list(spy_daily_bars.index.tz_convert(ET).date)
+        if verdict.tier == "A" and self._tier_a_cooldown_active(state, session_dates):
+            return {"triggered": True, "reason": "Tier A five-session cooldown active",
+                    "plan": [], "budget": 0.0, "trigger_evidence": evidence}
 
         # Cash-only segregated budget: min(frac×cash, cash − floor), never negative.
         cash = float(settled_cash) if settled_cash is not None else self._fetch_cash()
-        budget = min(config.FOREVER6_STARTER_CASH_FRAC_PER_EVENT * cash,
+        event_fraction = float(verdict.cash_fraction or 0.0)
+        budget = min(event_fraction * cash,
                      cash - config.FOREVER6_STARTER_CASH_FLOOR)
         if budget <= 0:
             return {"triggered": True, "reason": f"insufficient segregated cash (cash ${cash:.0f}, floor ${config.FOREVER6_STARTER_CASH_FLOOR:.0f})", "plan": [], "budget": 0.0}
@@ -580,8 +661,11 @@ class ForeverHoldManager:
 
         plan: list[dict] = []
         remaining = budget
+        event_name_cap = (
+            len(self.universe) if verdict.tier == "C" else int(verdict.max_names)
+        )
         for sym, px, held_q in candidates:
-            if len(plan) >= config.FOREVER6_STARTER_MAX_NAMES:
+            if len(plan) >= min(event_name_cap, len(self.universe)):
                 break
             if px <= remaining:   # cash-only: only if 1 share fits the remaining segregated budget
                 plan.append({"symbol": sym, "price": round(px, 2),
@@ -591,10 +675,12 @@ class ForeverHoldManager:
         # Planning is side-effect free with respect to the broker; the caller may
         # pass the plan to execute_starter only after every outer gate passes.
         if plan:
-            logger.warning("[F6] STARTER would ACCUMULATE on SPY %+.2f%% "
-                           "(cutoff %+.2f%%; volume stress %.2fx >= %.2fx): budget $%.0f → %s",
-                           verdict.current_return_pct, verdict.return_cutoff_pct,
-                           verdict.current_stress_ratio, verdict.stress_cutoff_ratio, budget,
+            logger.warning("[F6] crash tier %s would ACCUMULATE on SPY close %+.2f%% "
+                           "(low %+.2f%%; VIX %.2f, %.2fx prior average; term %.3f): "
+                           "budget $%.0f → %s",
+                           verdict.tier, verdict.close_return_pct, verdict.low_return_pct,
+                           verdict.vix_close, verdict.vix_to_prior_avg,
+                           verdict.vix_term_ratio, budget,
                            ", ".join(f"{p['symbol']}@${p['price']}" for p in plan))
         else:
             logger.info("[F6] STARTER triggered but no fundable name (budget $%.0f) — screen/affordability filtered all.", budget)
@@ -610,10 +696,25 @@ class ForeverHoldManager:
                     for line in existing:
                         if line.strip():
                             prior = json.loads(line)
-            row = {"recorded_at": datetime.now(PT).isoformat(), **evidence}
-            keys = ("as_of_date", "prior_record_sha256", "armed", "reason")
-            if prior and all(prior.get(key) == row.get(key) for key in keys):
-                return True
+            row = {"recorded_at": self.clock().astimezone(PT).isoformat(), **evidence}
+            if isinstance(prior, dict):
+                # Repeated after-close scans see the same completed market bars
+                # but carry a later evaluation clock.  Reuse the exact durable
+                # evaluation timestamp only when every market/classification
+                # field is identical; otherwise append a new decision.  This
+                # keeps the second quote-liveness cycle executable without
+                # weakening the exact-row comparison at the order boundary.
+                prior_payload = dict(prior)
+                prior_payload.pop("recorded_at", None)
+                prior_evaluated_at = prior_payload.pop("evaluated_at", None)
+                candidate_payload = dict(evidence)
+                candidate_payload.pop("evaluated_at", None)
+                if (
+                    prior_payload == candidate_payload
+                    and isinstance(prior_evaluated_at, str)
+                ):
+                    evidence["evaluated_at"] = prior_evaluated_at
+                    return True
             _TRIGGER_EVIDENCE.parent.mkdir(parents=True, exist_ok=True)
             with open(_TRIGGER_EVIDENCE, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
@@ -637,10 +738,24 @@ class ForeverHoldManager:
                 return False
             if type(evidence.get("schema_version")) is not int:  # bool is not a version
                 return False
-            if evidence.get("schema_version") != 1 or evidence.get("armed") is not True:
+            if evidence.get("schema_version") != 2 or evidence.get("armed") is not True:
                 return False
+            tier = str(evidence.get("tier", ""))
+            if tier not in {"A", "B", "C"}:
+                return False
+            boundary_now = self.clock().astimezone(ET)
             as_of = date.fromisoformat(str(evidence.get("as_of_date", "")))
-            if as_of != datetime.now(ET).date():
+            if as_of != boundary_now.date():
+                return False
+            evaluated_at = datetime.fromisoformat(str(evidence.get("evaluated_at", "")))
+            if evaluated_at.tzinfo is None:
+                return False
+            evaluated_et = evaluated_at.astimezone(ET)
+            if (
+                evaluated_et.date() != as_of
+                or not _f6_entry_session(evaluated_et)
+                or evaluated_et > boundary_now
+            ):
                 return False
             history_start = date.fromisoformat(str(evidence.get("history_start", "")))
             history_end = date.fromisoformat(str(evidence.get("history_end", "")))
@@ -649,28 +764,67 @@ class ForeverHoldManager:
             observations = evidence.get("history_observations")
             if type(observations) is not int or observations <= 0:
                 return False
+            session_dates = self._evidence_session_dates(evidence)
+            if session_dates[-2] != history_end:
+                return False
+            max_names = evidence.get("max_names")
+            if type(max_names) is not int:
+                return False
             raw_numbers = (
-                evidence.get("tail_probability"),
-                evidence.get("current_return_pct"),
-                evidence.get("return_cutoff_pct"),
-                evidence.get("current_stress_ratio"),
-                evidence.get("stress_cutoff_ratio"),
+                evidence.get("close_return_pct"),
+                evidence.get("low_return_pct"),
+                evidence.get("three_session_return_pct"),
+                evidence.get("vix_close"),
+                evidence.get("vix_prior_20d_avg"),
+                evidence.get("vix_to_prior_avg"),
+                evidence.get("vix3m_close"),
+                evidence.get("vix_term_ratio"),
+                evidence.get("cash_fraction"),
             )
             if any(
                 not isinstance(value, (int, float)) or isinstance(value, bool)
                 for value in raw_numbers
             ):
                 return False
-            tail, current_return, return_cutoff, current_stress, stress_cutoff = (
-                float(cast(int | float, value)) for value in raw_numbers
+            numbers = tuple(float(cast(int | float, value)) for value in raw_numbers)
+            if not all(math.isfinite(value) for value in numbers):
+                return False
+            close_ret, low_ret, ret3, vix, vix_avg, vix_rel, vix3m, term, frac = numbers
+            if vix <= 0 or vix_avg <= 0 or vix3m <= 0 or vix_rel <= 0 or term <= 0:
+                return False
+            if low_ret > close_ret:
+                return False
+            if not math.isclose(vix_rel, vix / vix_avg, rel_tol=1e-9, abs_tol=1e-9):
+                return False
+            if not math.isclose(term, vix / vix3m, rel_tol=1e-9, abs_tol=1e-9):
+                return False
+            expected_price_gate = (
+                close_ret <= -max(2.0, 0.15 * vix)
+                or low_ret <= -3.5
+                or ret3 <= -10.0
             )
-            if not all(math.isfinite(value) for value in (
-                tail, current_return, return_cutoff, current_stress, stress_cutoff,
-            )):
+            expected_vix_confirmed = vix_rel >= 1.3 or term > 1.0
+            if (
+                close_ret >= 0
+                or evidence.get("price_gate") is not expected_price_gate
+                or evidence.get("vix_confirmed") is not expected_vix_confirmed
+                or not expected_price_gate
+                or not expected_vix_confirmed
+            ):
                 return False
-            if not 0 < tail < 1:
+            if tier == "A" and not (
+                -4.0 < min(close_ret, low_ret) <= -2.0
+                and frac == 0.10 and max_names == 2
+            ):
                 return False
-            if current_return > return_cutoff or current_stress < stress_cutoff:
+            if tier == "B" and not (-7.0 < min(close_ret, low_ret) <= -4.0
+                                     and term > 1.0 and frac == 0.20
+                                     and max_names == 3):
+                return False
+            if tier == "C" and not (((min(close_ret, low_ret) <= -7.0) or ret3 <= -10.0)
+                                     and vix > 35.0 and frac == 0.30
+                                     and max_names == 0
+                                     and evidence.get("bypass_monthly_cap") is True):
                 return False
             digest = str(evidence.get("prior_record_sha256", ""))
             if len(bytes.fromhex(digest)) != hashlib.sha256().digest_size:
@@ -681,6 +835,17 @@ class ForeverHoldManager:
                     if line.strip():
                         prior = json.loads(line)
             if not isinstance(prior, dict):
+                return False
+            recorded_at = datetime.fromisoformat(str(prior.get("recorded_at", "")))
+            if recorded_at.tzinfo is None:
+                return False
+            recorded_et = recorded_at.astimezone(ET)
+            if (
+                recorded_et.date() != as_of
+                or not _f6_entry_session(recorded_et)
+                or recorded_et < evaluated_et
+                or recorded_et > boundary_now
+            ):
                 return False
             prior.pop("recorded_at", None)
             return prior == evidence
@@ -697,7 +862,7 @@ class ForeverHoldManager:
         order as placed (never-mask — a data/broker fault must not manufacture or hide a fill).
 
         The money-moving boundary independently enforces the approved weekday
-        4:05–8:00 PM ET extended-hours session.
+        4:16–8:00 PM ET extended-hours session.
         Returns {"placed": [...], "skipped": [...], "spent": float, "reason": str}."""
         if not plan:
             return {"placed": [], "skipped": [], "spent": 0.0, "reason": "empty plan"}
@@ -729,7 +894,26 @@ class ForeverHoldManager:
         if not _f6_entry_session(boundary_now):
             return {"placed": [], "skipped": list(plan), "spent": 0.0,
                     "reason": "outside F6 entry session"}
-        if len(plan) > config.FOREVER6_STARTER_MAX_NAMES:
+        if (
+            not isinstance(trigger_evidence, dict)
+            or not self._trigger_evidence_is_current(trigger_evidence)
+        ):
+            return {
+                "placed": [], "skipped": list(plan), "spent": 0.0,
+                "reason": "trigger evidence unresolved",
+            }
+        evidence_tier = (
+            str(trigger_evidence.get("tier", ""))
+            if isinstance(trigger_evidence, dict) else ""
+        )
+        evidence_max_names = (
+            len(self.universe)
+            if evidence_tier == "C"
+            else int(trigger_evidence.get("max_names", 0))
+            if isinstance(trigger_evidence, dict)
+            else int(config.FOREVER6_STARTER_MAX_NAMES)
+        )
+        if evidence_max_names <= 0 or len(plan) > min(evidence_max_names, len(self.universe)):
             return {"placed": [], "skipped": list(plan), "spent": 0.0,
                     "reason": "starter name cap exceeded"}
 
@@ -763,24 +947,47 @@ class ForeverHoldManager:
             logger.critical("[F6] event state unreadable — starter blocked: %s", exc)
             return {"placed": [], "skipped": list(plan), "spent": 0.0,
                     "reason": "event state unreadable"}
-        today_pt = datetime.now(PT).strftime("%Y-%m-%d")
+        today_pt = boundary_now.astimezone(PT).strftime("%Y-%m-%d")
         if any(self._event_counts(event) and str(event.get("date", "")) == today_pt
                for event in state.get("events", [])):
             return {"placed": [], "skipped": list(plan), "spent": 0.0,
                     "reason": "starter already reserved today"}
-        if self._events_this_month(state) >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH:
+        bypass_monthly_cap = bool(
+            isinstance(trigger_evidence, dict)
+            and trigger_evidence.get("tier") == "C"
+            and trigger_evidence.get("bypass_monthly_cap") is True
+        )
+        if (not bypass_monthly_cap
+                and self._events_this_month(
+                    state, boundary_now.astimezone(PT).strftime("%Y-%m")
+                ) >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH):
             return {"placed": [], "skipped": list(plan), "spent": 0.0,
                     "reason": "starter monthly cap reached"}
+        evidence_sessions: list[date] = []
+        if evidence_tier == "A":
+            try:
+                evidence_sessions = self._evidence_session_dates(trigger_evidence)
+            except ValueError:
+                return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                        "reason": "starter cooldown evidence invalid"}
+            if self._tier_a_cooldown_active(state, evidence_sessions):
+                return {"placed": [], "skipped": list(plan), "spent": 0.0,
+                        "reason": "Tier A five-session cooldown active"}
 
         # Re-verify SETTLED CASH at execution time. F6 is CASH-ONLY — margin is FORBIDDEN (the cold
         # board's decisive ruin finding: a maintenance call from ANY other strategy's bad day would
         # force-liquidate the never-sell book). settled_cash comes from account.cash, never buying_power.
         cash = float(settled_cash) if settled_cash is not None else self._fetch_cash()
+        event_fraction = float(trigger_evidence.get("cash_fraction", 0.0))
         # Hard SEGREGATION guard: never spend into the dry powder the deep crash ladder reserves
         # (ammo-cannibalization ruin finding). spendable is bounded by BOTH the per-event budget and
         # the cash floor — whichever is tighter.
-        spendable = min(float(budget), cash - config.FOREVER6_STARTER_CASH_FLOOR)
-        if spendable <= 0:
+        spendable = min(
+            float(budget),
+            event_fraction * cash,
+            cash - config.FOREVER6_STARTER_CASH_FLOOR,
+        )
+        if not math.isfinite(spendable) or spendable <= 0:
             logger.warning("[F6] execute_starter: no spendable cash (cash $%.0f, floor $%.0f, budget $%.0f) — nothing placed",
                            cash, config.FOREVER6_STARTER_CASH_FLOOR, float(budget))
             return {"placed": [], "skipped": list(plan), "spent": 0.0, "reason": "cash-floor/budget guard"}
@@ -982,6 +1189,7 @@ class ForeverHoldManager:
                     current_cash = self._fetch_cash()
                     current_capacity = min(
                         float(budget),
+                        event_fraction * current_cash,
                         current_cash - config.FOREVER6_STARTER_CASH_FLOOR,
                     ) - reserved
                     if (not math.isfinite(current_cash) or current_cash < 0
@@ -989,7 +1197,7 @@ class ForeverHoldManager:
                         skipped.append({**p, "skip": "exact limit exceeds current cash/event capacity"})
                         continue
                     current_state = self._load_state_strict()
-                    current_today = datetime.now(PT).strftime("%Y-%m-%d")
+                    current_today = submit_now.astimezone(PT).strftime("%Y-%m-%d")
                     current_month = current_today.rpartition("-")[0]
                     other_counted = [
                         event for event in current_state.get("events", [])
@@ -997,10 +1205,17 @@ class ForeverHoldManager:
                     ]
                     if any(str(event.get("date", "")) == current_today for event in other_counted):
                         raise RuntimeError("another F6 event is already reserved today")
-                    if sum(1 for event in other_counted
-                           if str(event.get("date", "")).startswith(current_month)) \
-                            >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH:
+                    if (not bypass_monthly_cap
+                            and sum(1 for event in other_counted
+                                    if str(event.get("date", "")).startswith(current_month)
+                                    and str((event.get("trigger_evidence") or {}).get("tier", "")) != "C")
+                            >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH):
                         raise RuntimeError("F6 monthly event cap reached")
+                    if (evidence_tier == "A"
+                            and self._tier_a_cooldown_active(
+                                current_state, evidence_sessions
+                            )):
+                        raise RuntimeError("F6 Tier A cooldown active")
 
                     _unsettled_reducers = active_reductions(sym)
                     if _unsettled_reducers:
@@ -1025,12 +1240,27 @@ class ForeverHoldManager:
                         skipped.append({**p, "skip": "live reducing order exists"})
                         continue
 
+                    allocator_evidence = {
+                        "regime": "crash",
+                        "verified": True,
+                        "ts": boundary_now.isoformat(),
+                        "source": "f6_crash_trigger",
+                        "f6_trigger_armed": True,
+                        "f6_trigger_tier": (
+                            trigger_evidence.get("tier")
+                            if isinstance(trigger_evidence, dict) else ""
+                        ),
+                        "trigger_sha256": (
+                            trigger_evidence.get("prior_record_sha256")
+                            if isinstance(trigger_evidence, dict) else ""
+                        ),
+                    }
                     _capital = live_admit(
                         "forever6", "forever6", sym, "buy", 1, hard_limit,
                         stop_price=math.nextafter(0.0, 1.0), exact_cash_reserve=True,
                         overnight=True,
                         order_type="limit", time_in_force="day", extended_hours=True,
-                        client_order_id=_coid,
+                        client_order_id=_coid, regime_evidence=allocator_evidence,
                     )
                     if not _capital.approved:
                         skipped.append({**p, "skip": f"allocator: {_capital.reason}"})
@@ -1340,7 +1570,7 @@ class ForeverHoldManager:
             events = state.get("events", [])
             if not isinstance(events, list):
                 raise RuntimeError("F6 event state is malformed")
-            now_pt = datetime.now(PT)
+            now_pt = self.clock().astimezone(PT)
             today = now_pt.strftime("%Y-%m-%d")
             month = now_pt.strftime("%Y-%m")
             other_counted = [
@@ -1349,10 +1579,27 @@ class ForeverHoldManager:
             ]
             if any(str(row.get("date", "")) == today for row in other_counted):
                 raise RuntimeError("another F6 event is already reserved today")
-            if (sum(1 for row in other_counted
-                    if str(row.get("date", "")).startswith(month))
+            tier_c = bool(
+                isinstance(trigger_evidence, dict)
+                and trigger_evidence.get("tier") == "C"
+                and trigger_evidence.get("bypass_monthly_cap") is True
+            )
+            if (not tier_c
+                    and sum(1 for row in other_counted
+                            if str(row.get("date", "")).startswith(month)
+                            and str((row.get("trigger_evidence") or {}).get("tier", "")) != "C")
                     >= config.FOREVER6_STARTER_MAX_EVENTS_PER_MONTH):
                 raise RuntimeError("F6 monthly event cap reached")
+            if (isinstance(trigger_evidence, dict)
+                    and trigger_evidence.get("tier") == "A"):
+                try:
+                    evidence_sessions = self._evidence_session_dates(trigger_evidence)
+                except ValueError as exc:
+                    raise RuntimeError("F6 cooldown evidence is invalid") from exc
+                if self._tier_a_cooldown_active(
+                    {"events": other_counted}, evidence_sessions
+                ):
+                    raise RuntimeError("F6 Tier A cooldown active")
             if event_id is None:
                 event_id = str(uuid.uuid4())
                 events.append({
@@ -1414,7 +1661,7 @@ class ForeverHoldManager:
             statuses = {str(row.get("status", "")) for row in event.get("intents", [])}
             if statuses and statuses <= {"rejected"}:
                 event["status"] = "released_no_order"
-                event["released_at"] = datetime.now(PT).isoformat()
+                event["released_at"] = self.clock().astimezone(PT).isoformat()
                 self._save_state(state)
 
     # ── read helpers (1a) ──────────────────────────────────────────────────────
