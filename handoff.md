@@ -8,7 +8,78 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-10-29, Claude signed) — 10-29 audit follow-ups; EARN-SOURCE-1029 awaiting owner approval
+## ⏩ LATEST (2026-10-30 evening, Claude signed) — owner answered; EARN-SOURCE + SWING-OVERNIGHT approved
+
+- **EARN-SOURCE-1029 SHIPPED** (PR #808, b2f14ea; deployed + restarted, HEALTH_OK). Warmer cron installed on OCI
+  (weekdays 08:30/09:15/12:30 ET, Sun 17:45 ET). First live warm 10-31 03:56 UTC: 95 symbols, 83 Finnhub, 1 FMP,
+  11 UNKNOWN (9 ETFs, ASML, GOOG). The warmer has run; QHM's live read is unexercised until Monday's session.
+  Post-live audit due after 2026-11-02. NEXT ACTION: build SWING-OVERNIGHT-1029.
+
+- **Owner approvals RECORDED:** EARN-SOURCE-1029 and SWING-OVERNIGHT-1029 (the design records now carry one-line
+  answers to every required question; that was why the 10-29 approvals never recorded). NEXT ACTION: build
+  EARN-SOURCE through the full gate (fmp_client WIP on branch claude/earn-source-1029; warmer + cron still to write),
+  then SWING-OVERNIGHT.
+- **SHORT-ALL v12** (owner 10-30): D2 rally-add ON (mirror of long dip-add, own zones); D3 exploration sizing
+  WITHDRAWN as a shadow (replay-derived short Kelly from day one; memory feedback_no_exploration_sizing); D4 =
+  Alpaca `shortable` + `borrow_status == easy_to_borrow` at order time; D7 = each stock's OWN report gaps, never the
+  pool. D1/D5/D6 as recommended. GAI + Codex re-review of v12 owed before code.
+- **MORNING v8** (owner 10-30): 06:46 watchlist = SPY/QQQ 0DTE levels; message wording "If SPY closes above $X, buy the
+  $K call currently $x.xx / below $Y, buy the $K put currently $x.xx"; highest reward-to-risk contract under the cap;
+  `logs/0dte_recommendations.jsonl`; weekend "0DTE recommendation performance" report after the weekly post-mortem.
+  GAI + Codex re-review owed.
+- **Owner question 10-30 — why QHM/F6 bought nothing on QQQ -3.5%:** F6 has never been on (`FOREVER6_ENABLED = False`
+  since 07-13). QHM: NVDA hit its dip rung A (-7.4% vs cost) but the add to target rounds to 0 shares (1 NVDA share ≈
+  8% of equity, room 3.8%) and returns silently; GOOGL/GEV new entries blocked by the 40% aggregate cap (QHM at ~52%);
+  tranche-2 adds require price ≥ first tranche (buys strength only). dip_zones pooled floor gives NVDA/GOOGL/GE/TSLA/
+  AMZN/META/AAPL the identical -5.06% rung. Designs owed: F6-ACTIVATE, QHM-DIP-BUY (whole-share rounding, cap,
+  re-confirm rule), DIP-ZONES-OWN.
+
+## ⏩ EARLIER (2026-10-30 afternoon, Claude signed) — SHORT-ALL and MORNING designs cleared review; owner decisions next
+
+- SHORT-ALL-1029 is at v11 (`logs/design_records/short_all_tiers_2026-10-29.md`). Codex and GAI both APPROVE after
+  confirmation rounds 2-9. Fixes since v4: protection-gap cover when one stop slice is rejected (§3d-2b), a bounded gap
+  protection ladder (fresh stop → capped covers → explicit `unprotected_short` state), stop slices trimmed to the
+  shares still held, a partial resize cover for earnings (§3d-2c), and a Rule 201 bar definition. Owner decides D1-D7
+  (§7), then code.
+- MORNING-1029 is at v7 (`logs/design_records/morning_rundown_2026-10-29.md`). Codex and GAI both APPROVE. The 06:46
+  message is now a watchlist; a new watcher (`scripts/morning_watch.py`) sends a TRIGGERED alert with a fresh limit and
+  stop when a one-minute bar closes beyond a level, processing every bar in order and voiding a side on any data gap.
+  Owner answers questions 1-6 (§11), then build step 0 on OCI.
+- TRACK-A-STOP-1026 is live since 10-27 (#779). Its post-live audit is still owed.
+- Next action:
+  1. owner: D1-D7 for SHORT-ALL, questions 1-6 for MORNING, and resend `APPROVE EARN-SOURCE-1029` /
+     `APPROVE SWING-OVERNIGHT-1029` on their own lines;
+  2. ship EARN-SOURCE (fmp_client WIP + warmer);
+  3. GAP-EXIT-1029 review (not started);
+  4. overdue post-live audits (#779 first).
+
+## ⏩ EARLIER (2026-10-30 overnight, Claude signed) — owner approvals did not record; designs queued
+
+- The owner typed approvals for EARN-SOURCE-1029 and SWING-OVERNIGHT-1029 (10-29 evening). The capture parser
+  dropped them: its terse-follow-up rule saw the trailing "Period." The fix is a gate change and needs its own
+  approval. The owner must resend `APPROVE <ID>` lines on their own.
+- EARN-SOURCE-1029 code is built and staged, not committed, on branch `claude/earn-source-1029`:
+  - files: `data/fmp_client.py`, `tests/test_earnings_source.py`, `tests/test_qhm_earnings_dates.py`;
+  - status: 54 tests pass; cold-2nd PASS on condition that the warmer (`run_earnings_warm.py` + cron, gated) ships
+    with it;
+  - not shipped.
+- SWING-OVERNIGHT-1029 v8 is designed with the owner's ≥ 5% dynamic worst-night budget. The code is not written
+  (gated paths).
+- New design drafts, not yet through review:
+  - SHORT-ALL-1029 (shorting for every tier except F6);
+  - GAP-EXIT-1029: replay shows waiting does not beat selling at the open on earnings gaps;
+  - MORNING-1029: reviewer round 1 Codex REJECT / GAI approve-with-changes; v2 in progress.
+- Day search rounds 1-6 are in `logs/research/day_deep_search_r*_2026-10-29/30.md`.
+  - 31,533 rules tried. The only measured out-of-sample edge reachable at our latency is the trend-night overnight
+    hold.
+  - Round 7 (0DTE level breaks) is running.
+- Next action:
+  1. owner resends the approvals;
+  2. ship EARN-SOURCE (fmp_client + warmer);
+  3. build SWING-OVERNIGHT;
+  4. review SHORT-ALL / GAP-EXIT / MORNING with the board + GAI + Codex.
+
+## ⏩ EARLIER (2026-10-29, Claude signed) — 10-29 audit follow-ups; EARN-SOURCE-1029 awaiting owner approval
 
 - PREFLIGHT-LEDGER-1029 shipped (#801, 7ff74f2). The Sunday 17:55 ET earnings warning now reads held symbols from the
   ownership ledger. Deployed, unexercised.
