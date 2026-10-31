@@ -4,6 +4,8 @@ data/fmp_client.py
 FMP (Financial Modeling Prep) API client.
 
 Data tier: T2 — fundamentals, earnings calendar, analyst grades.
+Earnings dates (EARN-SOURCE-1029): T2 Finnhub per-symbol calendar first, FMP per-symbol as fallback, UNKNOWN when
+neither covers the symbol (design logs/design_records/earnings_source_finnhub_2026-10-29.md).
 Approved use cases:
   - Earnings calendar (per-symbol): get_earnings_dates(symbol) → list[datetime.date]
   - Earnings calendar (batch):      preload_earnings_week(symbols) → dict[symbol, list[date]]
@@ -19,12 +21,17 @@ Guardrail 2: No Alpaca SDK instantiation here.
 """
 
 import fcntl
+import hashlib
 import json
 import logging
 import os
+import sys
+import threading
+import time
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests  # type: ignore[import-untyped]
 
@@ -481,78 +488,316 @@ def _fresh(ts: object, ttl_h: float) -> bool:
         return False
 
 
-def _symbol_lookup(sym: str) -> dict:
-    """Per-symbol earnings via /stable/earnings, cached 24 h INCLUDING negative and failed results. HTTP 402/403
-    (plan restriction) -> UNKNOWN with a WARNING (once per symbol per day, since the result is cached). Never raises."""
-    today = date.today()
-    cache = _read_json(_EARNINGS_SYMBOL_CACHE)
-    e = cache.get(sym)
-    # A request error / timeout (status 0) is retried after 1 h; an answer (200, or a plan block 402/403) is kept 24 h.
-    _ttl = _EARNINGS_SYMBOL_TTL_H if (isinstance(e, dict) and int(e.get("status") or 0) != 0) else 1.0
-    if not (isinstance(e, dict) and _fresh(e.get("fetched_at_utc"), _ttl)):
-        status, dates = _fetch_symbol_earnings(sym)
-        e = {"status": status, "dates": [d.isoformat() for d in dates],
-             "fetched_at_utc": datetime.now(timezone.utc).isoformat()}
-        if status != 200:
-            logger.warning("[%s] FMP per-symbol earnings: HTTP %s%s — earnings date UNKNOWN", sym, status or "error",
-                           " (plan restriction)" if status in (402, 403) else "")
+# ── Per-symbol earnings: Finnhub first, FMP fallback (EARN-SOURCE-1029) ─────────────────────────────────────────────
+# Design: logs/design_records/earnings_source_finnhub_2026-10-29.md (v4). FMP's plan blocks per-symbol earnings for
+# about half our names (HTTP 402) and its calendar is a ~64-name sample; Finnhub's per-symbol calendar covered 37/37.
+_ET = ZoneInfo("America/New_York")
+_EARNINGS_SCHEMA = 2                 # cache entries without v == 2 are stale (pre-Finnhub FMP-402 entries re-asked)
+_FINNHUB_URL = "https://finnhub.io/api/v1/calendar/earnings"
+_FINNHUB_TIMEOUT = 4.0               # request timeout seconds (plumbing)
+_FINNHUB_BACK_DAYS = 120             # query window: past reports show a report already happened (plumbing)
+_FINNHUB_FWD_DAYS = 180              # query window ahead; longest caller horizon is 35 d (plumbing)
+_FAILED_TTL_H = 1.0                  # any lookup where Finnhub failed is re-asked after 1 h (plumbing)
+_RETRY_AFTER_CAP_S = 60              # Finnhub 429 Retry-After honoured up to 60 s (plumbing)
+_WARM_SPACING_S = 1.0                # warmer: at most 1 Finnhub call per second (free plan 60/min, plumbing)
+_LIVE_BUDGET_S = 300.0               # trading process: at most one live lookup per 5 minutes (plumbing)
+_SYMBOL_ALIASES = {"BRK.B": "BRK.A", "BRK-B": "BRK.A"}   # Finnhub returns BRK.B rows labelled BRK.A (measured)
+_live_lock = threading.Lock()
+_last_live_ts = 0.0
+
+
+def _et_today() -> date:
+    return datetime.now(_ET).date()
+
+
+def _finnhub_key() -> str:
+    return os.getenv("FINNHUB_API_KEY", "")
+
+
+def _fetch_finnhub_earnings(sym: str) -> "tuple[int, list[tuple[date, str]], int]":
+    """(HTTP status, [(date, hour)], retry_after_s) from Finnhub's per-symbol calendar. Status 0 = no key or a
+    request error. Rows for any symbol other than `sym` or its alias are dropped. Never raises; never logs the
+    exception text (the request URL carries the token)."""
+    key = _finnhub_key()
+    if not key:
+        return 0, [], 0
+    today = _et_today()
+    try:
+        resp = requests.get(_FINNHUB_URL, params={
+            "symbol": sym,
+            "from": (today - timedelta(days=_FINNHUB_BACK_DAYS)).isoformat(),
+            "to": (today + timedelta(days=_FINNHUB_FWD_DAYS)).isoformat(),
+            "token": key,
+        }, timeout=_FINNHUB_TIMEOUT)
+        if resp.status_code != 200:
+            retry = 0
+            if resp.status_code == 429:
+                try:
+                    retry = int(float(resp.headers.get("Retry-After") or _RETRY_AFTER_CAP_S))
+                except (TypeError, ValueError):
+                    retry = _RETRY_AFTER_CAP_S
+            return int(resp.status_code), [], min(max(retry, 0), _RETRY_AFTER_CAP_S)
+        body = resp.json()
+        rows = (body.get("earningsCalendar") if isinstance(body, dict) else None) or []
+        allowed = {sym, _SYMBOL_ALIASES.get(sym, sym)}
+        out: list = []
+        for r in rows:
+            if not isinstance(r, dict) or str(r.get("symbol") or "").upper() not in allowed:
+                continue
+            try:
+                out.append((date.fromisoformat(str(r.get("date"))[:10]), str(r.get("hour") or "")))
+            except ValueError:
+                continue
+        return 200, out, 0
+    except Exception as e:
+        logger.debug("[%s] Finnhub earnings request failed: %s", sym, type(e).__name__)
+        return 0, [], 0
+
+
+def _nearest_first(dates: list, today: date) -> list:
+    """Deduped dates ordered by distance from `today`; a tie (yesterday vs tomorrow) puts the earlier date first.
+    Callers that read only the first two dates (entry_logic) then always see the nearest report."""
+    uniq = sorted({d for d in dates if isinstance(d, date)})
+    return sorted(uniq, key=lambda d: (abs((d - today).days), d))
+
+
+def _symbol_fetch(sym: str, finnhub_allowed: bool = True) -> "tuple[dict, int]":
+    """Fresh v2 cache entry for `sym` (Finnhub, else FMP, else uncovered) and Finnhub's Retry-After on a 429."""
+    today = _et_today()
+    tried: list = []
+    statuses: dict = {}
+    retry_after = 0
+    provider, covered, dates, hours = "none", False, [], {}
+    if finnhub_allowed:
+        st, rows, retry_after = _fetch_finnhub_earnings(sym)
+        tried.append("finnhub")
+        statuses["finnhub"] = st
+        if st == 200 and rows:
+            provider, covered = "finnhub", True
+            dates = [d for d, _ in rows]
+            hours = {d.isoformat(): h for d, h in rows if h}
+    if not covered:
+        fst, fdates = _fetch_symbol_earnings(sym)
+        tried.append("fmp")
+        statuses["fmp"] = fst
+        if fst == 200:
+            provider, covered, dates = "fmp", True, list(fdates)
+    finnhub_ok = provider == "finnhub"
+    iso_dates = [d.isoformat() for d in _nearest_first(dates, today)]
+    entry: dict = {
+        "v": _EARNINGS_SCHEMA, "provider": provider, "providers_tried": tried, "statuses": statuses,
+        "covered": covered, "dates": iso_dates, "hours": hours,
+        "window": [(today - timedelta(days=_FINNHUB_BACK_DAYS)).isoformat(),
+                   (today + timedelta(days=_FINNHUB_FWD_DAYS)).isoformat()],
+        "ttl_h": _EARNINGS_SYMBOL_TTL_H if finnhub_ok else _FAILED_TTL_H,
+        "fetched_at_utc": datetime.now(timezone.utc).isoformat(),   # taken after the requests complete
+    }
+    nxt = next((d for d in iso_dates if d >= today.isoformat()), None)
+    logger.info("EARNLOOKUP sym=%s provider=%s tried=%s statuses=%s covered=%s next=%s pid=%s", sym, provider,
+                ",".join(tried), statuses, covered, nxt, os.getpid())
+    if not covered:
+        logger.warning("[%s] earnings date UNKNOWN (Finnhub %s, FMP %s)", sym, statuses.get("finnhub", "skipped"),
+                       statuses.get("fmp"))
+    return entry, retry_after
+
+
+def _store_symbol_entry(sym: str, entry: dict) -> None:
+    try:
+        with _earnings_lock():
+            cur = _read_json(_EARNINGS_SYMBOL_CACHE)
+            cur[sym] = entry
+            _atomic_write_json(_EARNINGS_SYMBOL_CACHE, cur)
+    except Exception as we:
+        logger.warning("[%s] earnings symbol cache write failed: %s", sym, we)
+
+
+def _cached_symbol_entry(sym: str) -> "dict | None":
+    """The fresh v2 per-symbol entry, or None (missing, pre-v2, or older than its own TTL)."""
+    e = _read_json(_EARNINGS_SYMBOL_CACHE).get(sym)
+    if not (isinstance(e, dict) and e.get("v") == _EARNINGS_SCHEMA):
+        return None
+    try:
+        ttl = float(e.get("ttl_h") or _FAILED_TTL_H)
+    except (TypeError, ValueError):
+        ttl = _FAILED_TTL_H
+    return e if _fresh(e.get("fetched_at_utc"), ttl) else None
+
+
+def _expires_at(entry: dict) -> "datetime | None":
+    """When a v2 entry stops being fresh (fetched_at_utc + its own TTL); None when unreadable."""
+    try:
+        ttl = float(entry.get("ttl_h") or _FAILED_TTL_H)
+        return datetime.fromisoformat(str(entry.get("fetched_at_utc"))) + timedelta(hours=ttl)
+    except (TypeError, ValueError):
+        return None
+
+
+def _in_trading_process() -> bool:
+    argv0 = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else ""
+    return argv0 == "main.py"
+
+
+def _live_allowed() -> bool:
+    """Outside the trading process: always. Inside it (main.py, where QHM runs on run_cycle): at most one live lookup
+    per _LIVE_BUDGET_S, reserved under a lock before any network call."""
+    global _last_live_ts
+    if not _in_trading_process():
+        return True
+    with _live_lock:
+        now = time.monotonic()
+        if _last_live_ts and now - _last_live_ts < _LIVE_BUDGET_S:
+            return False
+        _last_live_ts = now
+        return True
+
+
+def _entry_info(entry: dict) -> dict:
+    """Public answer for one v2 entry: state, dates (nearest first), source and provenance."""
+    today = _et_today()
+    rid = hashlib.sha256(json.dumps(entry, sort_keys=True).encode()).hexdigest()[:12]
+    base = {"provider": entry.get("provider"), "fetched_at_utc": entry.get("fetched_at_utc"), "fresh": True,
+            "record_id": rid}
+    if not entry.get("covered"):
+        return {"state": EARNINGS_UNKNOWN, "dates": [], "source": "symbol_uncovered", **base}
+    dates = []
+    for d in entry.get("dates") or []:
         try:
-            with _earnings_lock():
-                cur = _read_json(_EARNINGS_SYMBOL_CACHE)
-                cur[sym] = e
-                _atomic_write_json(_EARNINGS_SYMBOL_CACHE, cur)
-        except Exception as we:
-            logger.warning("[%s] earnings symbol cache write failed: %s", sym, we)
-    if int(e.get("status") or 0) != 200:
-        return {"state": EARNINGS_UNKNOWN, "dates": [], "source": "fmp_symbol"}
+            dates.append(date.fromisoformat(str(d)[:10]))
+        except ValueError:
+            continue
+    dates = _nearest_first(dates, today)
+    upcoming = [d for d in dates if d >= today]
+    src = "finnhub_symbol" if entry.get("provider") == "finnhub" else "fmp_symbol"
+    return {"state": EARNINGS_DATED if upcoming else EARNINGS_NONE_IN_WINDOW, "dates": dates, "source": src, **base}
+
+
+def _symbol_lookup(sym: str, allow_live: bool = True) -> dict:
+    """Per-symbol answer from the fresh v2 cache, else a live lookup when allowed and within budget, else UNKNOWN
+    (an expired entry never acts). Never raises."""
+    e = _cached_symbol_entry(sym)
+    if e is None:
+        if not (allow_live and _live_allowed()):
+            return {"state": EARNINGS_UNKNOWN, "dates": [], "source": "cache_miss", "provider": None,
+                    "fetched_at_utc": None, "fresh": False, "record_id": None}
+        e, _ = _symbol_fetch(sym)
+        _store_symbol_entry(sym, e)
+    return _entry_info(e)
+
+
+def _batch_dated(sym: str) -> "dict | None":
+    """A fresh batch-calendar entry that HAS dates (the batch is a sample; its "none" never answers)."""
+    e = (_read_json(_EARNINGS_CACHE).get("symbols") or {}).get(sym)
+    if not (isinstance(e, dict) and _fresh(e.get("fetched_at_utc"), _EARNINGS_TTL_H)):
+        return None
     dates = []
     for d in e.get("dates") or []:
         try:
             dates.append(date.fromisoformat(str(d)[:10]))
         except ValueError:
             continue
-    upcoming = [d for d in dates if d >= today]
-    return {"state": EARNINGS_DATED if upcoming else EARNINGS_NONE_IN_WINDOW, "dates": dates,
-            "source": "fmp_symbol"}
+    today = _et_today()
+    if not any(d >= today for d in dates):   # past-only batch dates never answer as DATED (cold-2nd T3)
+        return None
+    return {"state": EARNINGS_DATED, "dates": _nearest_first(dates, today), "source": "fmp_batch",
+            "provider": "fmp", "fetched_at_utc": e.get("fetched_at_utc"), "fresh": True, "record_id": None}
+
+
+def _resolve(sym: str, allow_live: bool) -> dict:
+    """Precedence (design item 5): per-symbol DATED > dated batch > per-symbol NONE_IN_WINDOW > UNKNOWN."""
+    per = _symbol_lookup(sym, allow_live=allow_live)
+    if per.get("state") == EARNINGS_DATED:
+        out = per
+    else:
+        batch = _batch_dated(sym)
+        out = batch if batch is not None else per
+    if out.get("state") == EARNINGS_DATED:
+        today = _et_today()
+        nxt = next((d for d in out["dates"] if d >= today), None)
+        logger.info("EARNSERVE sym=%s provider=%s record=%s fetched=%s next=%s thread=%s", sym, out.get("provider"),
+                    out.get("record_id"), out.get("fetched_at_utc"), nxt, threading.current_thread().name)
+    return out
 
 
 def get_symbol_earnings_info(symbol: str) -> dict:
-    """The per-symbol FMP answer only (cached 24 h; a plan block or error is UNKNOWN). For a held position whose batch
-    answer is "none": the batch calendar is sparse on this plan (LLY reports in the window but is absent), so its
-    "none" is not authoritative for a hold. Never raises."""
+    """The authoritative per-symbol answer (Finnhub first, FMP fallback; see _resolve for precedence). A plan block,
+    an error or an uncovered symbol is UNKNOWN, never "no earnings". Never raises."""
     try:
-        return _symbol_lookup(symbol.upper())
+        return _resolve(symbol.upper(), allow_live=True)
     except Exception as ex:
         logger.warning("[%s] per-symbol earnings info failed: %s", symbol, ex)
         return {"state": EARNINGS_UNKNOWN, "dates": [], "source": "error"}
 
 
 def get_earnings_info(symbol: str, min_horizon_days: int = 0) -> dict:
-    """{"state": DATED | NONE_IN_WINDOW | UNKNOWN, "dates": [date, ...], "source": ...} for `symbol`.
+    """{"state": DATED | NONE_IN_WINDOW | UNKNOWN, "dates": [date, ...] nearest first, "source": ..., provenance}.
 
-    The batch cache answers only for a symbol it SCANNED, while fresh, through at least today + min_horizon_days
-    (QHM's pre-earnings trim needs 21 days). Anything else — never scanned, scanned too short, stale — goes to the
-    per-symbol lookup (cached 24 h, negatives included). UNKNOWN is never reported as "no earnings" (design record
-    logs/design_records/qhm_earnings_dates_fix_2026-10-12.md). Never raises."""
+    Same answer as get_symbol_earnings_info: the per-symbol query window (ET date −120 d .. +180 d) covers every
+    caller horizon (QHM 21 d, preflight 35 d), so `min_horizon_days` no longer changes the answer and is kept for
+    callers. UNKNOWN is never reported as "no earnings". Never raises."""
     sym = symbol.upper()
     try:
-        need_to = (date.today() + timedelta(days=max(0, int(min_horizon_days)))).isoformat()
-        e = (_read_json(_EARNINGS_CACHE).get("symbols") or {}).get(sym)
-        if (isinstance(e, dict) and _fresh(e.get("fetched_at_utc"), _EARNINGS_TTL_H)
-                and str(e.get("scanned_to") or "") >= need_to):
-            dates = [date.fromisoformat(str(d)[:10]) for d in (e.get("dates") or [])]
-            return {"state": EARNINGS_DATED if dates else EARNINGS_NONE_IN_WINDOW, "dates": dates,
-                    "source": "fmp_batch"}
-        return _symbol_lookup(sym)
+        return _resolve(sym, allow_live=True)
     except Exception as ex:
         logger.warning("[%s] earnings info failed: %s", sym, ex)
         return {"state": EARNINGS_UNKNOWN, "dates": [], "source": "error"}
 
 
 def get_cached_earnings_dates(symbol: str) -> list[date]:
-    """Earnings dates for a symbol (legacy list contract): the dates from get_earnings_info, [] when none are known.
-    Callers that must tell "no earnings" from "unknown" use get_earnings_info."""
-    return list(get_earnings_info(symbol).get("dates") or [])
+    """Earnings dates for a symbol (legacy list contract), nearest first: CACHE ONLY — never calls a provider (the
+    main entry path runs on the trading thread). [] when nothing fresh is known."""
+    try:
+        return list(_resolve(symbol.upper(), allow_live=False).get("dates") or [])
+    except Exception as ex:
+        logger.warning("[%s] cached earnings dates failed: %s", symbol, ex)
+        return []
+
+
+def warm_symbol_earnings(symbols: list, refresh_until: "datetime | None" = None) -> dict:
+    """Refresh every symbol whose v2 entry is stale, or would go stale before `refresh_until` (tz-aware; the caller
+    passes the next regular-session close so an entry never expires mid-session between warm runs — cold-2nd T1),
+    sequentially, in its own process (never the trading thread). The trading process keeps the strict expiry.
+    At most 1 provider call per second. A 429: that symbol gets its FMP fallback at once (1 h TTL), the warmer waits
+    Retry-After (cap 60 s) once, and a second 429 stops Finnhub calls for the rest of the run (FMP only, 1 h TTL).
+    Returns counts by provider/state. Never raises."""
+    counts: dict = {"attempted": 0, "finnhub": 0, "fmp": 0, "unknown": 0, "fresh_skipped": 0, "r429": 0}
+    finnhub_on = True
+    for raw in symbols:
+        sym = str(raw or "").upper().strip()
+        if not sym:
+            continue
+        try:
+            cached = _cached_symbol_entry(sym)
+            if cached is not None:
+                exp = _expires_at(cached)
+                if refresh_until is None or (exp is not None and exp >= refresh_until):
+                    counts["fresh_skipped"] += 1
+                    continue
+            counts["attempted"] += 1
+            entry, retry_after = _symbol_fetch(sym, finnhub_allowed=finnhub_on)
+            _store_symbol_entry(sym, entry)
+            counts[entry["provider"] if entry.get("covered") else "unknown"] = \
+                counts.get(entry["provider"] if entry.get("covered") else "unknown", 0) + 1
+            info = _entry_info(entry)
+            today = _et_today()
+            nxt = next((d for d in info["dates"] if d >= today), None)
+            logger.info("EARNWARM sym=%s provider=%s tried=%s statuses=%s state=%s next=%s hour=%s window=%s",
+                        sym, entry.get("provider"), ",".join(entry.get("providers_tried") or []),
+                        entry.get("statuses"), info["state"], nxt,
+                        (entry.get("hours") or {}).get(nxt.isoformat()) if nxt else None, entry.get("window"))
+            if finnhub_on and (entry.get("statuses") or {}).get("finnhub") == 429:
+                counts["r429"] += 1
+                if counts["r429"] >= 2:
+                    finnhub_on = False
+                    time.sleep(_WARM_SPACING_S)   # spacing before the next (FMP-only) call (Codex preship)
+                else:
+                    time.sleep(retry_after or _RETRY_AFTER_CAP_S)
+            else:   # spacing also applies to FMP-only calls once Finnhub is off (cold-2nd N4)
+                time.sleep(_WARM_SPACING_S)
+        except Exception as ex:
+            counts["unknown"] += 1
+            logger.warning("[%s] earnings warm failed: %s", sym, ex)
+    logger.info("EARNWARM summary %s", counts)
+    return counts
 
 
 # ── Analyst sentiment (institutional signal proxy) ────────────────────────────
