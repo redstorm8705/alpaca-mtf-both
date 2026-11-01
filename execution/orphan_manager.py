@@ -844,8 +844,14 @@ def cancel_and_reconcile_gtc_stops(
                 in ("pending_cancel", "pending_new", "held")
             ]
 
+        _p1_tn_syms = _get_trend_night_syms()
         for _sym, _trade in list(tracker.open_trades.items()):
             if _trade.get("status") != "open":
+                continue
+            if _sym in _p1_tn_syms:
+                logger.warning(
+                    f"[{_sym}] Patch 1: skipping — reserved to the Swing trend_night "
+                    f"strategy (its own stop); a tracker entry here is unexpected.")
                 continue
             if _trade.get("gtc_stop_order_id"):
                 continue   # already protected
@@ -1242,6 +1248,23 @@ def _get_breakout_syms() -> set:
         return set()
 
 
+def _get_trend_night_syms() -> set:
+    """The Swing trend_night reserved symbol (QQQM, SWING-OVERNIGHT-1030
+    v8 item 1). Its lot is owned by run_swing_overnight.py's own state
+    machine and stop, outside tracker.open_trades: never adopted as an
+    intraday orphan and never given an emergency stop here. Fails CLOSED:
+    an import failure still excludes the configured symbol."""
+    try:
+        from execution.swing_overnight import trend_night_symbols
+        return trend_night_symbols()
+    except Exception as _tne:
+        logger.warning(
+            "orphan_manager: trend_night symbol lookup failed "
+            "(excluding the configured symbol): %s", _tne)
+        _sym = getattr(config, "SWING_TREND_NIGHT_SYMBOL", "QQQM")
+        return {str(_sym).upper()}
+
+
 def _reconcile_day_claim(symbol: str) -> Optional[float]:
     """The Day tier's signed same-day share claim on `symbol` (co-hold R1,
     2026-10-10). Broker truth first: today's DT- orders + their nested OCO legs
@@ -1330,7 +1353,7 @@ def reconcile_positions(
     # day-tier: DT-tagged, tracked outside tracker.open_trades — excluded from adoption
     orphans = (
         (alpaca_symbols - tracker_symbols) - _get_qhm_syms() - _get_forever6_syms()
-        - _get_daytrade_syms() - _get_breakout_syms()
+        - _get_daytrade_syms() - _get_breakout_syms() - _get_trend_night_syms()
     )
 
     # ── Bug B guard (RIVN P&L corruption, 2026-07-16, Option B — board + GAI) ──────
