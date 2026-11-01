@@ -21,7 +21,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
@@ -93,7 +93,9 @@ def _atomic_write(path: Path, data: dict) -> None:
 def _load_state(path: Path, now: Optional[datetime] = None) -> Optional[dict]:
     if not path.exists():
         return None
-    clock = now or datetime.now(_ET)
+    # Instant math in UTC: ET + timedelta is wall-clock math and drops fold=1
+    # in the DST fall-back hour, putting the skew bound an hour in the past.
+    clock = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if (
@@ -315,7 +317,7 @@ class _RealizedPnl:
     """
 
     def __init__(self, now: datetime):
-        self._now = now
+        self._now = now.astimezone(timezone.utc)  # instant math (DST fall-back)
         self._history: Optional[list] = None
         self._positions: Optional[dict] = None
         self._tiers: dict = {}

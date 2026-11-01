@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from execution.fill_notifications import (
     _RealizedPnl,
+    _load_state,
     _message,
     _parse_broker_timestamp,
     _tier_for_fill,
@@ -715,3 +716,85 @@ def test_swing_cover_under_mismatch_is_unavailable_not_an_add():
     ctx = _ctx([sell, cover], {"NVDA": 10.0}, {"o-s": "intraday", "o-c": "intraday"})
     out = ctx.lookup(cover, "intraday")
     assert out["status"] == "unavailable"
+
+
+# DST fall-back (2026-11-01 01:00-01:59 ET happens twice). Production 06:00-06:54
+# UTC: every minute's state looked "future" and was quarantined as corrupt.
+_FALLBACK_0630 = datetime(2026, 11, 1, 6, 30, tzinfo=timezone.utc).astimezone(ET)
+
+
+def _dst_state(tmp_path: Path, stamp: str) -> Path:
+    state = tmp_path / "fills.json"
+    state.write_text(json.dumps({
+        "version": 1, "initialized_at": stamp, "last_poll_at": stamp,
+        "seen": {"f1": {"ts": stamp, "hash": "a" * 64}},
+        "malformed_seen": {"fp": stamp},
+    }))
+    return state
+
+
+def _reads_cleanly(state: Path, now: datetime) -> bool:
+    data = _load_state(state, now)
+    return data is not None and not data.get("degraded")
+
+
+def test_dst_fallback_edt_stamp_from_last_hour_reads_cleanly(tmp_path: Path):
+    assert _FALLBACK_0630.fold == 1
+    state = _dst_state(tmp_path, "2026-11-01T01:59:01-04:00")  # 05:59:01 UTC
+    assert _reads_cleanly(state, _FALLBACK_0630)
+
+
+def test_dst_fallback_est_stamp_in_repeated_hour_reads_cleanly(tmp_path: Path):
+    state = _dst_state(tmp_path, "2026-11-01T01:20:00-05:00")  # 06:20 UTC
+    assert _reads_cleanly(state, _FALLBACK_0630)
+
+
+def test_dst_fallback_skew_bound_is_five_minutes_in_utc(tmp_path: Path):
+    inside = _dst_state(tmp_path, "2026-11-01T06:34:59+00:00")
+    assert _reads_cleanly(inside, _FALLBACK_0630)
+    future = _dst_state(tmp_path, "2026-11-01T06:35:01+00:00")
+    assert not _reads_cleanly(future, _FALLBACK_0630)
+
+
+def test_dst_fallback_minute_by_minute_never_quarantines(tmp_path: Path):
+    state, sent = tmp_path / "fills.json", []
+    fill = {**_fill(), "transaction_time": "2026-11-01T05:58:00Z"}
+    start = datetime(2026, 11, 1, 5, 55, tzinfo=timezone.utc)
+    filled_at = datetime(2026, 11, 1, 5, 58, tzinfo=timezone.utc)
+
+    def deliver(msg: str) -> bool:
+        sent.append(msg)
+        return True
+
+    for minute in range(71):  # 05:55 .. 07:05 UTC
+        now = (start + timedelta(minutes=minute)).astimezone(ET)
+
+        def fetch(day: str, at: datetime = now) -> list:
+            return [fill] if day == "2026-11-01" and at >= filled_at else []
+
+        poll_fill_notifications(
+            now_et=now, state_path=state, fetch_fills=fetch, deliver=deliver,
+            tier_lookup=lambda _fill: "intraday",
+            realized_lookup=lambda _f, _t: {"status": "opening"},
+        )
+        assert _reads_cleanly(state, now), now
+    assert not [msg for msg in sent if "STATE CORRUPT" in msg]
+    assert not list(tmp_path.glob("fills.json.corrupt.*"))
+    assert len([msg for msg in sent if "*Sold EWY*" in msg]) == 1
+
+
+def test_dst_fallback_pnl_history_window_reaches_now(monkeypatch):
+    import execution.fill_notifications as fn
+
+    calls = []
+
+    def fake_range(start, end):
+        calls.append((start, end))
+        return []
+
+    monkeypatch.setattr(fn, "_fetch_fills_range", fake_range)
+    fn._RealizedPnl(_FALLBACK_0630)._load_history()
+    # Same-zone datetimes compare by wall clock (fold ignored), so compare in UTC:
+    # `until` must never be an hour behind the clock.
+    until = calls[0][1].astimezone(timezone.utc)
+    assert until > _FALLBACK_0630.astimezone(timezone.utc)
