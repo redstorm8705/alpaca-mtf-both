@@ -201,6 +201,18 @@ def _forever6_symbols() -> set:
             return set()
 
 
+def _trend_night_symbols() -> set:
+    """The Swing trend_night reserved symbol (QQQM, SWING-OVERNIGHT-1030 v8 item 1): its runner keeps exactly one stop
+    covering its held shares, so a second stop here would double-sell. Fails CLOSED (the configured symbol) on any
+    raise. Never raises."""
+    try:
+        from execution.swing_overnight import trend_night_symbols
+        return set(trend_night_symbols())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("stop-protect: trend_night symbol lookup raised — excluding the configured symbol: %s", e)
+        return {str(getattr(config, "SWING_TREND_NIGHT_SYMBOL", "QQQM")).upper()}
+
+
 def _day_tier_claim_for_stop(symbol: str) -> float | None:
     """The Day tier's signed same-day claim on `symbol` (broker._day_tier_claim: today's DT- orders + nested OCO legs
     minus hand-overs). None when unreadable. Never raises."""
@@ -506,6 +518,7 @@ def reconcile_protection(
         "skipped": [],       # unknown state — failed safe on the order (also paged, throttled)
         "excluded_qhm": [],
         "excluded_forever6": [],   # F6 held symbols — deliberately stop-free (never-sell floor)
+        "excluded_trend_night": [],  # Swing trend_night's reserved QQQM — its own runner owns the stop
         # Broker said the qty is already held by a stable live protective order, i.e. our
         # get_open_orders read was STALE and the position was protected all along. Counted
         # separately from already_protected (which is derived from our own read) because the
@@ -524,6 +537,7 @@ def reconcile_protection(
 
     qhm = _qhm_symbols()
     f6 = _forever6_symbols()
+    trend_night = _trend_night_symbols()
     ownership_enforced = bool(getattr(config, "OWNERSHIP_GUARD_ENFORCE", False))
     now_mono = time.monotonic()
 
@@ -601,6 +615,10 @@ def reconcile_protection(
                     summary["skipped"].append(
                         (symbol, f"shutdown cannot prove tracker status {trade.get('status')!r}")
                     )
+                continue
+            if symbol in trend_night:
+                # SWING trend_night (SWING-OVERNIGHT-1030 v8 item 1): its own runner keeps the one stop on QQQM
+                summary["excluded_trend_night"].append(symbol)
                 continue
             if not ownership_enforced and symbol in qhm:
                 summary["excluded_qhm"].append(symbol)  # quarterly holds are not ours to manage

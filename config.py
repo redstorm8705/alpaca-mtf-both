@@ -1361,3 +1361,41 @@ def validate_config():
         len(_f6_symbols),
         len(SWING_BREAKOUT_F6_RESERVED_SYMBOLS),
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+# SWING tier sub-strategy `trend_night` — hold QQQM overnight on trend nights (approval SWING-OVERNIGHT-1030,
+# logs/design_records/swing_overnight_strength_2026-10-29.md through amendment v12). Read only by
+# execution/swing_overnight.py and run_swing_overnight.py. Every number below is on that record's "Owner numbers" line.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════════
+SWING_TREND_NIGHT_ENABLED = False          # kill flag (item 7). False blocks NEW entries only; held shares keep their stop and exit.
+                                           # Flips True only after the v8 exclusions deploy and the read-only OCI probe passes (v8 item 4).
+SWING_TREND_NIGHT_SYMBOL = "QQQM"          # item 2 — the instrument, reserved to this sub-strategy everywhere (v8 item 1)
+SWING_TREND_NIGHT_REGIME_SYMBOL = "SPY"    # item 1 — regime index
+SWING_TREND_NIGHT_Q_SYMBOL = "QQQ"         # item 3 — q and the replay prior measured on QQQ (QQQM's own history is short)
+SWING_TREND_NIGHT_SMA_SESSIONS = 200       # item 1 — prior settled close > SMA of the 200 settled closes ending that day
+SWING_TREND_NIGHT_MIN_BUDGET_PCT = 0.05    # item 3 — owner 10-29: "I want at least 5%" worst-night budget b (floor, day one)
+SWING_TREND_NIGHT_KELLY_FRACTION = 0.25    # item 3 / v8 item 2a — b = max(floor, 1/4 Kelly from pooled replay prior + live nights)
+SWING_TREND_NIGHT_Q_LEVEL = 0.999          # item 3 — q = 99.9th-percentile overnight loss, expanding window
+SWING_TREND_NIGHT_GAP_LEVEL = 0.99         # item 3 — all-tier gap check: each symbol's own 99th-percentile overnight loss
+SWING_TREND_NIGHT_AUTO_OFF_ALPHA = 0.05    # v10 item 2 — page rate alpha of the edge check and the fill-cost check (page only)
+SWING_TREND_NIGHT_REPLAY_COST_FRAC = 0.0002  # v8 item 2 — 2 bps round-trip cost assumed inside the replay prior
+SWING_TREND_NIGHT_SPREAD_SESSIONS = 20     # v11 item 1 — quoted-spread cost sample: the last 20 sessions
+SWING_TREND_NIGHT_KILL_PROFILE = "paper"   # item 3 — the gap check is bounded by PROFILES[this]["MAX_DAILY_LOSS_PCT"] (7%)
+SWING_TREND_NIGHT_ENTRY_START_MIN = 20     # item 8 — entry window opens at close − 20 min (15:40 ET on a normal day)
+SWING_TREND_NIGHT_ENTRY_END_MIN = 11       # item 8 — ... and ends at close − 11 min (Alpaca's cls cutoff is close − 10)
+SWING_TREND_NIGHT_FALLBACK_MIN = 5         # item 4/8 — fallback market entry at close − 5 min (15:55 ET)
+SWING_TREND_NIGHT_CLOSE_POLL_MIN = 10      # item 8 — stay alive polling until close + 10 min
+SWING_TREND_NIGHT_SWAP_MIN = 10            # item 6.1 — stop → opg swap from open − 10 min (09:20 ET)
+SWING_TREND_NIGHT_OPG_OUTCOME_MIN = 3      # item 6.2 — opg outcome known by open − 3 min (09:27 ET)
+SWING_TREND_NIGHT_OPG_CUTOFF_MIN = 2       # item 6.1 — Alpaca's opg cutoff, open − 2 min (09:28 ET)
+SWING_TREND_NIGHT_OPEN_POLL_MIN = 10       # item 8 — stay alive polling until open + 10 min
+SWING_TREND_NIGHT_RESULT_CHECK_MIN = 5     # result check at open + 5 min (09:35 ET) and again at the close
+SWING_TREND_NIGHT_MKT_SELL_SECONDS = 60    # item 6.3 — a market sell still open 60 s later is cancelled; retry next minute
+SWING_TREND_NIGHT_EXIT_PAGE_FAILURES = 3   # item 6.3 — page after the third failed exit attempt (retries continue)
+SWING_TREND_NIGHT_CLOCK_FALLBACK_SECONDS = 60  # item 6.6 — broker clock unreachable > 60 s → system clock (exit windows only)
+SWING_TREND_NIGHT_FALLBACK_OPEN_MIN_ET = 570   # item 6.6 — the regular 09:30 ET open (minutes after midnight), system-clock fallback only
+SWING_TREND_NIGHT_POLL_SECONDS = 5         # item 8 — poll the broker every 5 s inside an order window
+SWING_TREND_NIGHT_PAGE_REPEAT_SECONDS = 1800  # repeat an unresolved page at most every 30 min (same as the Swing tier)
+SWING_TREND_NIGHT_PAPER_ACCOUNT_ENV = "ALPACA_PAPER_ACCOUNT_NUMBER"  # item 8 — env var holding the paper account number;
+                                           # empty or different from get_account().account_number → every submit blocked + page

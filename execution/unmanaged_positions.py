@@ -170,8 +170,14 @@ def _sources(tracker, now: datetime) -> list:
         led = load_ledger()
         return {str(s).upper(): float(tier_qty(led, s, "forever6") or 0.0) for s in (led.get("positions") or {})}
 
+    def swing_trend_night():
+        # SWING-OVERNIGHT-1030 v8 item 1: QQQM held by the Swing trend_night runner (its last broker-reconciled count)
+        from execution.swing_overnight import trend_night_quantities
+        return {str(s).upper(): float(q) for s, q in trend_night_quantities().items()}
+
     return [("swing_tracker", swing_tracker), ("swing_breakout", swing_breakout), ("promotions", promotions),
-            ("day_tier_log", lambda: _day_tier_claims(now)), ("qhm", qhm), ("forever6", forever6)]
+            ("day_tier_log", lambda: _day_tier_claims(now)), ("qhm", qhm), ("forever6", forever6),
+            ("swing_trend_night", swing_trend_night)]
 
 
 def _qhm_pending_entries() -> set:

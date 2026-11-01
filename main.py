@@ -866,7 +866,16 @@ def main():
         # the root of the recurring Tracker<RiskManager desync. Exclude QHM; the
         # downstream _alpaca_syms observability (below) becomes QHM-clean too.
         _qhm_syms    = get_quarterly_hold_symbols()
-        _live_pos = [p for p in _broker_positions() if p.symbol not in _qhm_syms]
+        # SWING trend_night (SWING-OVERNIGHT-1030 v8 item 1): QQQM is reserved to its own cron process and state
+        # machine; it never counts toward risk.open_positions nor enters the dedicated-manager reconciliation.
+        try:
+            from execution.swing_overnight import trend_night_symbols
+            _tn_syms = trend_night_symbols()
+        except Exception as _tn_e:  # fail CLOSED like orphan_manager / stop_protection
+            _tn_syms = {str(getattr(config, "SWING_TREND_NIGHT_SYMBOL", "QQQM")).upper()}
+            logger.error("P0-STARTUP: trend_night symbol lookup failed (%s) — excluding %s anyway",
+                         _tn_e, sorted(_tn_syms))
+        _live_pos = [p for p in _broker_positions() if p.symbol not in _qhm_syms and p.symbol not in _tn_syms]
         _live_count = len(_live_pos)
         _tracker_count = risk.open_positions
         _alpaca_syms = {pos.symbol for pos in _live_pos}
