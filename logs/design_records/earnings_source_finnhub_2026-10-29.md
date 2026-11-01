@@ -173,25 +173,48 @@ online. This shouldn't happen." ... "Need something that has the full list."
 - GAI's round-3 items describe how the current code differs from the design (precedence order, TTL split, empty list,
   batch "none"). Each is already a stated change in items 1, 3 and 5.
 
-## Required questions (short answers; evidence in the sections above and the review outputs)
-- Q1/Q29: real dates for the 14 of 25 reporters FMP misses; it is the date layer every earnings rule needs. High value.
-- Q2/Q19: trade count is about zero today (dormant entry path). It changes QHM's trim inputs, so the owner approves.
-- Q5/Q6: windows and TTLs are plumbing. The forward pass: a second provider (Alpha Vantage, key needed) plus
-  earliest-date and SEC scoring.
-- Q11/Q12: no increase in size, frequency or exposure (two seats traced). Data tier: Finnhub added at T2.
-  Stops untouched.
-- Q13: fails to FMP, then UNKNOWN. Expired never acts.
-- Q14: no shadow.
-- Q15/Q16: EARNWARM, EARNLOOKUP, EARNSERVE lines.
-- Q21: HTTP mocked; no broker calls.
-- Q22/Q23: OCI read-only probe and a full-path test before live.
-- Q26: T2 Finnhub per symbol → FMP → UNKNOWN.
-- Q27: `data/cache/earnings_symbol_cache.json`, locked atomic replace.
-- Q28: warmer in its own cron process; QHM in run_cycle with a bounded budget; the entry path is cache-only.
-- Q31–Q37: not an edge claim; coverage measured on 37 names and checked against SEC 8-K filings 17/18.
-- Q40: protects "a known report is never read as no report". Check: weekly SEC 8-K comparison and the daily UNKNOWN
-  count.
-- Q44: independent proof is the SEC filings.
-
-## Required questions
-(answered in the board / GAI / Codex review rounds; see the scratchpad review outputs)
+## Required questions (one line per question, RQ-4)
+- Q1: Gives real report dates for the 14 of 25 reporters FMP misses; every earnings rule (QHM trim, Swing, Day) depends on this date layer, so it serves data quality and growth.
+- Q2: No change to trade count today; the entry path that reads dates is dormant, and no tier loses trades.
+- Q3: It should exist because FMP alone misses most dates; the simplest fix is a second per-symbol provider with FMP as fallback, not a new strategy.
+- Q4: Builds on earnings_preflight (PREFLIGHT-LEDGER-1029, PR 801) and fmp_client; no open PR or Codex session covers Finnhub dates; QHM label change moves to QHM-EARN-STOP.
+- Q5: No decision thresholds; cache windows and time-to-live values are plumbing, and the dates themselves come from provider data.
+- Q6: Exposes the single-provider assumption; forward pass is a third provider plus earliest-date scoring checked against SEC 8-K filings.
+- Q7: Feeds QHM earnings trim, Swing earnings handling, Day-tier report mornings and the Sunday preflight warning; each reads the cache and treats missing as UNKNOWN.
+- Q8: Coverage gap measured on 37 names in logs/research/earnings_sources_2026-10-29.md; Finnhub dates matched SEC 8-K filings in 17 of 18 checks.
+- Q9: Tested against the 10-29 reporting week and 37 names; expected effect is fewer UNKNOWN dates; it is wrong if weekly SEC comparison shows mismatched dates.
+- Q10: Not an edge question; this is a data source fix with no calibration being held back.
+- Q11: Not risk-path: two board seats traced size, frequency and concurrency as unchanged; dates only feed existing rules.
+- Q12: Safety envelope untouched; stops, kill switch, paper flag unchanged; Finnhub is added as a tier-two data source.
+- Q13: Finnhub failure falls back to FMP, then to UNKNOWN; an expired cache entry never triggers an action.
+- Q14: No shadow component; the warmer and lookups are acted on as soon as they ship.
+- Q15: Every lookup logs EARNLOOKUP with provider, date and age; the warmer logs EARNWARM; consumers log EARNSERVE.
+- Q16: EARNWARM and EARNSERVE lines on the first trading day prove it ran; post-live audit compares served dates with SEC filings.
+- Q17: An OCI read-only probe runs the warmer and a lookup against the real cache before go-live.
+- Q18: No anomaly is explained away; FMP missing dates was investigated and measured rather than accepted.
+- Q19: It changes QHM trim inputs, so the owner approves this exact design before any commit.
+- Q20: Review prompts went through the bias gate; board, GAI and Codex reviewed three rounds with neutral prompts.
+- Q21: No broker calls at all; tests mock every HTTP request and the broker refuses under test.
+- Q22: Yes, a read-only run on the OCI server against the real cache and providers precedes go-live.
+- Q23: A full-path test from warmer through cache to QHM and preflight runs before calling it ready.
+- Q24: Provider coverage claims were checked live in the 10-29 probe, including the FMP-blind names.
+- Q25: No market statistics are quoted; coverage counts were measured directly from provider responses.
+- Q26: Tier two: Finnhub per-symbol calendar first, FMP second, then UNKNOWN; no yfinance involved.
+- Q27: Writes data/cache/earnings_symbol_cache.json with a file lock and atomic replace.
+- Q28: Warmer runs in its own cron process; QHM reads within run_cycle under a bounded budget; entry path reads cache only, never blocking check_exits.
+- Q29: Ranks high because every earnings rule and the QHM-EARN-STOP design depend on correct dates.
+- Q30: Standard frameworks keep a verified corporate-events calendar with source reconciliation; our audits underweight silent date gaps, which this closes.
+- Q31: Not an edge claim, so no walk-forward test applies; correctness is checked against SEC filings.
+- Q32: No replay involved; dates are compared with filings after the fact, so look-ahead does not apply.
+- Q33: No trading cost involved; only API call budget, which the warmer spreads across the day.
+- Q34: Not a return source, so alpha versus beta does not apply to this data layer.
+- Q35: Behaves the same in every regime; a provider outage degrades to UNKNOWN, never a false date.
+- Q36: Per-symbol calls scale with the universe size, not account size; free-tier rate limits fit the current universe.
+- Q37: Not an edge; accuracy is tracked as matched dates over SEC checks, currently 17 of 18.
+- Q38: Decay measured as rising UNKNOWN count or SEC mismatches; then the provider is replaced through a new design.
+- Q39: Sizing is not touched; existing sizing keeps using Alpaca fills.
+- Q40: Protects that a known report is never read as no report; checked weekly against SEC 8-K filings and the daily UNKNOWN count.
+- Q41: An expert would reconcile several providers against official filings automatically, which the forward pass adds.
+- Q42: Rawest data is SEC 8-K filings and provider per-symbol calendars; the design uses the per-symbol calendars directly.
+- Q43: Professional method is multiple vendors with reconciliation to official filings; this design starts that with two vendors plus SEC checks.
+- Q44: Independent evidence is SEC filings, not the author's own checks.
