@@ -1368,8 +1368,9 @@ def validate_config():
 # logs/design_records/swing_overnight_strength_2026-10-29.md through amendment v12). Read only by
 # execution/swing_overnight.py and run_swing_overnight.py. Every number below is on that record's "Owner numbers" line.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════════
-SWING_TREND_NIGHT_ENABLED = False          # kill flag (item 7). False blocks NEW entries only; held shares keep their stop and exit.
-                                           # Flips True only after the v8 exclusions deploy and the read-only OCI probe passes (v8 item 4).
+SWING_TREND_NIGHT_ENABLED = True           # kill flag (item 7). False blocks NEW entries only; held shares keep their stop and exit.
+                                           # Flipped True 2026-11-01 after the exclusions deployed (PR 814) and the read-only OCI probe
+                                           # passed: paper account matched, IN-QQQM ids parse and tag intraday, QQQM position 0, sizing 3 sh.
 SWING_TREND_NIGHT_SYMBOL = "QQQM"          # item 2 — the instrument, reserved to this sub-strategy everywhere (v8 item 1)
 SWING_TREND_NIGHT_REGIME_SYMBOL = "SPY"    # item 1 — regime index
 SWING_TREND_NIGHT_Q_SYMBOL = "QQQ"         # item 3 — q and the replay prior measured on QQQ (QQQM's own history is short)
