@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-10-28 (OpenAI Codex + Claude; Claude TRACKB-SIZE-ETF-1028) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-11-01 (Claude, SWING-OVERNIGHT-1101 live) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,25 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-11-01, Claude signed) — trend_night QQQM overnight hold LIVE; weekly usage limit checkpoint
+
+**Shipped and deployed this session (all on OCI, main @ 04213e7):**
+- EARN-SOURCE-1029 (PR 808): Finnhub per-symbol earnings dates + FMP fallback + warmer cron. QHM read unexercised until Mon 11-02.
+- PREFLIGHT-ENV-1031 (PR 809): Sunday earnings pre-flight loads .env (every run since 07-19 was an [ALERT no-op]). First real run Sun 11-01 14:55 PT — CHECK `logs/earnings_preflight_cron.log` shows "Slack alert sent." with no "[ALERT no-op]".
+- EXPECT-REGEX-1031 (PR 810): day-universe-1027 proof patterns escaped (false #794). Issue #794 still open — owner to close (gh close was blocked).
+- FILL-NOTIF-DST-1101 (PR 813): fill-alert state no longer self-quarantines in the DST fall-back hour (55 false CRITICAL pages 11-01 06:00-06:54 UTC).
+- SWING-OVERNIGHT-1101 (PR 814 code shipped disabled, PR 815 ENABLED=True): Swing tier `trend_night` — buy QQQM ~12:40 PT on QQQ trend nights, one GTC stop, sell at next open. Order qty = min(own fills, fresh broker position); owner QQQM never traded; no auto-cover. 13 cold reviews (round 13 PASS), GAI APPROVE, Gro waived on the 2,562-line module under the existing protocol (Codex out until 11-04; owner: Gro is the backup, no Codex re-review). Cron `* * * * 1-5 run_swing_overnight.py` installed; ALPACA_PAPER_ACCOUNT_NUMBER added to OCI .env. Read-only probe: paper acct OK, IN-QQQM tags intraday, QQQM 0, size 3 sh (bound by K room).
+- OCI crontab DST fix: score16_aggregator 16:20, gex_daily_audit 16:30, fifo_reconcile 16:08 ET via cron_tz_wrapper; catalyst_engine 13-21 UTC. Backups in logs/crontab_backup_*.
+- Post-live audits recorded: 779 PASS, 792 PASS, 793 PASS, 781 PASS, 784 BUGS_FIXED, 764 BUGS_OPEN, 760 NOT_EXERCISED.
+
+**NEXT ACTION (exact):** after the Mon 11-02 close, post-live audit trend_night's first night (logs/swing_overnight.log + trade_events.jsonl + Alpaca fills; record_post_live.py 814 and 815). Then, in order:
+1. SWING-BREAKOUT level fix (PR 764 BUGS_OPEN): BRK.B entered 544.60 below 546.97 because the gate read a $4.28-wide IEX ask; test the level on the SIP quote/last trade. Add an earnings check (NOW entered 2 days pre-earnings, gapped -25.9%, -2.63R). Stop creating setups for reserved/QHM-held names (TSLA). Owner approval before code.
+2. QHM buy-the-dip redesign (owner 10-31: buy the dip first on bullish names; strength-only re-confirm is wrong; 40%/20% caps + whole-share rounding). Design + gate, owner approval before code.
+3. News-halt fix (draft logs/research/news_venue_halt_1031.md): 29/29 HALT-blocked RTH cycles in 103 days were false; drop "trading halt"/"systemic risk", title-only, whole-word+plural; venue-close guard. Owner approval (entry behaviour).
+4. Weekly post-mortem clearer card: built in worktree agent-acf91ffba51eb242f, branch claude/pm-clarity-1101 (uncommitted); the real-data dry run is blocked by the owner-approval hook because the script imports the Gemini client — needs a --dry-run exemption or owner OK.
+5. strategy/run_cycle.py drift detector: add trend_night_symbols() to _drift_exclude/_dc_exclude (phantom-drift Slack noise only).
+6. Remaining overdue post-live audits (801 after the Sunday run, 768, 758, 753, ...) and issues #806/#777.
 
 ## ⏩ LATEST (2026-10-29, Claude signed) — 10-29 audit follow-ups; EARN-SOURCE-1029 awaiting owner approval
 
