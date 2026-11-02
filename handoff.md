@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-11-01 (Claude, SWING-OVERNIGHT-1101 live) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-11-02 (Claude, QHM-FILL-SAVE-1102 live) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -7,6 +7,20 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > claims-gate in `.claude/preship/`), (3) `logs/tb_audit_log.md` (bug/patch log), (4)
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
+
+## ⏩ LATEST (2026-11-02, Claude signed) — QHM-FILL-SAVE-1102 deployed; Day reversal rule tested (no edge)
+
+- QHM-FILL-SAVE-1102 (PR 817, c742b76): QHM saves state the moment a tranche fill is booked. Evidence and timeline
+  (GOOGL 11-02 stop placed before the state file was rewritten) in `logs/design_records/qhm_fill_save_2026-11-02.md`.
+  Owner-approved; OCI pull printed DEPLOY_OK at c742b76; after restart quarterly_holds.json shows GOOGL ACTIVE 1 with
+  stop 946bb97d. Deployed, unexercised until the next tranche-1 fill.
+- Owner's Day bottom-reversal rule tested: 0/256 variants net positive (`logs/research/day_reversal_owner_rule_2026-11-02.md`).
+  [hypothesis — unverified] next Day candidate: RSI-60m ETF rule confirmation on 2016-2020 data.
+- Open (not yet investigated): OCI `logs/ledger_sync_cron.log:78803` "2026-11-02 13:00:17,925 WARNING ... reattributed
+  impossible negative protected replay GOOGL/qhm=-2 to intraday" (repeats at 13:20:18, line 78860).
+
+**NEXT ACTION (exact):** unchanged from the 11-01 block below — trend_night post-live audit after the 11-02 close
+(record_post_live.py 814 and 815), then items 1-6.
 
 ## ⏩ LATEST (2026-11-01, Claude signed) — trend_night QQQM overnight hold LIVE; weekly usage limit checkpoint
 
