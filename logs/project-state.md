@@ -1,6 +1,9 @@
-# Project State — alpaca-mtf-bot (2026-10-08 10:45 PT, Claude)
-- OCI 137.131.51.250 at fc307e7; mtf-bot / mtf-writer / mtf-http active. Paper account (~$2.5K), goal $25K.
-- Deployed this session: tier-safe stop recoveries (#517); day-tier close timing 3:58 PM ET + after-hours limit exit (#522, #524); preship static-facts mechanism (#525); tier names Day/Swing/QHM/F6 (#526); ledger operator page deferred for the owner tier's own exit (#528).
-- NOT shipped: Track A ETF routing (stock at 2+ shares, 2x/inverse ETF at 0-1, never 1-share ETF, 1-share stock fallback, one day lot per stock). Patch: logs/design_records/track_a_etf_route_wip_2026-10-08.patch. Next: fresh cold-2nd → Gro+GAI preship → ship.
-- CEO decisions: retries default for exits; all non-promoted day lots closed by EOD; ETFs only when the stock is unaffordable; leveraged cap 5%→10% (Swing, gated); index 3x ETFs for Day+Swing; TQQQ/SQQQ standalone retired.
-- Open: rest of item 5 (Swing routing, 10% cap, gap limit, index 3x); items 4, 6, 7, 8 (design record logs/design_records/tier_safety_and_cohold_plan_2026-10-08.md).
+# alpaca-mtf-bot — project state (2026-11-01 PT)
+
+**Bot:** OCI 137.131.51.250, services mtf-bot/mtf-writer/mtf-http/nginx active; main @ 04213e7. Paper account equity ~$2,696 (Alpaca, 11-01). Holdings: AAPL, BRK.B, MSFT, XOM (Swing), GE, NVDA (QHM).
+
+**Live since this session:** trend_night QQQM overnight hold (SWING-OVERNIGHT-1101, Swing tier) — buys QQQM ~12:40 PT on QQQ trend nights, one GTC stop, sells at the next open; size today 3 sh (bound by overnight K room); first possible night Mon 11-02. Earnings dates from Finnhub (EARN-SOURCE-1029). Sunday earnings pre-flight now reaches Slack. Fill alerts survive DST. Post-close crons follow ET year-round.
+
+**Next:** audit trend_night's first night; Swing breakout SIP-level + earnings check; QHM buy-the-dip redesign; news-halt false-positive fix; clearer weekly post-mortem card; run_cycle drift-exclude QQQM; overdue post-live audits.
+
+**Owner preferences:** existing rules are sufficient authority (don't re-ask); Gro is the backup reviewer (no Codex re-review); problem/solution/stock-example updates; no shadows; buy the dip first on QHM names.
