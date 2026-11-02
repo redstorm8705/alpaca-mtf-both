@@ -1120,7 +1120,12 @@ class QuarterlyHoldManager:
 
                 elif pos.state == HoldState.AWAITING_FILL:
                     # Check if previous tranche filled; if so advance
+                    tranches_before = pos.tranches_filled
                     filled = self._check_fill_and_advance(pos)
+                    if filled or pos.tranches_filled != tranches_before:
+                        # QHM-FILL-SAVE-1102: persist the booked fill and its new stop at once. Unsaved, a restart
+                        # reads AWAITING_FILL with no stop id, cancels the live QH stop as stray and rebuilds it.
+                        self._save_state()
                     # A tranche-1 fill leaves the hold ACTIVE (stop resting) or PENDING_STOP_REPLACE;
                     # later tranches go through _add_tranche_active, never a plain limit order here.
                     if (filled and pos.state == HoldState.AWAITING_FILL
