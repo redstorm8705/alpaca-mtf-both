@@ -1,6 +1,9 @@
 # NEWS-VENUE-HALT-1103 — false news halts and the false close-time venue alert (design v2, signed: Claude)
 
-Approval-ID: NEWS-VENUE-HALT-1103 (supersedes the 10-31 draft `logs/research/news_venue_halt_1031.md`)
+Approval-ID: NEWS-VENUE-HALT-1103
+Covers: events/news_monitor.py, strategy/run_cycle.py, config.py, tests/test_news_matcher_v2.py
+
+Supersedes the 10-31 draft `logs/research/news_venue_halt_1031.md`.
 Status: design aligned. Board Taleb (masked-loss) and Kyle (signal) APPROVE-WITH-CHANGES, all folded in; GAI
 APPROVE-WITH-CHANGES after 3 counter-prompt rounds (systemic-risk removal accepted on log evidence; crypto exclusion and
 replay table folded in); Gro APPROVE. Code not written: `events/news_monitor.py` has no owner approval on record, so the tool gate needs
