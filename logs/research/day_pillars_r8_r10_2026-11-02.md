@@ -120,8 +120,24 @@ discovery-chosen spread rule on that sample.
   sample, the full set, 4 sensitivity cutoffs). Bonferroni over 10 looks on book t 3.45 gives p ≈ 0.006.
 - 529 trades had no SIP quote in the window and are excluded; their gross is not known to differ.
 
-Still owed before it can be proposed: confirmation on its first live sessions (data never consulted); Alpaca
-short-locate availability on gappers; fill-model check of stop-entry slippage beyond the quoted half spread.
+**Short borrow (2026-11-03):** Alpaca's current asset flags (not point-in-time) mark 1,053 of 1,172 filtered short
+trades' symbols easy-to-borrow. Keeping only borrowable shorts: 2,196 trades, net +24.7 bps, book t 2.94, positive
+every year (2022 +13.5, 2023 +25.4, 2024 +35.1, 2025 +16.9, 2026 +28.1).
+
+**Entry fills from SIP prints (2026-11-03):** for a sample of filtered trades (discovery 253, test 599), every SIP
+print from the first print through the level onward. Level converted to raw prices with the ratio of the raw and
+adjusted 09:30 bar.
+- A plain stop order (size-weighted prints in the next second) fills within about 0.4 bps of the replay's price
+  plus half spread: test +19.2 vs +19.6 bps per trade. A first pass that converted prices with a later bar's close
+  ratio showed about 20 bps of extra slippage; that was a price-adjustment error, not slippage.
+- Stop-limit at the level, held 30 s (best on discovery, t 1.45 among 21 cap/window variants): test fill rate 94%,
+  +27.2 bps per signal vs +19.2 for the stop order. Caps 5 bps and wider are worse on both periods.
+- These samples' averages (+19 to +20 bps) sit below the full-set +28.9; the sample t is about 1.2-1.8.
+
+**Test-year looks for this family:** now about 12 (adds the borrow filter and the fill-model comparison).
+
+Still owed before it can be proposed: confirmation on its first live sessions (data never consulted); live
+locate/borrow at order time (Alpaca's flag can change daily).
 
 Scripts: session scratchpad `dn/r8_passive.py`, `dn/r9_vrp.py`, `dn/r10_resid.py`, `dn/sip_universe.py`,
 `dn/r11_sip.py`, on the round-1 harness `day_search/`.
