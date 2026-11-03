@@ -1,7 +1,8 @@
 {
-  "sha256": "50bf954486b4dc4512260bb2e47910ad226918bbc9cfdf0789c9cc214b5a3241",
-  "gro": "WAIVED",
+  "sha256": "4ae790227c0053873fb64d044afdd89a228c6c5caccdc8de1480902ddf99bc12",
+  "gro": "APPROVE",
   "gai": "APPROVE",
-  "ts": 1792244360,
-  "file": "handoff.md"
+  "ts": 1793693548,
+  "file": "handoff.md",
+  "reviewer_b": "gro"
 }
