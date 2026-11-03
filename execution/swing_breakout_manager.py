@@ -947,7 +947,7 @@ class SwingBreakoutManager:
                        if r_.get("status") in _HOLDING and s_ != symbol) + qty * stop_dist
         sizing = dict(info, kelly=kel, atr=sig.get("atr"), atr_floor_pct=atr_floor_pct, gap=gap,
                       aggregate_risk=round(agg_risk, 2), aggregate_risk_pct=(round(agg_risk / equity, 4) if equity > 0 else None),
-                      ask=ask, qty=int(qty))
+                      ask=ask, last=last, qty=int(qty))
         why = sizing
         if qty < 1:
             _log("skip", symbol, reason="no size", sizing=why, **ctx)

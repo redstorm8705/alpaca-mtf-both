@@ -1,0 +1,33 @@
+{
+  "change": "swing-level-last-1103",
+  "tier": 2,
+  "paths": [
+    "execution/swing_breakout_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/trade_events.jsonl",
+      "pattern": "\"setup\": \"c2_breakout_55d\".*\"sizing\": \\{.*\"last\": [0-9]"
+    }
+  ],
+  "expected_rate": "every Swing breakout entry or sized skip (a setup that reaches sizing); 0-3 per session, many sessions have none",
+  "window_sessions": 10,
+  "window_reason": "Swing breakout entries are infrequent (pending setups must open above their level); ten sessions normally include at least one sized decision",
+  "reversal": "a Swing breakout entry whose fill is below its breakout level by more than the entry limit slip, or an entry record whose sizing.last is below sizing level",
+  "metrics": [
+    {
+      "name": "Swing breakout entries filled below their breakout level",
+      "source": "logs/trade_events.jsonl entry price vs level",
+      "direction": "down",
+      "bound": "zero beyond the entry limit slip"
+    },
+    {
+      "name": "setups skipped for a last trade below the level or stale",
+      "source": "logs/trade_events.jsonl skip reasons 'last trade below the breakout level' / 'last trade unavailable or stale'",
+      "direction": "up",
+      "bound": "no setup skipped for staleness on more than 2 consecutive sessions"
+    }
+  ],
+  "verification": "tests/test_swing_breakout_manager.py",
+  "baseline_exempt_reason": "none needed: the proof key sizing.last is written only by this change (0 matches before ship)"
+}
