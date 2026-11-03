@@ -1,0 +1,61 @@
+unique logged headlines 20172  2026-07-19 20:53:51 .. 2026-11-03 15:43:25  logged levels {'CAUTION': 10754, 'MONITOR': 9398, 'HALT': 20}
+logged level -> v2 level: {'CAUTION->CAUTION': 5315, 'CAUTION->MONITOR': 330, 'CAUTION->None': 5109, 'HALT->CAUTION': 1, 'HALT->HALT': 2, 'HALT->None': 17, 'MONITOR->CAUTION': 3, 'MONITOR->MONITOR': 5877, 'MONITOR->None': 3518}
+
+=== every headline that was or would be HALT ===
+{"ts": "2026-07-23 04:29:47", "src": "Currents", "logged": "HALT", "logged_kws": ["systemic risk"], "v1_on_title": "HALT", "v2": null, "v2_kws": [], "hl": "Catastrophic disruption cascades driven by the nonlinearity of systemic risk"}
+{"ts": "2026-07-24 19:06:44", "src": "Marketaux", "logged": "HALT", "logged_kws": ["systemic risk"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "Adani says want to start airline shows letter, denies plans in stock exchange filing"}
+{"ts": "2026-07-28 04:55:34", "src": "Currents", "logged": "HALT", "logged_kws": ["trading halt"], "v1_on_title": "HALT", "v2": null, "v2_kws": [], "hl": "Korean Markets Hit by Turmoil as Chip Rout Forces Trading Halts"}
+{"ts": "2026-08-10 06:33:25", "src": "Currents", "logged": "HALT", "logged_kws": ["national emergency"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "MSS Prepares Ulchi Exercise to Sustain SME Support"}
+{"ts": "2026-08-13 19:16:54", "src": "Marketaux", "logged": "HALT", "logged_kws": ["trading halt"], "v1_on_title": "HALT", "v2": null, "v2_kws": [], "hl": "Workday skyrockets 20% before trading halted on report of Silver Lake takeover"}
+{"ts": "2026-08-14 17:39:24", "src": "Currents", "logged": "HALT", "logged_kws": ["systemic risk"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "Stock prices are high. But where else do you go?"}
+{"ts": "2026-08-16 04:58:05", "src": "Currents", "logged": "HALT", "logged_kws": ["nuclear strike"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "Abolishing Atomic Arms Can Avert War That Kills Billions, Experts Say"}
+{"ts": "2026-09-02 18:39:46", "src": "Currents", "logged": "HALT", "logged_kws": ["trading halt"], "v1_on_title": "HALT", "v2": null, "v2_kws": [], "hl": "Scorpio Gold trading halt imposed in error, resumes trading By Investing.com"}
+{"ts": "2026-09-07 06:00:07", "src": "Currents", "logged": "HALT", "logged_kws": ["trading halt"], "v1_on_title": "HALT", "v2": null, "v2_kws": [], "hl": "Zetrix AI shares fall after trading halt, aborted RM130mil acquisition"}
+{"ts": "2026-09-11 14:30:14", "src": "Currents", "logged": "HALT", "logged_kws": ["systemic risk"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "FM calls for AI safeguards to keep pace with rapid technology evolution"}
+{"ts": "2026-10-05 01:18:21", "src": "Currents", "logged": "HALT", "logged_kws": ["trading halt"], "v1_on_title": "HALT", "v2": null, "v2_kws": [], "hl": "[01905.HK] TRADING HALT"}
+{"ts": "2026-10-14 20:02:08", "src": "Currents", "logged": "HALT", "logged_kws": ["trading halt"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "WF Holding Stock Plunges After $18 Million Offering With Heavy Dilution Risk - WF Holding (NASDAQ:WFF)"}
+{"ts": "2026-10-16 10:49:35", "src": "Currents", "logged": "HALT", "logged_kws": ["world war iii"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "GameStop CEO Ryan Cohen Fears 'Man Versus Machine' AI Fight - GameStop (NYSE:GME)"}
+{"ts": "2026-10-17 08:31:39", "src": "Currents", "logged": "HALT", "logged_kws": ["national emergency"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "The U.S. paid $5 million each to keep 60 commercial ships under its flag in 2018; Defence can call on every ve"}
+{"ts": "2026-10-30 16:18:07", "src": "Currents", "logged": "HALT", "logged_kws": ["national emergency"], "v1_on_title": "HALT", "v2": null, "v2_kws": [], "hl": "PG&E Makes History as First Energy Utility to Earn International Emergency Management Accreditation"}
+{"ts": "2026-11-01 19:53:14", "src": "Currents", "logged": "HALT", "logged_kws": ["world war iii"], "v1_on_title": "HALT", "v2": "HALT", "v2_kws": ["world war iii"], "hl": "World War III: Could Americans be called up for war as Trump abruptly cancels campaign rallies amid Iran tensi"}
+{"ts": "2026-11-02 05:31:58", "src": "Marketaux", "logged": "HALT", "logged_kws": ["nuclear strike", "world war iii"], "v1_on_title": "HALT", "v2": "HALT", "v2_kws": ["nuclear strike", "world war iii"], "hl": "Trump's nuclear strike on Iran's Pickaxe Mountain to trigger World War III? Tucker Carlson\u2019s warning explained"}
+{"ts": "2026-11-02 18:32:43", "src": "Currents", "logged": "HALT", "logged_kws": ["nuclear strike"], "v1_on_title": "CAUTION", "v2": "CAUTION", "v2_kws": ["iran"], "hl": "'Trump to nuke Iran within\u2026': Tucker Carlson drops bombshell; claims, \u2018Desperate BIBI pushing US\u2019"}
+{"ts": "2026-11-03 00:05:24", "src": "Marketaux", "logged": "HALT", "logged_kws": ["world war iii"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "Right On Cue, The Bird Flu Is Back: There Are 3 Confirmed Human Cases In Washington State And One Victim Has A"}
+{"ts": "2026-11-03 06:14:27", "src": "Currents", "logged": "HALT", "logged_kws": ["systemic risk"], "v1_on_title": null, "v2": null, "v2_kws": [], "hl": "Most compliance experts think AI now being used for financial fraud"}
+
+keyword-blocked cycles in trade_events: 35
+2026-07-24 12:06 PT | v2 still blocks: False | cause: Marketaux: Adani says want to start airline shows letter, denies plans in stock e ['systemic risk']
+2026-07-24 12:12 PT | v2 still blocks: False | cause: Marketaux: Adani says want to start airline shows letter, denies plans in stock e ['systemic risk']
+2026-07-24 12:17 PT | v2 still blocks: False | cause: Marketaux: Adani says want to start airline shows letter, denies plans in stock e ['systemic risk']
+2026-08-13 12:17 PT | v2 still blocks: False | cause: Marketaux: Workday skyrockets 20% before trading halted on report of Silver Lake  ['trading halt']
+2026-08-13 12:23 PT | v2 still blocks: False | cause: Marketaux: Workday skyrockets 20% before trading halted on report of Silver Lake  ['trading halt']
+2026-08-13 12:29 PT | v2 still blocks: False | cause: Marketaux: Workday skyrockets 20% before trading halted on report of Silver Lake  ['trading halt']
+2026-08-14 10:39 PT | v2 still blocks: False | cause: Currents: Stock prices are high. But where else do you go? ['systemic risk']
+2026-08-14 10:46 PT | v2 still blocks: False | cause: Currents: Stock prices are high. But where else do you go? ['systemic risk']
+2026-08-14 10:51 PT | v2 still blocks: False | cause: Currents: Stock prices are high. But where else do you go? ['systemic risk']
+2026-08-14 10:57 PT | v2 still blocks: False | cause: Currents: Stock prices are high. But where else do you go? ['systemic risk']
+2026-08-14 11:04 PT | v2 still blocks: False | cause: Currents: Stock prices are high. But where else do you go? ['systemic risk']
+2026-09-02 11:39 PT | v2 still blocks: False | cause: Currents: Scorpio Gold trading halt imposed in error, resumes trading By Investi ['trading halt']
+2026-09-02 11:45 PT | v2 still blocks: False | cause: Currents: Scorpio Gold trading halt imposed in error, resumes trading By Investi ['trading halt']
+2026-09-02 11:50 PT | v2 still blocks: False | cause: Currents: Scorpio Gold trading halt imposed in error, resumes trading By Investi ['trading halt']
+2026-09-02 11:56 PT | v2 still blocks: False | cause: Currents: Scorpio Gold trading halt imposed in error, resumes trading By Investi ['trading halt']
+2026-09-02 12:01 PT | v2 still blocks: False | cause: Currents: Scorpio Gold trading halt imposed in error, resumes trading By Investi ['trading halt']
+2026-09-02 12:06 PT | v2 still blocks: False | cause: Currents: Scorpio Gold trading halt imposed in error, resumes trading By Investi ['trading halt']
+2026-09-11 07:30 PT | v2 still blocks: False | cause: Currents: FM calls for AI safeguards to keep pace with rapid technology evolutio ['systemic risk']
+2026-09-11 07:35 PT | v2 still blocks: False | cause: Currents: FM calls for AI safeguards to keep pace with rapid technology evolutio ['systemic risk']
+2026-09-11 07:41 PT | v2 still blocks: False | cause: Currents: FM calls for AI safeguards to keep pace with rapid technology evolutio ['systemic risk']
+2026-09-11 07:46 PT | v2 still blocks: False | cause: Currents: FM calls for AI safeguards to keep pace with rapid technology evolutio ['systemic risk']
+2026-09-11 07:51 PT | v2 still blocks: False | cause: Currents: FM calls for AI safeguards to keep pace with rapid technology evolutio ['systemic risk']
+2026-09-11 07:56 PT | v2 still blocks: False | cause: Currents: FM calls for AI safeguards to keep pace with rapid technology evolutio ['systemic risk']
+2026-10-30 09:18 PT | v2 still blocks: False | cause: Currents: PG&E Makes History as First Energy Utility to Earn International Emerg ['national emergency']
+2026-10-30 09:23 PT | v2 still blocks: False | cause: Currents: PG&E Makes History as First Energy Utility to Earn International Emerg ['national emergency']
+2026-10-30 09:29 PT | v2 still blocks: False | cause: Currents: PG&E Makes History as First Energy Utility to Earn International Emerg ['national emergency']
+2026-10-30 09:34 PT | v2 still blocks: False | cause: Currents: PG&E Makes History as First Energy Utility to Earn International Emerg ['national emergency']
+2026-10-30 09:40 PT | v2 still blocks: False | cause: Currents: PG&E Makes History as First Energy Utility to Earn International Emerg ['national emergency']
+2026-10-30 09:45 PT | v2 still blocks: False | cause: Currents: PG&E Makes History as First Energy Utility to Earn International Emerg ['national emergency']
+2026-11-02 10:32 PT | v2 still blocks: False | cause: Currents: 'Trump to nuke Iran within…': Tucker Carlson drops bombshell; claims,  ['nuclear strike']
+2026-11-02 10:38 PT | v2 still blocks: False | cause: Currents: 'Trump to nuke Iran within…': Tucker Carlson drops bombshell; claims,  ['nuclear strike']
+2026-11-02 10:44 PT | v2 still blocks: False | cause: Currents: 'Trump to nuke Iran within…': Tucker Carlson drops bombshell; claims,  ['nuclear strike']
+2026-11-02 10:49 PT | v2 still blocks: False | cause: Currents: 'Trump to nuke Iran within…': Tucker Carlson drops bombshell; claims,  ['nuclear strike']
+2026-11-02 10:55 PT | v2 still blocks: False | cause: Currents: 'Trump to nuke Iran within…': Tucker Carlson drops bombshell; claims,  ['nuclear strike']
+2026-11-02 11:01 PT | v2 still blocks: False | cause: Currents: 'Trump to nuke Iran within…': Tucker Carlson drops bombshell; claims,  ['nuclear strike']

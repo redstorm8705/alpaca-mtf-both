@@ -102,10 +102,73 @@ _MACRO_RISK_STATE_PATH = Path(__file__).parent.parent / "data" / "state" / "hybr
 
 KEYWORDS_HALT = {
     # True exchange / systemic emergencies — these and only these pause entries
+    # (legacy list: used only when NEWS_MATCHER_V2_ENABLED is False)
     "national emergency", "market circuit breaker", "trading halt",
     "federal reserve emergency", "systemic risk",
     "nuclear strike", "nuclear attack", "world war iii",
 }
+
+# NEWS-VENUE-HALT-1103 (owner-approved; logs/design_records/news_venue_halt_v2_2026-11-03.md).
+# Kill flag (Rule E per-feature flag): False restores the legacy substring matcher above.
+NEWS_MATCHER_V2_ENABLED = True
+
+# v2 HALT phrases, matched on the headline TITLE only. "trading halt" (single-stock halts) and
+# "systemic risk" (commentary) are gone: 20 of 29 false blocks in the 103-day replay, zero true.
+# Words are joined by spaces here; the matcher accepts any run of spaces/hyphens between words.
+KEYWORDS_HALT_V2 = {
+    "national emergency", "market circuit breaker", "federal reserve emergency",
+    "nuclear strike", "nuclear attack", "world war iii",
+    "market wide circuit breaker", "marketwide circuit breaker", "circuit breakers triggered",
+    "level 1 circuit breaker", "level 2 circuit breaker", "level 3 circuit breaker",
+    "halts all trading", "trading halted in all", "market wide halt", "marketwide halt",
+    "exchange wide halt", "halts trading in all", "trading halt in all", "halt all trading",
+}
+# Federal Reserve feed only (its text carries a synthetic "federal reserve " prefix that is not
+# part of the title, so a real Fed emergency is matched by these instead).
+KEYWORDS_HALT_FED_V2 = {"emergency rate cut", "emergency meeting"}
+# A HALT title that also names a crypto venue/asset is not an equity-market event (prefix forms such as
+# "cryptocurrency", "ethereum", "stablecoin" and the large crypto venues included — Kyle, diff review).
+KEYWORDS_CRYPTO_V2 = {"crypto", "bitcoin", "ether", "token", "coin"}
+_CRYPTO_WORDS_RX = re.compile(
+    r"(?<!\w)(?:crypto\w*|bitcoin\w*|ether(?:eum)?|stablecoins?|tokens?|coins?|coinbase|binance|kraken)(?!\w)")
+
+
+def _phrase_pattern(phrase: str) -> "re.Pattern[str]":
+    """Whole-phrase pattern: lookaround word edges, any spaces/hyphens between words, optional
+    plural on the last word ('-ies' for a consonant + 'y' ending). Literal words and one fixed
+    character class only, so matching stays linear (no nested quantifiers)."""
+    words = phrase.lower().split()
+    last = words[-1]
+    if last.endswith("y") and not last[:-1].endswith(("a", "e", "o", "u")):
+        tail = re.escape(last[:-1]) + r"(?:y|ies)"
+    else:
+        tail = re.escape(last) + r"(?:s|es)?"
+    body = r"[\s\-\u2010-\u2015\u2212]+".join([re.escape(w) for w in words[:-1]] + [tail])   # incl. unicode dashes
+    return re.compile(r"(?<!\w)" + body + r"(?!\w)")
+
+
+def _compile_phrases(phrases) -> "list[tuple[str, re.Pattern[str]]]":
+    return [(p, _phrase_pattern(p)) for p in sorted(phrases)]
+
+
+_HALT_RX     = _compile_phrases(KEYWORDS_HALT_V2)
+_HALT_FED_RX = _compile_phrases(KEYWORDS_HALT_V2 | KEYWORDS_HALT_FED_V2)
+_CRYPTO_RX   = [("crypto", _CRYPTO_WORDS_RX)]
+# ...unless the title also names the equity market itself (cold-2nd review: "Market-wide circuit breaker
+# triggered as stocks, bitcoin plunge" is an equity event and must stay HALT).
+_EQUITY_RX   = [("equity", re.compile(
+    r"(?<!\w)(?:stocks?|equit(?:y|ies)|nyse|nasdaq|s&p|dow|wall street|u\.s\. markets?)(?!\w)"))]
+_FED_PREFIX  = "federal reserve "
+
+
+def _phrase_hits(compiled, text: str) -> list:
+    """The matched text of every phrase found in `text` (lower-cased input expected)."""
+    out = []
+    for _phrase, rx in compiled:
+        m = rx.search(text)
+        if m:
+            out.append(m.group(0))
+    return out
 
 # CAUTION: notable headlines — displayed prominently in dashboard, zero size impact
 KEYWORDS_CAUTION = {
@@ -136,6 +199,9 @@ KEYWORDS_MONITOR = {
     "negotiation", "ceasefire", "peace talks", "summit",
     "jobs", "payrolls", "earnings", "guidance",
 }
+
+_CAUTION_RX = _compile_phrases(KEYWORDS_CAUTION)
+_MONITOR_RX = _compile_phrases(KEYWORDS_MONITOR)
 
 # ── Macro Risk State tracking — informational only, displayed in dashboard ────
 # Replaces binary "war state" (Apr 6 2026 audit). No longer gates sizing directly.
@@ -429,9 +495,16 @@ class NewsMonitor:
 
     # ── Keyword classifier ────────────────────────────────────────────────────
 
-    def _classify(self, text: str) -> tuple[Optional[str], list, float]:
+    def _classify(self, text: str, title: Optional[str] = None,
+                  fed: bool = False) -> tuple[Optional[str], list, float]:
         """
         Returns (risk_level, matched_keywords, size_multiplier).
+
+        NEWS-VENUE-HALT-1103 (v2, NEWS_MATCHER_V2_ENABLED): whole-phrase matching for every tier.
+        HALT is matched on `title` only (None = the whole text is the title, e.g. a Truth Social
+        post or a Finnhub headline); `fed=True` adds the Fed-feed-only phrases. A HALT phrase that
+        appears only in the description, or in a title naming a crypto venue/asset, is shown as
+        CAUTION instead. For HALT the returned keywords are the matched text itself (snippet).
 
         Build F (2026-07-09, LOCKED): HALT is now a display tier, same as CAUTION/
         MONITOR — a keyword match alone can never gate sizing or trigger a close.
@@ -446,9 +519,23 @@ class NewsMonitor:
           MONITOR → 1.0  (logged only)
         """
         lower = text.lower()
-        found_halt    = [k for k in KEYWORDS_HALT    if k in lower]
-        found_caution = [k for k in KEYWORDS_CAUTION if k in lower]
-        found_monitor = [k for k in KEYWORDS_MONITOR if k in lower]
+        if NEWS_MATCHER_V2_ENABLED:
+            head = lower if title is None else title.lower()
+            halt_rx = _HALT_FED_RX if fed else _HALT_RX
+            found_halt = _phrase_hits(halt_rx, head)
+            demoted: list = []
+            if found_halt and _phrase_hits(_CRYPTO_RX, head) and not _phrase_hits(_EQUITY_RX, head):
+                demoted, found_halt = found_halt, []
+            elif not found_halt:
+                # description-only HALT phrase → display; the Fed feed's synthetic prefix is not news text
+                body = lower[len(_FED_PREFIX):] if fed and lower.startswith(_FED_PREFIX) else lower
+                demoted = _phrase_hits(halt_rx, body)
+            found_caution = demoted + _phrase_hits(_CAUTION_RX, lower)
+            found_monitor = _phrase_hits(_MONITOR_RX, lower)
+        else:
+            found_halt    = [k for k in KEYWORDS_HALT    if k in lower]
+            found_caution = [k for k in KEYWORDS_CAUTION if k in lower]
+            found_monitor = [k for k in KEYWORDS_MONITOR if k in lower]
 
         if found_halt:
             return "HALT",    found_halt[:3],    1.0   # display only — no size penalty (Build F)
@@ -690,7 +777,7 @@ class NewsMonitor:
                 if self._is_seen(text):
                     continue
 
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=headline)
                 self._mark_seen(text)
 
                 if risk_level is None:
@@ -761,7 +848,7 @@ class NewsMonitor:
                 if self._is_seen(text):
                     continue
 
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=headline)
                 self._mark_seen(text)
 
                 if risk_level is None:
@@ -861,7 +948,7 @@ class NewsMonitor:
                 if self._is_seen(text):
                     continue
 
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title)
                 self._mark_seen(text)
 
                 if risk_level is None:
@@ -954,7 +1041,7 @@ class NewsMonitor:
                 if self._is_seen(text):
                     continue
 
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title)
                 self._mark_seen(text)
 
                 if risk_level is None:
@@ -1046,7 +1133,7 @@ class NewsMonitor:
                 if self._is_seen(text):
                     continue
 
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title)
                 self._mark_seen(text)
 
                 if risk_level is None:
@@ -1127,7 +1214,7 @@ class NewsMonitor:
                 pub_dt = pub_dt or datetime.now(ET)
                 if self._is_seen(text):
                     continue
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title)
                 self._mark_seen(text)
                 if risk_level is None or risk_level == "MONITOR":
                     if risk_level == "MONITOR":
@@ -1201,7 +1288,7 @@ class NewsMonitor:
                 pub_dt = pub_dt or datetime.now(ET)
                 if self._is_seen(text):
                     continue
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title)
                 self._mark_seen(text)
                 if risk_level is None or risk_level == "MONITOR":
                     continue
@@ -1275,7 +1362,7 @@ class NewsMonitor:
                 pub_dt = pub_dt or datetime.now(ET)
                 if self._is_seen(text):
                     continue
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title, fed=True)
                 self._mark_seen(text)
                 if risk_level is None:
                     continue
@@ -1351,7 +1438,7 @@ class NewsMonitor:
                 pub_dt = pub_dt or datetime.now(ET)
                 if self._is_seen(text):
                     continue
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title)
                 self._mark_seen(text)
                 # BLS releases are always at least CAUTION — official economic data
                 if risk_level is None or risk_level == "MONITOR":
@@ -1427,7 +1514,7 @@ class NewsMonitor:
                 pub_dt = pub_dt or datetime.now(ET)
                 if self._is_seen(text):
                     continue
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title)
                 self._mark_seen(text)
                 if risk_level is None or risk_level == "MONITOR":
                     continue
@@ -1487,7 +1574,7 @@ class NewsMonitor:
                     pub_dt = datetime.now(ET)
                 if self._is_seen(text):
                     continue
-                risk_level, keywords, size_mult = self._classify(text)
+                risk_level, keywords, size_mult = self._classify(text, title=title)
                 self._mark_seen(text)
                 if risk_level is None or risk_level == "MONITOR":
                     continue
@@ -1697,6 +1784,14 @@ class NewsMonitor:
         """
         with self._alerts_lock:
             return any(a.risk_level == "HALT" for a in self._active_alerts)
+
+    def active_halt_details(self) -> list:
+        """The active HALT alerts behind has_active_halt_keyword(), for the halt_eval record:
+        source, raw headline, the matched text, and which matcher produced it."""
+        with self._alerts_lock:
+            _halts = [a for a in self._active_alerts if a.risk_level == "HALT"]
+        return [{"source": a.source, "headline": a.headline, "matched": list(a.keywords),
+                 "matcher": "v2" if NEWS_MATCHER_V2_ENABLED else "substring"} for a in _halts]
 
     def is_macro_risk_active(self) -> bool:
         """Returns True when sustained macro risk CAUTION state is active (display only).

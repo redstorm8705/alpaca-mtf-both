@@ -161,6 +161,59 @@ def _spy_prior_session_close() -> "float | None":
         return None
 
 
+def _todays_scheduled_close_et() -> "datetime | None":
+    """TODAY's scheduled close (ET, early-close aware) from the Alpaca calendar, cached per ET date.
+    NEWS-VENUE-HALT-1103 change 3: the clock's next_close already points to tomorrow once the bell
+    rings, so it cannot tell a normal close from a halt. None when it cannot be read."""
+    _today = datetime.now(ET).date()
+    _cache = getattr(_todays_scheduled_close_et, "_cache", None)
+    if _cache and _cache[0] == _today:
+        return _cache[1]
+    _close = None
+    try:
+        from alpaca.trading.requests import GetCalendarRequest
+        from execution.broker import get_trading_client
+        for _row in get_trading_client().get_calendar(GetCalendarRequest(start=_today, end=_today)) or []:
+            _cl = getattr(_row, "close", None)
+            if getattr(_row, "date", None) == _today and isinstance(_cl, datetime):
+                _close = _cl.replace(tzinfo=ET) if _cl.tzinfo is None else _cl.astimezone(ET)
+    except Exception as _cal_err:
+        logger.warning("halt-eval: Alpaca calendar read failed: %s", _cal_err)
+        return None
+    _todays_scheduled_close_et._cache = (_today, _close)  # type: ignore[attr-defined]
+    return _close
+
+
+_VENUE_UNCERTAIN_PAGE = _PROJECT_ROOT / "data" / "state" / "venue_uncertain_page.json"
+
+
+def _page_venue_uncertain_once(reason: str) -> None:
+    """One Slack page per ET day when the circuit-breaker band cannot be evaluated (NEWS-VENUE-HALT-1103
+    change 2). Deduplicated through a small state file (atomic write) so a restart does not page again."""
+    _today = datetime.now(ET).strftime("%Y-%m-%d")
+    try:
+        if _VENUE_UNCERTAIN_PAGE.exists() and json.loads(_VENUE_UNCERTAIN_PAGE.read_text()).get("date") == _today:
+            return
+    except Exception as _rd_err:
+        logger.warning("venue-uncertain page state unreadable (%s) — paging anyway", _rd_err)
+    try:
+        send_slack(f":warning: New entries blocked: the market-wide circuit-breaker check cannot be "
+                   f"evaluated ({reason}). Exits are still managed; clears on the first cycle with fresh data.")
+    except Exception as _pg_err:
+        logger.error("venue-uncertain Slack page failed: %s", _pg_err)
+        return
+    try:
+        _VENUE_UNCERTAIN_PAGE.parent.mkdir(parents=True, exist_ok=True)
+        _tmp = _VENUE_UNCERTAIN_PAGE.with_suffix(".tmp")
+        with open(_tmp, "w") as _f:
+            json.dump({"date": _today, "reason": reason}, _f)
+            _f.flush()
+            os.fsync(_f.fileno())
+        os.replace(_tmp, _VENUE_UNCERTAIN_PAGE)
+    except Exception as _wr_err:
+        logger.warning("venue-uncertain page state write failed: %s", _wr_err)
+
+
 def run_cycle(
     risk: RiskManager,
     tracker: PortfolioTracker,
@@ -1212,6 +1265,7 @@ def run_cycle(
     _spy_5m_pct  = 0.0
     _qqq_5m_pct  = 0.0
     _spy_rvol_5m = 1.0   # default full conviction — only downgraded on confirmed thin tape
+    _spy_5m_fresh = False   # NEWS-VENUE-HALT-1103: this cycle's SPY 5-min close is from today's tape
 
     # (globals accessed via _main)
     try:
@@ -1223,6 +1277,10 @@ def run_cycle(
         if _spy_5m_df is not None and len(_spy_5m_df) >= 2:
             _sc0 = float(_spy_5m_df["close"].values[-1])
             _main._spy_last_close = _sc0   # persist for ATH Layer 5
+            try:
+                _spy_5m_fresh = _spy_5m_df.index[-1].tz_convert(ET).date() == datetime.now(ET).date()
+            except Exception as _fr_err:
+                logger.warning("halt-eval: SPY 5-min bar date unreadable: %s", _fr_err)
             _sc1 = float(_spy_5m_df["close"].values[-2])
             if _sc1 > 0:
                 _spy_5m_pct = (_sc0 - _sc1) / _sc1 * 100
@@ -1298,8 +1356,23 @@ def run_cycle(
     if _spy_prior_close and _main._spy_last_close:
         _spy_session_pct = (_main._spy_last_close - _spy_prior_close) / _spy_prior_close * 100
     _mwcb_hit = _mwcb_band(_spy_session_pct)
+    # NEWS-VENUE-HALT-1103 change 2: the band cannot be evaluated without a prior close and a fresh
+    # SPY 5-min close; that used to read silently as "no band crossed". Now it is an uncertain cycle.
+    _mwcb_unknown_reason = (
+        "SPY prior close unavailable" if not _spy_prior_close
+        else "SPY 5-min close missing or not from today" if not _spy_5m_fresh
+        else ""
+    )
 
-    _venue_real_halt = (not _venue_is_open) or (_spy_tradable is False) or (_mwcb_hit is not None)
+    # NEWS-VENUE-HALT-1103 change 3: is_open=False at/after TODAY's scheduled close is the normal
+    # bell, not a halt — entries stay blocked, but no CRITICAL alert and no "real" label.
+    _session_closed = False
+    if not _venue_is_open:
+        _sched_close = _todays_scheduled_close_et()
+        _session_closed = _sched_close is not None and datetime.now(ET) >= _sched_close
+
+    _closed_leg = (not _venue_is_open) and not _session_closed
+    _venue_real_halt = _closed_leg or (_spy_tradable is False) or (_mwcb_hit is not None)
     # Board round-2 (Thorp/Taleb masked-loss seat + Gro + GAI, 2026-07-09): a
     # None here means the tradable check could not be confirmed this cycle —
     # NOT the same as a confirmed real halt. Fails closed for ENTRIES ONLY
@@ -1311,14 +1384,34 @@ def run_cycle(
     # what Build F exists to eliminate. is_open + MWCB are independent signals
     # (separate trading-API and data-API calls) that still corroborate a real
     # halt even when this one leg is degraded.
-    _venue_uncertain = _spy_tradable is None
-    _venue_verdict = "real" if _venue_real_halt else "unconfirmed"
+    _venue_uncertain = _spy_tradable is None or bool(_mwcb_unknown_reason)
+    _venue_verdict = (
+        "real" if _venue_real_halt
+        else "session_closed" if _session_closed
+        else "unconfirmed"
+    )
     _venue_status = {
         "is_open":         _venue_is_open,
         "spy_tradable":    _spy_tradable,
         "spy_session_pct": round(_spy_session_pct, 2),
         "mwcb_band":       _mwcb_hit,
+        "mwcb_unknown":    _mwcb_unknown_reason or None,
+        "session_closed":  _session_closed,
     }
+    # Which legs fired, so every entry block can be re-derived from the log (Taleb R5).
+    _halt_legs = [
+        _leg for _leg, _on in (
+            ("keyword", _news_halt_block_entries), ("venue_closed", _closed_leg),
+            ("spy_not_tradable", _spy_tradable is False), ("mwcb_band", _mwcb_hit is not None),
+            ("tradable_unknown", _spy_tradable is None), ("mwcb_unknown", bool(_mwcb_unknown_reason)),
+            ("session_closed", _session_closed),
+        ) if _on
+    ]
+    try:
+        _halt_details = news.active_halt_details() if _news_halt_block_entries else []
+    except Exception as _hd_err:
+        logger.warning("halt-eval: keyword detail read failed: %s", _hd_err)
+        _halt_details = []
 
     _log_trade_event(
         "halt_eval", symbol="SPY", price=_main._spy_last_close, size=0,
@@ -1326,6 +1419,7 @@ def run_cycle(
         keyword_hit=_news_halt_block_entries,
         spy_5m_pct=round(_spy_5m_pct, 3), qqq_5m_pct=round(_qqq_5m_pct, 3),
         venue_status=_venue_status, verdict=_venue_verdict,
+        legs=_halt_legs, keyword_details=_halt_details,
     )
 
     if _venue_real_halt:
@@ -1344,13 +1438,22 @@ def run_cycle(
                 logger.error(f"Build F halt-eval: alert_venue_halt failed: {_vh_alert_err}")
     else:
         run_cycle._venue_halt_alerted = False  # type: ignore[attr-defined]  # re-arm for next occurrence
+        if _session_closed:
+            _venue_halt_block_entries = True
+            logger.info(
+                "halt-eval: clock reads closed at/after today's scheduled close — normal "
+                "session end, not a halt; no new entries this cycle."
+            )
         if _venue_uncertain:
             _venue_halt_block_entries = True
             logger.warning(
-                "Build F halt-eval: SPY tradable status could not be confirmed this "
-                "cycle — blocking new entries out of caution (fail-closed on data gap; "
-                "not a confirmed halt, no CRITICAL alert)."
+                "Build F halt-eval: venue state could not be confirmed this cycle "
+                "(tradable=%s, circuit-breaker band: %s) — blocking new entries out of caution "
+                "(fail-closed on data gap; not a confirmed halt, no CRITICAL alert).",
+                _spy_tradable, _mwcb_unknown_reason or "evaluated",
             )
+            if _mwcb_unknown_reason:
+                _page_venue_uncertain_once(_mwcb_unknown_reason)
 
     # Layer 1 + 2: Classify the bar
     _SPY_TRIGGER   = 1.0    # % in one 5-min bar → active
