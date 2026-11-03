@@ -282,9 +282,11 @@ class Base(unittest.TestCase):
         self.fd = FakeData()
         self.events, self.pages = [], []
         self.kill = (False, "")
+        self.day_lots = None
         for p in (mock.patch.dict(os.environ, {"ALPACA_PAPER_ACCOUNT_NUMBER": ACCT}),
                   mock.patch.object(config, "SWING_TREND_NIGHT_ENABLED", True),
-                  mock.patch("execution.overnight_capacity.overnight_k", return_value=1.9)):
+                  mock.patch("execution.overnight_capacity.overnight_k", return_value=1.9),
+                  mock.patch.object(so, "day_tier_flatten_lots", side_effect=lambda: self.day_lots)):
             p.start()
             self.addCleanup(p.stop)
         self.eng = self.engine()
@@ -644,6 +646,49 @@ class EntryPaths(Base):
         s = self.ev("sizing")[0]["sizing"]
         self.assertEqual(s["bound_by"], "gap")                     # 0.07 × 2555 − 1500 × 0.10 = 28.85 → 2 sh
         self.assertEqual(s["limits"]["gap"], 2)
+
+    def test_day_tier_lots_closing_today_do_not_use_overnight_room(self):
+        # TREND-NIGHT-DAYLOTS-1103 replay of 11-02: a Day-tier AMZN short open at the entry minute (flattened before
+        # the close) took the whole K room. Counted at what remains after the Day close it frees the room.
+        amzn = SimpleNamespace(symbol="AMZN", qty=-6, market_value=-1479.9, asset_class="us_equity")
+        self.fb.extra_positions = [amzn]
+        self.fd.hist["AMZN"] = _hist(ret=-0.04)
+        with mock.patch("execution.overnight_capacity.overnight_k", return_value=0.6):
+            self.at(2026, 10, 29, 15, 40)
+            self.settle()
+        s = self.ev("sizing")[0]["sizing"]
+        self.assertEqual(s["bound_by"], "k_room")
+        self.assertEqual(s["limits"]["k_room"], 0)                 # 0.6 × 2555 − 1479.9 = 53.1 < one share
+        self.setUp()
+        self.fb.extra_positions = [amzn]
+        self.fd.hist["AMZN"] = _hist(ret=-0.04)
+        self.day_lots = {"AMZN": -6}
+        with mock.patch("execution.overnight_capacity.overnight_k", return_value=0.6):
+            self.at(2026, 10, 29, 15, 40)
+            self.settle()
+        s = self.ev("sizing")[0]["sizing"]
+        self.assertEqual(s["gross_notional"], 0.0)
+        self.assertEqual(s["limits"]["k_room"], 5)                 # 1533 / 294
+        self.assertEqual(s["day_lot_adjustments"][0]["after_close_qty"], 0)
+
+    def test_post_flatten_positions_rules(self):
+        def P(sym, q, mv, ac="us_equity"):
+            return SimpleNamespace(symbol=sym, qty=q, market_value=mv, asset_class=ac)
+
+        v, adj = so.post_flatten_positions([P("AMZN", -6, -1500.0)], {"AMZN": -6})
+        self.assertEqual(v[0].market_value, 0.0)
+        v, _ = so.post_flatten_positions([P("AAPL", 10, 2500.0)], {"AAPL": 4})     # co-held: Swing 6 stays
+        self.assertAlmostEqual(v[0].market_value, 1500.0)
+        v, adj = so.post_flatten_positions([P("AAPL", 3, 750.0)], {"AAPL": 5})    # Day record > position: kept whole
+        self.assertEqual((v[0].market_value, adj), (750.0, []))
+        v, _ = so.post_flatten_positions([P("AAPL", 5, 1250.0)], {"AAPL": -3})    # Day short netted in: closing it grows the long
+        self.assertAlmostEqual(v[0].market_value, 2000.0)
+        v, adj = so.post_flatten_positions([P("MSFT", 2, 1000.0)], {})            # no Day lot: whole
+        self.assertEqual((v[0].market_value, adj), (1000.0, []))
+        v, _ = so.post_flatten_positions([P("SPY", 1, 90.0, "us_option")], {"SPY": 1})   # options never netted
+        self.assertEqual(v[0].market_value, 90.0)
+        v, _ = so.post_flatten_positions([P("X", 0, 0.0)], {"X": 2})
+        self.assertEqual(v[0].market_value, 0.0)
 
     def test_half_day_calendar_moves_the_windows(self):
         self.fb.cal[self.D1] = (et(2026, 10, 29, 9, 30), et(2026, 10, 29, 13, 0))
@@ -1288,3 +1333,58 @@ class Reservation(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DayTierLots(unittest.TestCase):
+    """TREND-NIGHT-DAYLOTS-1103: the Day tier's force-flat set, signed; anything unreadable → None (count whole)."""
+
+    def setUp(self):
+        from execution import day_trade_manager as dtm
+        self.state = {}
+        p = mock.patch.object(dtm, "_load_state", side_effect=lambda: self.state)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_fill_unverified_is_never_netted(self):
+        from execution import day_trade_manager as dtm
+        self.state = {"entry::AMZN::x": {"symbol": "AMZN", "state": "fill_unverified"}}
+        t = {"AMZN": {"qty": 6, "side": "short"}}
+        with mock.patch.object(dtm, "_enabled", return_value=True), \
+                mock.patch.object(dtm, "_flatten_targets", return_value=t):
+            self.assertEqual(so.day_tier_flatten_lots(), {})
+
+    def test_signed_lots_from_flatten_targets(self):
+        from execution import day_trade_manager as dtm
+        t = {"AMZN": {"qty": 6, "side": "short"}, "aapl": {"qty": 2, "side": "long"}, "X": {"qty": 0, "side": "long"}}
+        with mock.patch.object(dtm, "_enabled", return_value=True), \
+                mock.patch.object(dtm, "_flatten_targets", return_value=t), \
+                mock.patch.object(so, "_never_promoted_long", return_value=True):
+            self.assertEqual(so.day_tier_flatten_lots(), {"AMZN": -6, "AAPL": 2})
+        # board Thorp 2026-11-03: a long that can still be promoted at 3:56 PM keeps counting overnight
+        with mock.patch.object(dtm, "_enabled", return_value=True), \
+                mock.patch.object(dtm, "_flatten_targets", return_value=t), \
+                mock.patch.object(so, "_never_promoted_long", return_value=False):
+            self.assertEqual(so.day_tier_flatten_lots(), {"AMZN": -6})
+
+    def test_never_promoted_long(self):
+        from execution import day_promotion as dp
+        from strategy import day_tier_leverage as lev
+        with mock.patch.object(dp, "enabled", return_value=False):
+            self.assertTrue(so._never_promoted_long("NVDA"))
+        with mock.patch.object(dp, "enabled", return_value=True), \
+                mock.patch.object(lev, "exposure_sign", return_value=("NVDA", 1)):
+            self.assertFalse(so._never_promoted_long("NVDA"))
+        with mock.patch.object(dp, "enabled", return_value=True), \
+                mock.patch.object(lev, "exposure_sign", return_value=("QQQ", 3)):
+            self.assertTrue(so._never_promoted_long("TQQQ"))
+        with mock.patch.object(dp, "enabled", return_value=True), \
+                mock.patch.object(lev, "exposure_sign", side_effect=RuntimeError("map unreadable")):
+            self.assertFalse(so._never_promoted_long("NVDA"))
+
+    def test_unreadable_or_off_is_none(self):
+        from execution import day_trade_manager as dtm
+        with mock.patch.object(dtm, "_enabled", return_value=True), \
+                mock.patch.object(dtm, "_flatten_targets", side_effect=RuntimeError("log unreadable")):
+            self.assertIsNone(so.day_tier_flatten_lots())
+        with mock.patch.object(dtm, "_enabled", return_value=False):
+            self.assertIsNone(so.day_tier_flatten_lots())

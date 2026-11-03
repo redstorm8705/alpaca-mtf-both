@@ -470,6 +470,91 @@ def size_night(equity: float, price: float, q: float, b: float, k: float, gross_
     return qty, info
 
 
+@dataclass
+class _HeldView:
+    """A position as it will stand after the close (symbol, market_value, asset_class) — what _gap_book reads."""
+    symbol: str
+    market_value: float
+    asset_class: Any = ""
+
+
+def post_flatten_positions(positions: list, day_lots: dict) -> tuple[list, list]:
+    """TREND-NIGHT-DAYLOTS-1103: each position as it stands once the Day tier closes its own same-day lots before the
+    close. `day_lots` = {SYMBOL: signed shares the Day tier will flatten (+ long, - short)}. Remaining shares =
+    broker shares - Day shares; a same-side Day record larger than the position leaves the position whole (it may be
+    a co-held lot whose Day exit is unbooked); an opposite-side Day lot ADDS to what remains (closing it grows the net).
+    Priced at the position's own market_value / qty. A position whose qty or value is unreadable is kept whole.
+    Returns (views, adjustments) — adjustments name every position that changed, for the sizing record."""
+    out: list = []
+    adj: list = []
+    for p in positions:
+        sym = str(getattr(p, "symbol", "") or "")
+        mv = _num(getattr(p, "market_value", 0))
+        ac = getattr(p, "asset_class", "")
+        d = day_lots.get(sym.upper()) if sym else None
+        qty = _num(getattr(p, "qty", 0))
+        if not d or qty == 0 or mv == 0 or "option" in _enum(ac):
+            out.append(_HeldView(sym, mv, ac))
+            continue
+        px = mv / qty                                   # signed qty × signed value → positive price
+        rest = qty - d
+        if qty * d > 0 and qty * rest < 0:
+            # a same-side Day record LARGER than the broker position cannot be told apart from a co-held lot whose
+            # Day exit is not booked yet: count the position whole (board Taleb 2026-11-03, never-mask-a-loss)
+            out.append(_HeldView(sym, mv, ac))
+            continue
+        out.append(_HeldView(sym, rest * px, ac))
+        adj.append({"symbol": sym, "broker_qty": qty, "day_qty": d, "after_close_qty": rest,
+                    "notional_before": round(abs(mv), 2), "notional_after": round(abs(rest * px), 2)})
+    return out, adj
+
+
+def _never_promoted_long(sym: str) -> bool:
+    """True only when a Day LONG on `sym` provably cannot be promoted to the Swing tier at 3:56 PM ET (promotion runs
+    AFTER this sizing read and does not see trend_night's working entry — board Thorp 2026-11-03): promotion is off,
+    or `sym` is a known leveraged/inverse ETF (day_promotion never promotes those). Any read error → False (the lot
+    keeps counting overnight)."""
+    try:
+        from execution import day_promotion as dp
+        if not dp.enabled():
+            return True
+        s = str(sym or "").upper()
+        if s in set(getattr(config, "LEVERAGED_3X_TICKERS", set()) or set()):
+            return True
+        from strategy import day_tier_leverage as lev
+        return lev.exposure_sign(s, "long")[0] != s
+    except Exception as e:  # noqa: BLE001
+        logger.warning("trend_night: promotion eligibility of %s unreadable, its Day lot keeps counting: %s", sym, e)
+        return False
+
+
+def day_tier_flatten_lots() -> Optional[dict]:
+    """{SYMBOL: signed shares} the Day tier will close before the close: its EOD force-flat target set (which already
+    leaves out lots marked promote_pending), restricted to lots that cannot still be promoted later today — shorts
+    (v1 promotes longs only) and _never_promoted_long() longs. A promotable long keeps counting overnight. None when
+    the Day tier state is unreadable or the tier is off — the caller then counts every position whole (pre-1103)."""
+    try:
+        from execution import day_trade_manager as dtm
+        if not dtm._enabled():
+            return None
+        out: dict = {}
+        # a fill the Day tier has not verified may not be its own shares: never netted (board Taleb 2026-11-03)
+        unverified = {str(v.get("symbol") or "").upper() for k, v in dtm._load_state().items()
+                      if k.startswith("entry::") and isinstance(v, dict) and v.get("state") == "fill_unverified"}
+        for sym, t in dtm._flatten_targets().items():
+            n = abs(int(float(t.get("qty") or 0)))
+            if sym and n > 0 and str(sym).upper() not in unverified:
+                short = str(t.get("side") or "long").lower().startswith("short")
+                if not short and not _never_promoted_long(str(sym)):
+                    continue
+                sign = -1 if short else 1
+                out[str(sym).upper()] = out.get(str(sym).upper(), 0) + sign * n
+        return out
+    except Exception as e:  # noqa: BLE001
+        logger.warning("trend_night: Day-tier lots unreadable, counting every position whole: %s", e)
+        return None
+
+
 def fifo_pnl(fills: list) -> Optional[float]:
     """Realised P&L of a long-only sequence of fills (dicts: side, qty, price, time) by FIFO; None on a sell with no
     matching buy (that would be a short — never this strategy)."""
@@ -2072,8 +2157,10 @@ class TrendNight:
             k = float(overnight_k())
         except Exception as e:  # noqa: BLE001
             return None, {}, f"overnight K unreadable (fail-closed): {e!r}"
-        gross = sum(abs(_num(getattr(p, "market_value", 0))) for p in positions)
-        gap_loss, gap_rows = self._gap_book(positions, q)
+        day_lots = day_tier_flatten_lots()
+        held, day_adj = post_flatten_positions(positions, day_lots or {})
+        gross = sum(abs(_num(getattr(p, "market_value", 0))) for p in held)
+        gap_loss, gap_rows = self._gap_book(held, q)
         kill_pct = float(config.PROFILES[str(_cfg("SWING_TREND_NIGHT_KILL_PROFILE"))]["MAX_DAILY_LOSS_PCT"])
         prior = self._prior()
         live = _finite_rets(self.state.get("closed") or [], "ret")
@@ -2087,7 +2174,7 @@ class TrendNight:
                                             f"nights) — still trading at the owner floor b {bb['b']}; your call "
                                             f"(SWING_TREND_NIGHT_ENABLED)")
         qty, sizing = size_night(equity, price, q, float(bb["b"]), k, gross, gap_loss, kill_pct, bp)
-        sizing.update(budget=bb, q_inputs=qm, gap_book=gap_rows)
+        sizing.update(budget=bb, q_inputs=qm, gap_book=gap_rows, day_lots=day_lots, day_lot_adjustments=day_adj)
         self.event("sizing", night=key, sizing=sizing, kill_switch="clear")
         return qty, sizing, ""
 
