@@ -130,3 +130,32 @@ Q41: An expert would add the price cross-check and per-symbol quote freshness, b
 Q42: The rawest data is the logged headline stream and the halt_eval records on the server, which the replay used directly.
 Q43: The professional method is phrase-level matching with word boundaries backed by price-based circuit breakers, which this design adopts.
 Q44: Independent evidence is the replay table of the 29 cycles, the reviewers' probe headlines run as unit tests, and the first session's logged blocks compared by the post-live audit.
+
+## Replay result (2026-11-03, executed on the server; `logs/research/news_halt_v2_replay_2026-11-03.txt`)
+- 20,172 unique logged headlines, 2026-07-19 .. 2026-11-03 (logged: 20 HALT, 10,754 CAUTION, 9,398 MONITOR).
+- Regular-hours cycles blocked by a keyword HALT (`halt_eval keyword_hit`): **35 in 7 episodes** (07-24, 08-13,
+  08-14, 09-02, 09-11, 10-30, 11-02). Under v2: **0 of 35 still block.** Causes: "systemic risk" in descriptions
+  (14), "trading halt" on single-stock halts (9), "national emergency" inside "International Emergency" (6),
+  "nuclear strike" matched in a description (6, 11-02 — Tucker Carlson commentary).
+- Of the 20 logged HALT headlines, v2 keeps 2 as HALT: "World War III: Could Americans be called up…" (11-01) and
+  "Trump's nuclear strike on Iran's Pickaxe Mountain to trigger World War III?…" (11-02). Both were outside regular
+  hours. They are commentary that contains a HALT phrase in its title; the forward build (keep a keyword block only
+  when SPY's 5-minute move is unusual) is what removes this class.
+- No logged headline in the period described a real market-wide emergency; the new circuit-breaker and venue-wide
+  phrases had zero hits. CAUTION→None 5,109 and MONITOR→None 3,518 are display-only substring artifacts ("ppi" in
+  "stepping", "nato" in "anatomy", "iran" in "Miranda").
+- Implementation note: the kill flag `NEWS_MATCHER_V2_ENABLED` lives in `events/news_monitor.py` beside the matcher
+  (config.py untouched).
+
+## Diff review (2026-11-03): Taleb and Kyle APPROVE-WITH-CHANGES, folded in
+- Kyle C1: en/em dashes and the minus sign (U+2010–2015, U+2212) count as word separators.
+- Kyle C2: the crypto exclusion matches prefix forms and venues (cryptocurrency, ethereum, stablecoin, Coinbase,
+  Binance, Kraken); each is a unit test.
+- Taleb C2 (wording): change 2's "stale" check is date-only — the last SPY 5-minute bar must be from today. A feed
+  frozen mid-session still reads fresh; that is no worse than before, and the forward build (close-based bar age,
+  Invariant #4) closes it.
+- Taleb C1 (read-only server run, Q22), executed 2026-11-03 10:53 ET against live data: last SPY 5-minute bar
+  10:35 ET today → fresh; today's first bar 04:00 ET (pre-market bars are included); prior close 752.10; today's
+  scheduled close 16:00 ET from the Alpaca calendar. The venue check runs only after the 09:30–10:00 opening window:
+  the earliest halt_eval each day from 10-21 to 11-03 was 10:01–10:07 ET, so a "no bar from today yet" morning page
+  cannot occur.

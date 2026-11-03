@@ -1,0 +1,40 @@
+{
+  "change": "news-venue-halt-1103",
+  "tier": 2,
+  "paths": [
+    "events/news_monitor.py",
+    "strategy/run_cycle.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/trade_events.jsonl",
+      "pattern": "\"event\": \"halt_eval\".*\"legs\""
+    }
+  ],
+  "expected_rate": "one halt_eval record per regular-hours run_cycle, each carrying the legs list",
+  "window_sessions": 1,
+  "window_reason": "halt_eval is written every regular-hours cycle after the opening window, so one session without it means the venue block did not run",
+  "reversal": "a real market-wide emergency headline the substring matcher would have caught and v2 did not, any regular-hours venue halt labelled session_closed, or mwcb_unknown firing on more than a few cycles a week",
+  "metrics": [
+    {
+      "name": "regular-hours cycles blocked by a keyword HALT whose headline is not a market-wide emergency",
+      "source": "logs/trade_events.jsonl halt_eval keyword_hit with keyword_details",
+      "direction": "down",
+      "bound": "below the 35 in 103 days of the substring matcher"
+    },
+    {
+      "name": "cycles blocked with mwcb_unknown",
+      "source": "logs/trade_events.jsonl halt_eval legs",
+      "direction": "none",
+      "bound": "rare; each one traced to a SPY data gap"
+    },
+    {
+      "name": "CRITICAL venue-halt pages at the scheduled close",
+      "source": "logs/mtf_bot.log VENUE HALT CONFIRMED within a minute after the close",
+      "direction": "down",
+      "bound": "zero"
+    }
+  ],
+  "verification": "tests/test_news_matcher_v2.py",
+  "baseline_exempt_reason": "the halt_eval 'legs' field is new in this change: no halt_eval record before the deploy carries it (0 matches in the server trade_events.jsonl), so a match can only come from the new code"
+}
