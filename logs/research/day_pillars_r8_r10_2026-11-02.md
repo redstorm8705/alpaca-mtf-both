@@ -134,7 +134,19 @@ adjusted 09:30 bar.
   +27.2 bps per signal vs +19.2 for the stop order. Caps 5 bps and wider are worse on both periods.
 - These samples' averages (+19 to +20 bps) sit below the full-set +28.9; the sample t is about 1.2-1.8.
 
-**Test-year looks for this family:** now about 12 (adds the borrow filter and the fill-model comparison).
+**Live data blocker and a usable proxy (2026-11-03):**
+- The paper plan's real-time quotes are IEX only. On 300 test trades (2025+) at the breakout minute, IEX had no quote
+  on 99, and where it quoted its spread was a median 3.6x the SIP spread. Filtering on IEX spread does not select the
+  same trades (64% agreement) and the IEX-selected trades were not profitable. The SIP filter cannot run live as is.
+- Proxy known before the open: the SIP spread at 15:50 ET on the prior session (SIP older than 15 minutes is
+  available on this plan). Cutoff chosen on discovery (700 trades): prior-day spread <= 25 bps (best discovery t 2.06).
+- Test (900 trades): unfiltered net +13.6 bps (t 0.81); prior-day spread <= 25 bps net +25.4 (811 trades, t 1.59);
+  the 80 excluded trades net -106 bps. The exact trigger-time SIP filter on the same sample: +50.0 (469, t 2.86). The
+  proxy recovers about half the filter's benefit.
+- Option not tested: Alpaca's paid real-time SIP plan would allow the exact filter (owner decision: cost).
+
+**Test-year looks for this family:** now about 14 (adds the borrow filter, the fill-model comparison, the IEX check
+and the delayed-SIP proxy).
 
 Still owed before it can be proposed: confirmation on its first live sessions (data never consulted); live
 locate/borrow at order time (Alpaca's flag can change daily).
