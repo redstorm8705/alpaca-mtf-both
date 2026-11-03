@@ -84,3 +84,49 @@ emergencies lost and zero hits on the new circuit-breaker phrases.
 ## Reversal criterion
 A real market emergency that the old matcher would have caught and v2 misses; any regular-hours venue halt the close
 guard silences; or the uncertain-band block firing on more than a few cycles a week (a data problem to fix).
+
+## Required questions
+Q1: Yes for data collection: 29 false-blocked regular-hours cycles in 103 days stopped QHM, Swing and main-bot entries; removing false blocks restores trading days on this paper account.
+Q2: It raises trade count: the 29 false-blocked cycles become tradeable; the only added block is the uncertain circuit-breaker band, a missing-data case that today fails silently.
+Q3: It should exist; the simpler whole-word fix alone cleared only 9 of 29 false blocks, so the phrase list and title-only rule are needed; real halts stay caught by venue state and the SPY band.
+Q4: Supersedes the 10-31 draft news_venue_halt_1031.md and post-live issue #806 finding; no open PR touches the keyword matcher; Kyle R9 get_active_event_type rework is listed as a separate forward build.
+Q5: The keyword list is static by nature (named market-wide events); the real dynamic check is the SPY circuit-breaker band and venue state, and the forward build adds a SPY move cross-check from its own session distribution.
+Q6: It exposes the assumption that a keyword alone proves an emergency; forward build: keep a HALT block past one cycle only when the SPY five-minute move is unusual for its own rolling distribution.
+Q7: The shared matcher also feeds CAUTION and MONITOR display tiers and later get_active_event_type; each use keeps the substring fallback behind the kill flag and has its own unit tests.
+Q8: Every claim cites the 103-day replay over 19,304 logged headlines on the server and dated log titles listed above; the 8 description-only matches are flagged as not fully replayable.
+Q9: Replay 2026-07-19 to 10-31 covering the 07-24, 08-13, 08-14, 09-02, 09-11, 10-30 episodes; expected 29 of 29 false blocks removed and zero true emergencies lost; a missed real emergency reverses it.
+Q10: No edge is held back; this removes a false gate that blocks entries, so shipping it promptly is the Profitable over Perfect choice.
+Q11: Yes on the frequency axis (fewer false blocks means more entry cycles), so it is risk-path: board Taleb masked-loss seat and Kyle reviewed, GAI and Gro reviewed, owner approval required.
+Q12: Stops, the 7% kill switch, paper=True and data tiers are untouched; exits never depended on the news gate; the circuit-breaker band and venue check remain as independent emergency stops.
+Q13: Missing or stale SPY data for the band now sets venue_uncertain and blocks entries that cycle with one Slack page per day; matcher errors fall back to the old substring path through the kill flag.
+Q14: No shadow part; the v2 matcher ships live after the replay table and the gate, with the kill flag only as a rollback switch.
+Q15: Each halt_eval record logs the raw headline, matched phrase, snippet, which leg fired and the venue verdict, so every block can be re-derived from the logs.
+Q16: Proof line is the halt_eval record carrying matcher=v2 and the matched snippet; the post-live audit replays the first full session's headlines through both matchers and compares blocks.
+Q17: A read-only run on the server classifies the live news cache through the new matcher before restart, and the first session's halt_eval lines confirm it runs inside the trading process.
+Q18: No: the 10-30 PG&E block and the 4 PM venue page were each traced to their exact cause instead of being called expected behaviour, which produced this design.
+Q19: Yes, it changes entry gating, so the owner approves this exact design before any commit; approval ID NEWS-VENUE-HALT-1103.
+Q20: Reviewer prompts carried the raw replay and code facts without verdict language; GAI needed three counter-prompt rounds with log evidence; board, GAI and Gro all reviewed the design.
+Q21: Tests only call the pure matcher and a mocked clock and calendar; no broker client is created; run_cycle venue tests patch the broker calls.
+Q22: The uncertain-band control will be run read-only on the server against live SPY bars and the Alpaca clock before restart to confirm it does not fire on healthy data.
+Q23: Full-path check before ready: replay table over 103 days plus unit tests for each probe headline plus the server read-only run; deployed alone is not counted as ready.
+Q24: The claim that no logged HALT was a real emergency was checked against all 15 logged HALT headlines in the server logs during the replay.
+Q25: No market statistics are quoted; the only numbers are counts from the logged headlines and blocked cycles measured on the server.
+Q26: News feeds are the existing RSS, Fed and Truth Social sources unchanged; SPY bars stay T1 Alpaca via data/fetcher; no new data source and no fallback change.
+Q27: The halt_eval records go to the existing logs; the daily uncertain-page dedupe file goes to data/state with a tmp then replace atomic write.
+Q28: The matcher runs inside news_monitor classification on the news thread; the venue and band checks run in run_cycle before entries, after exits, so check_exits is never delayed.
+Q29: High rank: it is small, already aligned, and unblocks entries across three tiers on false-alarm days, while other items wait on data or owner input.
+Q30: Professional systems gate on venue status messages and price circuit breakers rather than headline text; the blind spot is a non-circuit-breaker venue outage, covered by the per-symbol freshness forward build.
+Q31: No statistical model is fitted; the change is a rule judged by a full replay of every logged headline, so variant counts and deflated Sharpe do not apply to it.
+Q32: The replay uses headlines in the order logged with their timestamps, so no look-ahead; description text that the logs did not keep is reported as a gap.
+Q33: No trading cost is involved in the matcher; restored entries pay the same costs as the tiers' existing entries.
+Q34: Not an alpha signal; it only removes false blocks, so its effect is the restored tiers' own alpha and beta mix.
+Q35: In a real crash SPY moves trip the circuit-breaker band and venue state regardless of headlines; worst case is a real venue outage without market-wide wording, listed as a known gap.
+Q36: No capacity effect; the matcher cost is a regex over short headlines, linear with no backtracking risk.
+Q37: Power comes from the full population: 29 of 29 blocks were false in 103 days with zero true positives, so the removed phrases had no measured value.
+Q38: Decay is tracked by the halt_eval log; any real emergency missed by v2 or a false block on the new phrases triggers the reversal criterion and an owner-approved fix.
+Q39: Sizing is untouched; restored entries are sized by each tier's existing Kelly path from Alpaca fills.
+Q40: It protects entry availability on false-alarm days; the machine check is the post-live replay comparing v1 and v2 blocks on the session's real headlines.
+Q41: An expert would add the price cross-check and per-symbol quote freshness, both listed as forward builds with their own gates.
+Q42: The rawest data is the logged headline stream and the halt_eval records on the server, which the replay used directly.
+Q43: The professional method is phrase-level matching with word boundaries backed by price-based circuit breakers, which this design adopts.
+Q44: Independent evidence is the replay table of the 29 cycles, the reviewers' probe headlines run as unit tests, and the first session's logged blocks compared by the post-live audit.
