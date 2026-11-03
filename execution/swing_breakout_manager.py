@@ -15,8 +15,9 @@ WHAT IT TRADES (long only, one lot per symbol):
   Setup     = the last closed daily bar closes above the highest close of the prior 55 sessions AND above its
               200-day SMA → a PENDING setup at that prior 55-day high (the breakout level). It is dropped when a
               closed bar closes below the prior 20-session low; one entry per setup.
-  Entry     = a pending setup whose session open AND live ask are at or above its breakout level → a marketable
-              DAY limit (first cycle >= 10:05 ET). An open or ask below the level waits (never entered below it).
+  Entry     = a pending setup whose session open, live ask AND fresh last trade are all at or above its breakout level
+              → a marketable DAY limit (first cycle >= 10:05 ET). Any of them below the level, or no fresh last trade,
+              waits (never entered below it).
   Protection= a GTC sell stop at fill − the stop distance (2.5 × ATR(14, daily), floored at the stock's own
               low-percentile ATR% × price) placed immediately after the fill; if it cannot be
               placed after 3 tries the lot is flattened. Every cycle _reconcile repairs ANY held lot to "open with a
@@ -884,6 +885,17 @@ class SwingBreakoutManager:
         if level > 0 and ask < level:
             # never entered below the breakout level (owner rule): the setup waits for the next session
             _log("skip", symbol, reason="price below the breakout level — setup waits", ask=ask, **ctx)
+            return False
+        # SWING-LEVEL-LAST-1103: the IEX ask alone can sit far above where the stock trades (BRK.B 2026-10-27: a
+        # $4.28-wide IEX quote put the ask over the $546.97 level while the fill came at $544.60). The last trade,
+        # fresh by the same age rule the exits use, must also be at or above the level.
+        last = self._last_trade(symbol)
+        if not math.isfinite(last):
+            _log("skip", symbol, reason="last trade unavailable or stale — setup waits", ask=ask, **ctx)
+            return False
+        if level > 0 and last < level:
+            _log("skip", symbol, reason="last trade below the breakout level — setup waits", ask=ask, last=last,
+                 **ctx)
             return False
         mine_notional = 0.0
         other_notional = 0.0
