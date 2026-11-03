@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-11-02 (Claude, QHM-FILL-SAVE-1102 live) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-11-03 (Claude, overnight AWP: TREND-NIGHT-DAYLOTS-1103 deployed) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,7 +8,30 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-02, Claude signed) — QHM-FILL-SAVE-1102 deployed; Day reversal rule tested (no edge)
+## ⏩ LATEST (2026-11-03 overnight AWP, Claude signed) — owner CEO pre-approval: ship on full BGC alignment
+
+- TREND-NIGHT-DAYLOTS-1103 (PR 822, merged 782ab62; OCI pull printed DEPLOY_OK at 782ab62, services active).
+  trend_night's 11-02 QQQM entry was skipped (k_room -763.74) because a Day-tier AMZN short (6 sh, closed 15:58 ET by
+  eod_force_flat) counted as overnight exposure. Sizing now nets out only non-promotable Day lots. Deployed,
+  unexercised until the next trend night. Post-live 814/815 recorded BUGS_FIXED.
+- SWING-LEVEL-LAST-1103 (PR 823, merged 302c16c; OCI pull printed DEPLOY_OK at 302c16c, services active): Swing
+  breakout entry also needs a fresh last trade at or above the level (BRK.B 10-27 filled $544.60 under $546.97).
+  Deployed, unexercised until the next Swing breakout entry.
+- NEWS-VENUE-HALT-1103 design rev 3: `logs/design_records/news_venue_halt_v2_2026-11-03.md` (review history in the
+  record). Code not started: the owner's typed `APPROVE NEWS-VENUE-HALT-1103` comes first.
+- Day ORB (stocks-in-play opening-range breakout) research and its live-data blocker (real-time quotes are IEX-only;
+  the backtest's spread filter used SIP): `logs/research/day_pillars_r8_r10_2026-11-02.md`. Owner decision pending:
+  build on the prior-day SIP spread proxy, or pay for real-time SIP.
+- Follow-ups logged: day_promotion.select_promotions should count pending trend_night close orders; Swing breakout's
+  K limb also counts Day intraday lots (same class as 822); swing tests have a pre-existing order-dependent failure
+  (test_same_scan_second_entry_sees_first_lot); preship_gate reads git in the MAIN checkout, not the worktree (a push
+  from a worktree is checked against the main checkout's branch).
+
+**NEXT ACTION (exact):** owner decisions — (1) `APPROVE NEWS-VENUE-HALT-1103` to start the news-halt code; (2) Day ORB
+data plan (prior-day SIP proxy vs paid real-time SIP), then its design record + gate. Then the post-live audit of
+trend_night's next night (sizing record must carry `day_lots`).
+
+## ⏩ PREVIOUS (2026-11-02, Claude signed) — QHM-FILL-SAVE-1102 deployed; Day reversal rule tested (no edge)
 
 - QHM-FILL-SAVE-1102 (PR 817, c742b76): QHM saves state the moment a tranche fill is booked. Evidence and timeline
   (GOOGL 11-02 stop placed before the state file was rewritten) in `logs/design_records/qhm_fill_save_2026-11-02.md`.
