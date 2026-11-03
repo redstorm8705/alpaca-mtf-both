@@ -1,0 +1,62 @@
+Nightly Gemini Audit — 2026-11-02
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['config.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* `execution/portfolio_tracker.py` | `GOOGL` position marked NAKED in BROKER GROUND TRUTH | `GOOGL` (QHM position)
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **WATCHDOG HANGS**: The bot experienced two critical watchdog restarts (20:29:03 and 20:45:05) due to "No completed cycle in 12m during RTH". This indicates the main loop is stalling, likely due to the `ledger_sync` wall-time warnings (17.8s and 18.8s) or the `run_scan` global timeouts.
+* **FIFO ORPHANS**: `2026-11-02 21:02:25` - `SNDQ` and `AMZN` closing fills were processed without prior lot records. This suggests a failure in the `portfolio_tracker` to link fills to entries, leading to the `pnl_ledger` invariant failure.
+* **RECONCILIATION FAILURE**: `2026-11-02 21:02:40` - `pnl_ledger` drift of $13.77 and `pnl_unreconciled=true` (reason: `ledger_down_source_disagreement`).
+
+### PERFORMANCE AUDIT
+* **Trade Integrity**: The `SNDQ` trade (entry 22.79, exit 23.33) and `AMZN` trade (entry 246.94, exit 245.49) show correct P&L signs, but the `portfolio_tracker` failed to associate these with the entry lots, resulting in "FIFO orphan" warnings.
+* **Stop Rate**: The `TSLA` (short) and `COIN` (short) trades were stopped out. The `COIN` trade (entry 139.03, exit 140.12) shows a loss, which is consistent with a short position.
+* **R:R Analysis**: The `SNDQ` trade achieved a profit of $22.68 on 42 shares, which is a gain of ~$0.54/share. The stop was at 21.95 (risk $0.84/share). This is a sub-1:1 R:R, failing the stated 1:2 intraday target.
+
+### TRADE INTEGRITY
+* **Recording Bug**: `SNDQ` and `AMZN` fills are recorded in the `_pnl_selfcheck_telemetry` but flagged as "FIFO orphan" in the logs. The `portfolio_tracker` is failing to maintain state across the watchdog-induced restarts.
+
+### MODIFIED FILE FINDINGS
+* **`execution/quarterly_hold_manager.py`**: The added `self._save_state()` call in `_check_fill_and_advance` is a necessary fix for state persistence, but the `WATCHDOG` restarts are likely causing the `HoldState` to revert to `AWAITING_FILL` before the state is fully flushed to disk, contributing to the orphan issues.
+
+### P5 STATUS
+* P5-C1: UNTOUCHED
+* P5-C2: UNTOUCHED
+* P5-H2: TRIGGERED (Fill price crosstalk/orphan issues)
+* P5-H3: TRIGGERED (Orphan fills not clearing)
+* P5-M1: TRIGGERED (Watchdog restart loop)
+* P5-M3: UNTOUCHED
+* P5-L2: TRIGGERED (EOD P&L drift)
+
+### NEW BUGS FOUND
+* **CATEGORY: INFRASTRUCTURE | SEVERITY: CRITICAL | file: `execution/portfolio_tracker.py` | State loss on watchdog restart | The tracker fails to persist open lot state to disk before the watchdog triggers `os.execv()`, causing fills to become orphans upon restart.**
+* **CATEGORY: EXECUTION BUG | SEVERITY: HIGH | file: `execution/risk_manager.py` | QHM Stop Management | The `GOOGL` position is marked NAKED because the QHM failed to maintain the broker-side stop during the cycle gaps/watchdog restarts.**
+
+### FIX VALIDATION
+* No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **IMMEDIATE**: Investigate `execution/portfolio_tracker.py` to ensure `_save_state()` is called synchronously on every fill event, regardless of cycle health.
+2. **CRITICAL**: Increase `SCAN_INTERVAL_INTRADAY` or optimize `run_scan` to prevent the 12-minute watchdog timeout, as the current 18s+ `ledger_sync` time is consuming too much of the cycle budget.
+3. **HIGH**: Audit `execution/risk_manager.py` to ensure that if a cycle is missed, the `stop_protection` logic re-verifies all broker-held stops immediately upon restart.
+4. **MEDIUM**: Address P5-M1 by ensuring the lockfile is explicitly unlinked before `os.execv()` in the watchdog.
+5. **LOW**: Prune `score_comparison` JSON to prevent memory/disk bloat (P5-M3).
+================================================================================
+BROKER GROUND TRUTH (2026-11-02, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: 11:56-12:11, 12:11-13:00 (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AMZN   COVERED                  owners=day exposed=28m no-broker-stop=0m [12:30-12:30, 12:58-12:58] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  COIN   COVERED                  owners=day exposed=4m no-broker-stop=0m [09:46-09:46] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [09:55-09:55, 09:58-09:58] rejected_stop_orders=0
+  GOOGL  NAKED                    owners=qhm exposed=181m no-broker-stop=7m [09:58-10:06] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  SNDQ   COVERED                  owners=day exposed=37m no-broker-stop=0m [11:10-11:10] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=91m no-broker-stop=0m [07:56-07:56] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=349m no-broker-stop=0m [07:11-07:11] rejected_stop_orders=0
+  XOM    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

@@ -1,0 +1,309 @@
+{
+  "audit_date": "2026-11-02",
+  "run_ts": "2026-11-02T10:30:01.975789-08:00",
+  "entry_analysis": {
+    "entry_count": 3,
+    "exit_count": 2,
+    "partial_count": 1,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "WMT",
+      "TSLA",
+      "COIN"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 27,
+    "levels": {
+      "STRESSED": 27
+    },
+    "last_score": 49,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 64,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-02 17:15:22,877 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-02 17:15:22,880 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-02 17:16:09,291 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-44.72 tracker=$0.00 drift=$-44.72",
+      "2026-11-02 17:20:17,913 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday; pro",
+      "2026-11-02 17:20:17,928 WARNING ledger_sync ledger_sync wall-time 16.7s (fills=902 orders=3243)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 0,
+    "losses": 2,
+    "total_pnl": -12.599999999999909,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -6.2999999999999545,
+    "best": {
+      "symbol": "COIN",
+      "pnl": -4.449999999999932,
+      "entry_price": 139.03,
+      "exit_price": 139.92,
+      "size": 5.0,
+      "exit_event": "partial_exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 139.86,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "TSLA",
+      "pnl": -8.149999999999977,
+      "entry_price": 413.7,
+      "exit_price": 409.625,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 409.64,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "TSLA",
+        "pnl": -8.149999999999977,
+        "entry_price": 413.7,
+        "exit_price": 409.625,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 409.64,
+        "target": 0.0
+      },
+      {
+        "symbol": "COIN",
+        "pnl": -4.449999999999932,
+        "entry_price": 139.03,
+        "exit_price": 139.92,
+        "size": 5.0,
+        "exit_event": "partial_exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 139.86,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "COIN": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 4,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "12:46-12:46"
+        ],
+        "uncovered_windows_pt": [
+          "09:46-09:46"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "12:55-12:55",
+          "12:58-12:58"
+        ],
+        "uncovered_windows_pt": [
+          "09:55-09:55",
+          "09:58-09:58"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 31,
+        "uncovered_min": 7,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "12:58-13:06"
+        ],
+        "uncovered_windows_pt": [
+          "09:58-10:06"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "TSLA": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 91,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:56-10:56"
+        ],
+        "uncovered_windows_pt": [
+          "07:56-07:56"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 199,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:11-10:11"
+        ],
+        "uncovered_windows_pt": [
+          "07:11-07:11"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "XOM": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-02",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "GOOGL NAKED (broker ground truth)",
+        "detail": "GOOGL: no broker stop for 7m of 31m held (09:58-10:06 PT); owners qhm"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 13,
+    "symbols": [
+      "COIN",
+      "GE",
+      "GOOGL",
+      "TSLA",
+      "WMT"
+    ],
+    "by_symbol": {
+      "GOOGL": {
+        "buy": 1,
+        "sell": 0
+      },
+      "GE": {
+        "buy": 0,
+        "sell": 2
+      },
+      "COIN": {
+        "buy": 2,
+        "sell": 0
+      },
+      "TSLA": {
+        "buy": 2,
+        "sell": 2
+      },
+      "WMT": {
+        "buy": 3,
+        "sell": 0
+      }
+    }
+  }
+}
