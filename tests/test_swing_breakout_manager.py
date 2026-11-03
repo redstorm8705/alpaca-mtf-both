@@ -199,9 +199,14 @@ class Lifecycle(unittest.TestCase):
             p.stop()
         self.tmp.cleanup()
 
-    def _run_entries(self, broker, bars):
+    def _run_entries(self, broker, bars, last=124.9, stale=False):
+        def _trade(s):
+            if last is None or not stale:
+                return _fresh(last)
+            from datetime import timezone, timedelta
+            return (last, datetime.now(timezone.utc) - timedelta(hours=2))
         fakes = {"execution.broker": broker,
-                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 124.9, "ask": 125.0}, get_latest_trade_with_time=lambda s: _fresh(124.9)),
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: {"bid": 124.9, "ask": 125.0}, get_latest_trade_with_time=_trade),
                  "execution.quarterly_hold_manager": SimpleNamespace(get_quarterly_hold_symbols=lambda: []),
                  "execution.tier_capital_allocator": self.alloc}
         m = sb.SwingBreakoutManager()
@@ -223,6 +228,28 @@ class Lifecycle(unittest.TestCase):
         self.assertEqual(self.admits[0][:4], ("swing", "intraday", "AAA", "buy"))
         self.assertLess(px, st["entry_px"])
         self.assertEqual(qty, st["qty"])
+
+    def test_last_trade_below_level_waits_even_when_ask_clears_it(self):   # SWING-LEVEL-LAST-1103 (BRK.B 10-27)
+        b = FakeBroker()
+        m, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)}, last=119.5)
+        self.assertEqual(got, [])
+        self.assertEqual(b.stops, [])
+        self.assertTrue(any(ev == "skip" and "last trade below the breakout level" in str(kw.get("reason"))
+                            for ev, _s, kw in self.logs))
+        self.assertIn("AAA", sb._load_state().get("setups", {}))          # the setup waits, it is not dropped
+
+    def _assert_waits_on_last_trade(self, **kw):
+        b = FakeBroker()
+        m, got = self._run_entries(b, {"AAA": _breakout_df(), "BBB": _bars([100.0] * 260)}, **kw)
+        self.assertEqual(got, [])
+        self.assertTrue(any(ev == "skip" and "last trade unavailable or stale" in str(k.get("reason"))
+                            for ev, _s, k in self.logs))
+
+    def test_missing_last_trade_waits(self):
+        self._assert_waits_on_last_trade(last=None)
+
+    def test_stale_last_trade_waits(self):
+        self._assert_waits_on_last_trade(last=124.9, stale=True)
 
     def test_once_per_day_latch(self):
         b = FakeBroker()
@@ -730,8 +757,9 @@ class Lifecycle(unittest.TestCase):
         orig_pos = b.get_open_position
         b.get_open_position = lambda sym: None if flat["v"] else orig_pos(sym)
         quotes = iter([{"bid": 124.9, "ask": 125.0}] + [{"bid": 99.0, "ask": 99.2}] * 20)
+        trades = iter([124.9] + [99.0] * 20)                  # entry clears the level (SWING-LEVEL-LAST-1103), then the breach
         fakes = {"execution.broker": b,
-                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: next(quotes), get_latest_trade_with_time=lambda s: _fresh(99.0)),
+                 "data.alpaca_data": SimpleNamespace(get_latest_quote=lambda s: next(quotes), get_latest_trade_with_time=lambda s: _fresh(next(trades))),
                  "execution.quarterly_hold_manager": SimpleNamespace(get_quarterly_hold_symbols=lambda: []),
                  "execution.tier_capital_allocator": self.alloc}
         m = sb.SwingBreakoutManager()

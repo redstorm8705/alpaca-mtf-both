@@ -1,0 +1,32 @@
+{
+  "change": "trend-night-daylots-1103",
+  "tier": 2,
+  "paths": [
+    "execution/swing_overnight.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/trade_events.jsonl",
+      "pattern": "\"event\": \"sizing\".*\"strategy\": \"trend_night\".*\"day_lots\""
+    }
+  ],
+  "expected_rate": "once per trend night (SPY above its SMA) at the 15:40 ET entry minute",
+  "window_sessions": 3,
+  "window_reason": "trend nights are most sessions while SPY trends above its SMA; three sessions without a sizing record means the entry window or the runner is broken",
+  "reversal": "a trend_night sizing record whose day_lot_adjustments subtract a Day long that was then promoted to Swing the same day, or an overnight book above K x equity at 16:00 ET caused by a subtracted Day lot that stayed open",
+  "metrics": [
+    {
+      "name": "trend nights skipped for k_room while the only blocker was a Day lot that closed before 16:00",
+      "source": "logs/trade_events.jsonl trend_night sizing.day_lot_adjustments vs skip",
+      "direction": "down",
+      "bound": "zero"
+    },
+    {
+      "name": "overnight notional at 16:00 ET above K x equity",
+      "source": "overnight_k state + broker positions after the close",
+      "direction": "none",
+      "bound": "zero, or only from a Day lot whose flatten failed and paged"
+    }
+  ],
+  "verification": "tests/test_swing_overnight.py"
+}
