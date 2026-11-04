@@ -53,8 +53,8 @@ Nothing was moved or deleted.
 | pending_approval_catalyst_guidance_2026-07-14.md | events/catalyst_engine.py | **Open** | See above |
 | pending_patch_2026-07-14_catalyst_guidance.patch | same | **Open** | Applies forward cleanly today |
 
-## Suggested move (not done)
+## Move (done 2026-11-04, owner-approved)
 
 Move the 21 archive rows into `logs/archive/pending_2026/` with `git mv`. Leave the two catalyst files in place:
 the handoff and `tb_audit_log.md` link to them by path. Other docs may also link to the archived paths. The move
-is a reversible commit and is ungated (`logs/` is outside the preship scope). It waits on the owner's OK.
+is a reversible commit and is ungated (`logs/` is outside the preship scope). Done: see `logs/archive/pending_2026/README.md`.
