@@ -1,0 +1,12 @@
+R4k1 disc small-gap wait   n= 15 mean=  +18.9 med= +43.0 p05= -214.2 worst= -332.5 worse%=46.7
+R4k1 disc big-gap wait     n= 18 mean=  +20.7 med= +45.7 p05= -217.9 worst= -257.0 worse%=44.4
+R4k1 disc policy(small wait, big open) n= 33 mean=   +8.6 med=  +0.0 p05= -137.2 worst= -332.5 worse%=21.2
+R4k1 test small-gap wait   n= 24 mean=  -74.1 med= -82.6 p05= -269.3 worst= -366.2 worse%=54.2
+R4k1 test big-gap wait     n= 45 mean=  -39.4 med= -79.9 p05= -214.9 worst= -259.5 worse%=64.4
+R4k1 test policy(small wait, big open) n= 69 mean=  -25.8 med=  +0.0 p05= -224.5 worst= -366.2 worse%=18.8
+V1 disc small-gap wait   n= 15 mean=  +82.4 med= +69.6 p05=  -83.8 worst= -271.1 worse%=13.3
+V1 disc big-gap wait     n= 18 mean=  -32.1 med= +64.3 p05= -397.0 worst= -408.0 worse%=44.4
+V1 disc policy(small wait, big open) n= 33 mean=  +37.4 med=  +0.0 p05=   -1.4 worst= -271.1 worse%= 6.1
+V1 test small-gap wait   n= 24 mean= -138.9 med= -71.9 p05= -537.7 worst= -644.1 worse%=54.2
+V1 test big-gap wait     n= 45 mean=  -32.1 med= +84.9 p05= -366.8 worst= -601.4 worse%=44.4
+V1 test policy(small wait, big open) n= 69 mean=  -48.3 med=  +0.0 p05= -397.2 worst= -644.1 worse%=18.8

@@ -1,0 +1,43 @@
+earnings events 122 evaluated 102 disc 33
+V1 N=1 disc n= 33 mean=  +19.9 med= +66.8 p05= -385.9 worst= -408.0 worse%=30.3
+V1 N=1 test n= 69 mean=  -69.2 med= +38.8 p05= -530.5 worst= -644.1 worse%=47.8
+V1 N=1 all  n=102 mean=  -40.4 med= +47.5 p05= -407.7 worst= -644.1 worse%=42.2
+V2 N=1 disc n= 33 mean=   +5.5 med= +78.6 p05= -462.6 worst= -863.6 worse%=27.3
+V2 N=1 test n= 69 mean=  -62.5 med= +45.8 p05= -530.5 worst= -644.1 worse%=44.9
+V2 N=1 all  n=102 mean=  -40.5 med= +58.1 p05= -540.6 worst= -863.6 worse%=39.2
+V2 N=3 disc n= 33 mean=   +3.0 med= +78.6 p05= -462.6 worst= -863.6 worse%=27.3
+V2 N=3 test n= 69 mean=  -62.4 med= +55.1 p05= -530.5 worst= -644.1 worse%=43.5
+V2 N=3 all  n=102 mean=  -41.3 med= +61.4 p05= -540.6 worst= -863.6 worse%=38.2
+V2 N=5 disc n= 33 mean=   -4.1 med= +78.6 p05= -496.3 worst= -863.6 worse%=27.3
+V2 N=5 test n= 69 mean=  -61.3 med= +55.1 p05= -530.5 worst= -644.1 worse%=43.5
+V2 N=5 all  n=102 mean=  -42.8 med= +61.4 p05= -540.6 worst= -863.6 worse%=38.2
+V3 N=1 disc n= 33 mean=  -15.5 med=-169.6 p05= -502.8 worst= -863.6 worse%=66.7
+V3 N=1 test n= 69 mean=  -15.5 med=-147.1 p05= -530.5 worst= -644.1 worse%=58.0
+V3 N=1 all  n=102 mean=  -15.5 med=-149.0 p05= -540.6 worst= -863.6 worse%=60.8
+V3 N=3 disc n= 33 mean=  -43.5 med=-228.2 p05= -587.4 worst= -863.6 worse%=69.7
+V3 N=3 test n= 69 mean=   +2.2 med=-165.5 p05= -530.5 worst= -644.1 worse%=62.3
+V3 N=3 all  n=102 mean=  -12.6 med=-188.1 p05= -560.4 worst= -863.6 worse%=64.7
+V3 N=5 disc n= 33 mean=  -34.2 med=-232.8 p05= -587.4 worst= -863.6 worse%=69.7
+V3 N=5 test n= 69 mean=  +16.9 med=-175.1 p05= -530.5 worst= -644.1 worse%=65.2
+V3 N=5 all  n=102 mean=   +0.4 med=-202.8 p05= -560.4 worst= -863.6 worse%=66.7
+V4 N=1 disc n= 33 mean=   -5.0 med= -38.7 p05= -462.6 worst= -863.6 worse%=54.5
+V4 N=1 test n= 69 mean=  -39.0 med= -67.0 p05= -530.5 worst= -644.1 worse%=55.1
+V4 N=1 all  n=102 mean=  -28.0 med= -48.1 p05= -540.6 worst= -863.6 worse%=54.9
+V4 N=3 disc n= 33 mean=  -20.2 med= -66.9 p05= -462.6 worst= -863.6 worse%=66.7
+V4 N=3 test n= 69 mean=  -30.1 med= -81.5 p05= -530.5 worst= -644.1 worse%=60.9
+V4 N=3 all  n=102 mean=  -26.9 med= -73.3 p05= -540.6 worst= -863.6 worse%=62.7
+V4 N=5 disc n= 33 mean=  -19.1 med= -66.9 p05= -496.3 worst= -863.6 worse%=69.7
+V4 N=5 test n= 69 mean=  -22.2 med= -81.5 p05= -530.5 worst= -644.1 worse%=62.3
+V4 N=5 all  n=102 mean=  -21.2 med= -73.3 p05= -540.6 worst= -863.6 worse%=64.7
+candidates 18 disc mean of all -0.6, share>0 0.50
+ disc qf=0.75 qx=0.5 T=390: mean +21.1
+ disc qf=0.5 qx=0.5 T=60: mean +19.5
+ disc qf=0.75 qx=0.5 T=30: mean +19.4
+ disc qf=0.5 qx=0.5 T=30: mean +18.5
+ disc qf=0.75 qx=0.5 T=60: mean +17.7
+ disc qf=0.25 qx=0.5 T=60: mean +17.0
+WINNER qf=0.75 qx=0.5 T=390
+  disc n= 33 mean=  +21.1 med= +66.8 p05= -367.8 worst= -458.1 worse%=30.3
+   95% CI (date-clustered) [-56.5 100.4]
+  test n= 69 mean=  -65.5 med= +38.8 p05= -530.5 worst= -644.1 worse%=47.8
+   95% CI (date-clustered) [-119.6  -11.6]

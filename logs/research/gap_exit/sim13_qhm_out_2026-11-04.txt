@@ -1,0 +1,65 @@
+earnings events 122 evaluated 102 disc 33
+V1 N=1 disc n= 33 mean=  +19.9 med= +66.8 p05= -385.9 worst= -408.0 worse%=30.3
+V1 N=1 test n= 69 mean=  -69.2 med= +38.8 p05= -530.5 worst= -644.1 worse%=47.8
+V1 N=1 all  n=102 mean=  -40.4 med= +47.5 p05= -407.7 worst= -644.1 worse%=42.2
+V2 N=1 disc n= 33 mean=   +5.5 med= +78.6 p05= -462.6 worst= -863.6 worse%=27.3
+V2 N=1 test n= 69 mean=  -62.5 med= +45.8 p05= -530.5 worst= -644.1 worse%=44.9
+V2 N=1 all  n=102 mean=  -40.5 med= +58.1 p05= -540.6 worst= -863.6 worse%=39.2
+V2 N=3 disc n= 33 mean=   +3.0 med= +78.6 p05= -462.6 worst= -863.6 worse%=27.3
+V2 N=3 test n= 69 mean=  -62.4 med= +55.1 p05= -530.5 worst= -644.1 worse%=43.5
+V2 N=3 all  n=102 mean=  -41.3 med= +61.4 p05= -540.6 worst= -863.6 worse%=38.2
+V2 N=5 disc n= 33 mean=   -4.1 med= +78.6 p05= -496.3 worst= -863.6 worse%=27.3
+V2 N=5 test n= 69 mean=  -61.3 med= +55.1 p05= -530.5 worst= -644.1 worse%=43.5
+V2 N=5 all  n=102 mean=  -42.8 med= +61.4 p05= -540.6 worst= -863.6 worse%=38.2
+V3 N=1 disc n= 33 mean=  -15.5 med=-169.6 p05= -502.8 worst= -863.6 worse%=66.7
+V3 N=1 test n= 69 mean=  -15.5 med=-147.1 p05= -530.5 worst= -644.1 worse%=58.0
+V3 N=1 all  n=102 mean=  -15.5 med=-149.0 p05= -540.6 worst= -863.6 worse%=60.8
+V3 N=3 disc n= 33 mean=  -43.5 med=-228.2 p05= -587.4 worst= -863.6 worse%=69.7
+V3 N=3 test n= 69 mean=   +2.2 med=-165.5 p05= -530.5 worst= -644.1 worse%=62.3
+V3 N=3 all  n=102 mean=  -12.6 med=-188.1 p05= -560.4 worst= -863.6 worse%=64.7
+V3 N=5 disc n= 33 mean=  -34.2 med=-232.8 p05= -587.4 worst= -863.6 worse%=69.7
+V3 N=5 test n= 69 mean=  +16.9 med=-175.1 p05= -530.5 worst= -644.1 worse%=65.2
+V3 N=5 all  n=102 mean=   +0.4 med=-202.8 p05= -560.4 worst= -863.6 worse%=66.7
+V4 N=1 disc n= 33 mean=   -5.0 med= -38.7 p05= -462.6 worst= -863.6 worse%=54.5
+V4 N=1 test n= 69 mean=  -39.0 med= -67.0 p05= -530.5 worst= -644.1 worse%=55.1
+V4 N=1 all  n=102 mean=  -28.0 med= -48.1 p05= -540.6 worst= -863.6 worse%=54.9
+V4 N=3 disc n= 33 mean=  -20.2 med= -66.9 p05= -462.6 worst= -863.6 worse%=66.7
+V4 N=3 test n= 69 mean=  -30.1 med= -81.5 p05= -530.5 worst= -644.1 worse%=60.9
+V4 N=3 all  n=102 mean=  -26.9 med= -73.3 p05= -540.6 worst= -863.6 worse%=62.7
+V4 N=5 disc n= 33 mean=  -19.1 med= -66.9 p05= -496.3 worst= -863.6 worse%=69.7
+V4 N=5 test n= 69 mean=  -22.2 med= -81.5 p05= -530.5 worst= -644.1 worse%=62.3
+V4 N=5 all  n=102 mean=  -21.2 med= -73.3 p05= -540.6 worst= -863.6 worse%=64.7
+target q=0.25 disc n= 33 mean=   -4.3 med= +64.0 p05= -443.0 worst= -852.1 worse%=24.2
+target q=0.25 test n= 69 mean=  -49.4 med= +47.8 p05= -427.5 worst= -512.9 worse%=44.9
+target q=0.5 disc n= 33 mean=  -33.2 med=-139.9 p05= -558.2 worst= -852.1 worse%=54.5
+target q=0.5 test n= 69 mean=  -60.1 med=-151.9 p05= -427.5 worst= -512.9 worse%=63.8
+target q=0.75 disc n= 33 mean=  -45.5 med=-245.9 p05= -614.7 worst= -852.1 worse%=66.7
+target q=0.75 test n= 69 mean=  -27.0 med=-179.7 p05= -427.5 worst= -512.9 worse%=71.0
+disc BEAT hold-5-days n= 22 mean=  +67.7 med= -49.3 p05= -614.3 worst= -920.2 worse%=59.1
+disc BEAT target-q50    n= 12 mean=  -46.8 med=-126.4 p05= -302.4 worst= -320.2 worse%=58.3
+disc MISS hold-5-days n= 31 mean=  -65.1 med=-239.8 p05=-1157.5 worst=-1348.3 worse%=54.8
+disc MISS target-q50    n= 21 mean=  -25.4 med=-245.9 p05= -622.2 worst= -852.1 worse%=52.4
+test BEAT hold-5-days n= 45 mean= +135.7 med= +74.8 p05= -465.1 worst= -530.5 worse%=44.4
+test BEAT target-q50    n= 45 mean=  -37.7 med=-134.0 p05= -329.2 worst= -478.5 worse%=60.0
+test MISS hold-5-days n= 24 mean= -125.9 med=-183.1 p05= -972.4 worst=-1151.3 worse%=70.8
+test MISS target-q50    n= 24 mean= -102.0 med=-217.5 p05= -446.5 worst= -512.9 worse%=70.8
+all  BEAT hold-5-days n= 67 mean= +113.4 med= +17.6 p05= -512.7 worst= -920.2 worse%=49.3
+all  BEAT target-q50    n= 57 mean=  -39.6 med=-134.0 p05= -322.5 worst= -478.5 worse%=59.6
+all  MISS hold-5-days n= 55 mean=  -91.6 med=-227.5 p05=-1077.5 worst=-1348.3 worse%=61.8
+all  MISS target-q50    n= 45 mean=  -66.3 med=-225.8 p05= -515.0 worst= -852.1 worse%=62.2
+events 122 after one-per-report 121
+2020-23 BEAT n=22 median hold 61 sessions
+  H5: n=22 mean=  +67.7 med=  -49.3 p05= -614.3 worse%=59.1 CI-date [-168.  352.] CI-ticker [-197.  410.]
+  S1: n=12 mean=  -76.4 med= -252.7 p05= -638.6 worse%=83.3 CI-date [-365.  301.] CI-ticker [-443.  309.]
+  S2: n=22 mean=  +55.6 med= -448.3 p05=-1249.1 worse%=59.1 CI-date [-435.  684.] CI-ticker [-548.  571.]
+  S3: n=22 mean= +132.7 med= +230.6 p05=-3169.3 worse%=45.5 CI-date [-549.  783.] CI-ticker [-503.  575.]
+2024-26 BEAT n=45 median hold 61 sessions
+  H5: n=45 mean= +135.7 med=  +74.8 p05= -465.1 worse%=44.4 CI-date [-33. 332.] CI-ticker [-31. 335.]
+  S1: n=45 mean= +145.4 med= -198.5 p05= -329.2 worse%=84.4 CI-date [-168.  623.] CI-ticker [-131.  564.]
+  S2: n=45 mean= +526.6 med= -439.2 p05= -975.2 worse%=55.6 CI-date [ -19. 1184.] CI-ticker [ -52. 1310.]
+  S3: n=45 mean= +718.1 med= +310.3 p05=-1805.3 worse%=40.0 CI-date [ 132. 1372.] CI-ticker [ 120. 1448.]
+all BEAT n=67 median hold 61 sessions
+  H5: n=67 mean= +113.4 med=  +17.6 p05= -512.7 worse%=49.3 CI-date [-29. 265.] CI-ticker [-30. 309.]
+  S1: n=57 mean=  +98.7 med= -199.1 p05= -444.5 worse%=84.2 CI-date [-169.  468.] CI-ticker [-175.  438.]
+  S2: n=67 mean= +371.9 med= -439.2 p05=-1067.0 worse%=56.7 CI-date [-41. 842.] CI-ticker [-100.  980.]
+  S3: n=67 mean= +525.9 med= +310.3 p05=-1956.9 worse%=41.8 CI-date [  72. 1027.] CI-ticker [ 109. 1044.]

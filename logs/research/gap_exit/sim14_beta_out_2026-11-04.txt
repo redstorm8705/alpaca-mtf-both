@@ -1,0 +1,4 @@
+BEAT no stop: n=67 raw mean +526 | minus SPY mean +161 median -59 CI [-244.  605.]
+BEAT 3 ATR stop: n=67 raw mean +372 | minus SPY mean +146 median -306 CI [-219.  545.]
+MISS no stop: n=54 raw mean +142 | minus SPY mean -10 median -129 CI [-523.  515.]
+MISS 3 ATR stop: n=54 raw mean -6 | minus SPY mean -54 median -476 CI [-454.  390.]

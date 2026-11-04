@@ -1,0 +1,6 @@
+target q=0.25 disc n= 33 mean=   -4.3 med= +64.0 p05= -443.0 worst= -852.1 worse%=24.2
+target q=0.25 test n= 69 mean=  -49.4 med= +47.8 p05= -427.5 worst= -512.9 worse%=44.9
+target q=0.5 disc n= 33 mean=  -33.2 med=-139.9 p05= -558.2 worst= -852.1 worse%=54.5
+target q=0.5 test n= 69 mean=  -60.1 med=-151.9 p05= -427.5 worst= -512.9 worse%=63.8
+target q=0.75 disc n= 33 mean=  -45.5 med=-245.9 p05= -614.7 worst= -852.1 worse%=66.7
+target q=0.75 test n= 69 mean=  -27.0 med=-179.7 p05= -427.5 worst= -512.9 worse%=71.0
