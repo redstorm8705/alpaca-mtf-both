@@ -24,10 +24,10 @@ Nothing here verifies what is running on the server. "Merged" means merged to `m
    design draft `logs/design_records/day_orb_stocks_in_play_2026-11-03.md`).
 2. **Add `ALPHAVANTAGE_API_KEY` to the OCI `.env`** — needed by EARN-GAP-REVIEW-1104 (transcripts).
 3. **F6 enablement one-pager** — Codex lane; F6 stays OFF until decided (handoff 10-28/10-26 Codex blocks).
-4. **Catalyst `guidance_cut` recall fix, queued since 2026-07-14** — never applied; the patch still applies cleanly to
-   today's `events/catalyst_engine.py`, and the catalyst gate is live (`execution/entry_logic.py:35`). It had a GAI
-   standing dissent. It changes which entries are blocked, so it needs a fresh gate before any decision. See
-   `logs/research/pending_files_inventory_2026-11-04.md`.
+4. **Catalyst bad-news check redesign (CATALYST-DYNAMIC-1104)** — the July guidance-cut patch is replaced by a
+   whole-article design; board 5/5 approve-with-changes, Gro + GAI owed. It also found live defects in the current
+   gate (newer news cancels a block; 72h fetch vs 30-day window; 25-article cap; watch set misses RIVN/MU/SNDK).
+   See `logs/design_records/catalyst_dynamic_2026-11-04.md`.
 5. Owner questions from 10-27 still unanswered in the handoff: Track B re-entry after a close; sizing confirmed trades
    via the 2x ETF; a trend-continuation entry (SNDK 10/23, 10/26).
 
