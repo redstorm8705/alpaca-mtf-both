@@ -1,8 +1,9 @@
 # CATALYST-DYNAMIC-1104 — whole-article news judgement for the bad-news entry block (signed: Claude, 2026-11-04)
 
 Approval-ID: CATALYST-DYNAMIC-1104
-Status: **board review done (5 cold seats, all APPROVE-WITH-CHANGES). Gro + GAI review owed** (this cloud session has no
-reviewer keys). No code written. Owner approval of the exact design comes after Gro + GAI.
+Status: **board review done (5 cold seats, all APPROVE-WITH-CHANGES). GAI + Codex review owed** (BGC: board, GAI, Codex; Gro only as
+fallback when Codex is unavailable; this cloud session has no reviewer keys). No code written. Owner approval of the exact
+design comes after GAI + Codex.
 Covers (planned): events/catalyst_engine.py, execution/entry_logic.py, execution/forever_hold_manager.py, the Swing / QHM /
 Day entry paths, tests/test_catalyst_*.py (new).
 
@@ -68,7 +69,7 @@ a `catalyst_decision` event in `trade_events.jsonl`. It changes which entries ar
 - Separate risk-path proposals (board + masked-loss seat): QHM/F6 dip-buy permission on a drop with no confirmed bad
   news; Day-tier stocks-in-play feed.
 
-## 4. Points still split (to resolve with Gro + GAI and the replay, not by assertion)
+## 4. Points still split (to resolve with GAI + Codex and the replay, not by assertion)
 1. **Model outage.** Keyword fallback for the 4 blocking types, labelled `source=keyword_fallback` (LdP, Kyle, Peterffy)
    vs "unconfirmed = no block" (Simons, Taleb). Majority: keyword fallback, because it is today's approved behaviour.
 2. **Price confirmation.** Block only when the market reaction confirms (Simons, Kyle) vs a verified new guidance cut or
@@ -96,7 +97,7 @@ entries if the outage fallback is kept). `logs/pending_patch_2026-07-14_catalyst
 move to `logs/archive/pending_2026/` once the owner closes it.
 
 ## 7. Next steps
-1. Gro + GAI design review of this record (same prompt, Mac session), including the two split points in §4.
+1. GAI + Codex design review of this record (same prompt, Mac session; Gro only if Codex is unavailable), including the two split points in §4.
 2. Read the OCI crontab line for `catalyst_engine.py` and `logs/catalyst_engine.log` to confirm defect 4 and measure the
    live block rate and false blocks.
 3. Owner one-page approval: Phase A first, then Phase B after the replay.

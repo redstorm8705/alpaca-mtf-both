@@ -41,7 +41,7 @@ skipped, so a query could return state from October. Check on the Mac with `note
 
 ## 4. Fixes
 
-These edits touch `CLAUDE.md` and `handoff.md`, which need a Gro + GAI marker before commit (`preship_gate.py:63`,
+These edits touch `CLAUDE.md` and `handoff.md`, which need a GAI + reviewer #2 (Codex; Gro only as fallback) marker before commit (`preship_gate.py:63`,
 `GATED_SPECIFIC`), so they go through the Mac session.
 
 1. `CLAUDE.md:421`: replace with "At the end of a session, offer `/wrap-up` once; run it only when Rafael asks (see

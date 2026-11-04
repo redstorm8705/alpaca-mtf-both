@@ -25,7 +25,7 @@ Nothing here verifies what is running on the server. "Merged" means merged to `m
 2. **Add `ALPHAVANTAGE_API_KEY` to the OCI `.env`** — needed by EARN-GAP-REVIEW-1104 (transcripts).
 3. **F6 enablement one-pager** — Codex lane; F6 stays OFF until decided (handoff 10-28/10-26 Codex blocks).
 4. **Catalyst bad-news check redesign (CATALYST-DYNAMIC-1104)** — the July guidance-cut patch is replaced by a
-   whole-article design; board 5/5 approve-with-changes, Gro + GAI owed. It also found live defects in the current
+   whole-article design; board 5/5 approve-with-changes, GAI + Codex owed. It also found live defects in the current
    gate (newer news cancels a block; 72h fetch vs 30-day window; 25-article cap; watch set misses RIVN/MU/SNDK).
    See `logs/design_records/catalyst_dynamic_2026-11-04.md`.
 5. Owner questions from 10-27 still unanswered in the handoff: Track B re-entry after a close; sizing confirmed trades
@@ -77,4 +77,8 @@ These need OCI logs and Alpaca fills.
 4. `preship_gate` reads git in the main checkout, not the worktree.
 5. Track A follow-ups from #779: noise window includes extended-hours bars; stop room measured from the limit, not the fill.
 6. `handoff.md` holds many "⏩ LATEST" headers from earlier dates; archive older blocks (gated file — needs a reviewer pass).
+8. Old "Gro + GAI" wording: the external voices are BGC (board, GAI, Codex) since REVIEWER-SWAP-1025; Gro is the
+   fallback only. 70 old-wording mentions remain (CLAUDE.md 62, rules/CORE.md 5, rules/OPERATING.md 2,
+   rules/behaviour.md 1). The every-prompt reminder ("convene board + Gro + GAI … final Gro+GAI pre-ship audit") is not
+   in the repo's `.claude/`, so it lives in the Mac's user-level Claude settings. All are gated / Mac-side edits.
 7. 467 of 534 remote branches untouched for 14+ days — inventory for owner-approved deletion (cleanup item 2).
