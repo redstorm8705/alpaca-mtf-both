@@ -29,3 +29,11 @@ All three filters together would have blocked the XOM 10-26 entry (earnings 10-3
 trades. Fewer trades needs the owner. Next test: a capacity-constrained replay with live slots and K room.
 Tighter or trailing stops cut the winners that pay for the losers; the 2.5-ATR stop stays.
 Survivorship: today's top-50 universe.
+
+## Correction (board seat López de Prado, 2026-11-04)
+The trades each filter REMOVES were profitable on average: earnings skip 28 removed at −0.02 R (2020-23) but 13 at
++0.85 R (2024-26); late-breakout skip 102 at +0.33 R and 115 at +0.26 R; sector filter 30 at −0.06 R and 22 at +0.71 R.
+They raise the average of the trades that remain only by cutting trades that still made money. None is a remedy. XOM
+was an ordinary loss of a breakout rule that earns +0.37 to +0.59 R per trade with a 45% win rate. The real lesson is
+entry timing: XOM's first breakout (10-13) came before it joined the Swing list (10-26) — a universe-change effect,
+to be tested with point-in-time membership.
