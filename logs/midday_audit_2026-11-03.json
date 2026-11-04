@@ -1,0 +1,259 @@
+{
+  "audit_date": "2026-11-03",
+  "run_ts": "2026-11-03T10:30:02.315486-08:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "V",
+      "AAPL"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 20,
+    "levels": {
+      "ELEVATED": 20
+    },
+    "last_score": 30,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 57,
+    "watchdog_count": 1,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-03 16:53:50,511 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-7.90 tracker=$0.00 drift=$-7.90",
+      "2026-11-03 17:00:22,414 WARNING ledger_sync ledger_sync wall-time 20.9s (fills=916 orders=3265)",
+      "2026-11-03 17:01:04,019 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-03 17:01:04,021 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-03 17:01:16,475 | WARNING  | strategy.signal_generator | run_scan: phase-1 global timeout \u2014 abandoned symbols: ['SNDK', 'SQQQ', 'INTC', 'BAC',"
+    ],
+    "watchdog_lines": [
+      "2026-11-03 17:32:47,912 | CRITICAL | monitoring.watchdog | WATCHDOG: No completed cycle in 12m during RTH \u2014 bot is hung. Firing alert and restarting."
+    ]
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 1,
+    "wins": 0,
+    "losses": 1,
+    "total_pnl": -17.810000000000002,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -17.810000000000002,
+    "best": {
+      "symbol": "AAPL",
+      "pnl": -17.810000000000002,
+      "entry_price": 345.15,
+      "exit_price": 327.34,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Swing 55-day breakout",
+      "mri_level": "NORMAL",
+      "stop": 328.7,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "AAPL",
+      "pnl": -17.810000000000002,
+      "entry_price": 345.15,
+      "exit_price": 327.34,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Swing 55-day breakout",
+      "mri_level": "NORMAL",
+      "stop": 328.7,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "AAPL",
+        "pnl": -17.810000000000002,
+        "entry_price": 345.15,
+        "exit_price": 327.34,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Swing 55-day breakout",
+        "mri_level": "NORMAL",
+        "stop": 328.7,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 3,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:04-10:04"
+        ],
+        "uncovered_windows_pt": [
+          "07:04-07:04"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 192,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:18-10:18"
+        ],
+        "uncovered_windows_pt": [
+          "07:18-07:18"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "XOM": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [
+      "09:15-09:43"
+    ],
+    "cycle_gaps_et": [
+      "12:15-12:43"
+    ],
+    "status": "OK",
+    "session": "2026-11-03",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "high",
+        "title": "Bot loop stalled > 15 min (broker ground truth)",
+        "detail": "no [CYCLE] line during 09:15-09:43 PT \u2014 software stops were not evaluated"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "AAPL",
+      "V"
+    ],
+    "by_symbol": {
+      "V": {
+        "buy": 1,
+        "sell": 0
+      },
+      "AAPL": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}
