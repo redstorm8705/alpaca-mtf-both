@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-11-03
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity:** The single closed trade (AAPL) shows an entry of $345.15 and an exit of $327.34 for a P&L of $-17.81. 
+    *   *Calculation Check:* $327.34 - $345.15 = -$17.81. The P&L sign and magnitude are correct for a long position.
+*   **Score/Outcome:** The AAPL trade was executed with "no 12-pt score" (Swing 55-day breakout). As per the "KNOWN BENIGN PATTERNS," this is not a score-gate bypass, but it highlights that the trade was not subject to the `MIN_LONG_SCORE` (8) filter.
+*   **Stop-hit rate:** 0% (0 stops). The loss on AAPL appears to be a manual or strategy-driven exit rather than a stop-loss trigger, as the stop-hit rate is 0%.
+
+### ENTRY QUALITY
+*   **Filtering:** Several signals were correctly filtered by the `weekly bias` (e.g., NVDA, AAPL, PLTR) or `ORB gate` (e.g., UBER, TSLL, QCOM).
+*   **Swing12 Status:** The bot correctly identified that `SWING12_NEW_ENTRIES_ENABLED=False` and skipped entries for AMD and NET, resetting the `RC-8` buffer. This indicates the entry logic is respecting the current configuration state.
+
+### EXIT QUALITY
+*   **No issues:** The single closed trade (AAPL) was a loss, but there is no evidence of "holding winners too long" or "cutting losers too slowly" given the lack of stop-hit data.
+
+### MRI ALIGNMENT
+*   **Regime:** The MRI session distribution is consistently `ELEVATED` (20/20 samples). The bot is operating in a high-volatility/stressed regime, which is reflected in the `Dynamic MIN_SCORE` being raised to 9/12.
+
+### LOG ANOMALIES
+*   **DRAM Warning:** `[DRAM] No daily data — long/short entry blocked (fail-closed)` appears repeatedly. This is a data-feed issue for a specific ticker, but the bot is correctly failing-closed.
+*   **QHM Blocking:** `QuarterlyHoldManager` correctly blocked GE entries due to cap breaches, demonstrating that the `execution.quarterly_hold_manager` is functioning as intended.
+
+### NEW BUGS / CONCERNS
+*   **INFRASTRUCTURE | LOW | Data Feed Gap |** The `[DRAM]` ticker consistently lacks daily data, causing repeated warning logs. While the bot handles this safely (fail-closed), it indicates a potential stale or missing data source for this specific symbol in the universe.
+*   **ALPHA ISSUE | MEDIUM | Swing12 Configuration |** The log `[AMD] 12-point new entries disabled (SWING12_NEW_ENTRIES_ENABLED=False)` suggests that the strategy is currently restricted from taking high-conviction swing entries. If this is not intended for the current market regime, it is significantly limiting the bot's opportunity set.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **ALPHA:** Review `SWING12_NEW_ENTRIES_ENABLED` status. If the current market regime warrants it, re-enable Swing12 entries to allow the bot to capture higher-score setups.
+2.  **INFRA:** Investigate the data provider source for `DRAM` to resolve the "No daily data" warning and clean up the log noise.
