@@ -30,7 +30,7 @@ import logging
 import secrets
 import sys
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -52,9 +52,20 @@ def authorize_url(client_id: str, state: str) -> str:
                                               "state": state})
 
 
+def _raw_param(query: str, name: str) -> str:
+    """The value of one query parameter, percent-decoded exactly once with unquote (NOT unquote_plus /
+    parse_qs, which would turn a literal '+' in the code into a space). '' when absent."""
+    for part in (query or "").split("&"):
+        k, sep, v = part.partition("=")
+        if sep and k == name:
+            return unquote(v)
+    return ""
+
+
 def parse_redirect(pasted: str, expected_state: str):
     """Return the authorization code from the pasted redirect address, or raise ValueError.
-    parse_qs URL-decodes the code (Schwab codes contain '%40' [third-party docs, unverified])."""
+    The code is percent-decoded once ('%40' -> '@') and a literal '+' is kept as '+'; requests then
+    form-encodes it exactly once in the token POST."""
     u = urlparse((pasted or "").strip())
     if f"{u.scheme}://{u.netloc}" != sq.REDIRECT_URI:
         raise ValueError("address is not the https://127.0.0.1 redirect")
@@ -62,7 +73,7 @@ def parse_redirect(pasted: str, expected_state: str):
     got_state = (qs.get("state") or [""])[0]
     if not got_state or not secrets.compare_digest(got_state, expected_state):
         raise ValueError("state mismatch — rejected (possible forged or stale redirect)")
-    code = (qs.get("code") or [""])[0]
+    code = _raw_param(u.query, "code")
     if not code:
         raise ValueError("no code in the address")
     return code
@@ -78,8 +89,32 @@ def exchange_code(code: str) -> dict:
                             headers={"Content-Type": "application/x-www-form-urlencoded"},
                             timeout=(connect, read))
     if int(resp.status_code) != 200:
-        raise RuntimeError(f"token exchange refused: HTTP {resp.status_code}")
+        raise RuntimeError(f"token exchange refused: HTTP {resp.status_code} {_error_detail(resp)}")
     return resp.json()
+
+
+def _error_detail(resp) -> str:
+    """Schwab's error body for a refused token request, redacted: the JSON error / error_description
+    fields when present, else the first 300 characters of the body. Never raises."""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            parts = [f"{k}={body[k]}" for k in ("error", "error_description", "message") if body.get(k)]
+            if parts:
+                return sq.redact("; ".join(str(x) for x in parts))
+        return sq.redact(str(body)[:300])
+    except Exception:
+        try:
+            return sq.redact((resp.text or "")[:300])
+        except Exception:
+            return "(no readable body)"
+
+
+def _creds_shape() -> str:
+    """Lengths and character classes of the app key and secret — never their values."""
+    key, sec = sq._app_creds()
+    return (f"SCHWAB_APP_KEY length {len(key)} (letters/digits only: {key.isalnum()}), "
+            f"SCHWAB_APP_SECRET length {len(sec)} (letters/digits only: {sec.isalnum()})")
 
 
 def login() -> int:
@@ -112,6 +147,10 @@ def login() -> int:
                 sq._unlink(sq.REVOKED_FILE)   # only a proven login clears a revoke
     except Exception as e:
         print(f"SCHWAB LOGIN FAILED: {sq.redact(f'{type(e).__name__}: {e}')}")
+        print(f"  credentials as loaded: {_creds_shape()}")
+        if "invalid_client" in str(e):
+            print("  invalid_client: Schwab did not accept the App Key / App Secret pair — re-copy the App Secret "
+                  "from the app page at developer.schwab.com into SCHWAB_APP_SECRET in the server .env.")
         return 1
     if proof == "refused":
         print("SCHWAB LOGIN OK: token saved (mode 600); scope proof passed — Schwab refused the accounts endpoint.")

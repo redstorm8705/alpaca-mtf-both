@@ -517,6 +517,33 @@ class TestImportsAndLogin(Base):
         for s in (APP_SECRET, ACCESS, REFRESH, CODE):
             self.assertNotIn(s, out)
 
+    def test_code_plus_kept_and_percent_decoded_once(self):
+        from scripts import schwab_login as sl
+        state = "STATE_OK"
+        self.assertEqual(sl.parse_redirect(f"https://127.0.0.1/?code=A+B%2BC%40&session=x&state={state}", state),
+                         "A+B+C@")
+        self.assertEqual(sl.parse_redirect(f"https://127.0.0.1/?state={state}&code=C0%2540", state), "C0%40")
+
+    def test_refused_exchange_shows_schwab_reason_redacted(self):
+        from scripts import schwab_login as sl
+        state = "STATE_OK"
+        self.http.post.return_value = FakeResp(400, {"error": "invalid_client",
+                                                      "error_description": f"bad client {APP_SECRET}"})
+        printed = []
+        with mock.patch.object(sl.secrets, "token_urlsafe", return_value=state), \
+                mock.patch("builtins.input", return_value=f"https://127.0.0.1/?code={CODE}&state={state}"), \
+                mock.patch("builtins.print", side_effect=lambda *a, **k: printed.append(" ".join(map(str, a)))):
+            rc = sl.main([])
+        self.assertEqual(rc, 1)
+        out = "\n".join(printed)
+        self.assertIn("HTTP 400", out)
+        self.assertIn("error=invalid_client", out)
+        self.assertIn("re-copy the App Secret", out)
+        self.assertIn("SCHWAB_APP_SECRET length", out)
+        for secret in (APP_SECRET, CODE):
+            self.assertNotIn(secret, out)
+        self.assertEqual(self.http.post.call_count, 1)          # the code is spent exactly once
+
     def test_revoke_clears_state(self):
         from scripts import schwab_login as sl
         self.valid_token()
