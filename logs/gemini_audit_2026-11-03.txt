@@ -1,0 +1,62 @@
+Nightly Gemini Audit — 2026-11-03
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['strategy/run_cycle.py', 'execution/swing_breakout_manager.py', 'execution/swing_overnight.py', 'events/news_monitor.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there is a recurring "FIFO orphan" warning and a persistent P&L drift that, while flagged as non-catastrophic in the header, indicates a lack of synchronization between the ledger and the broker for specific symbols (QQQM).
+
+### LOG ANOMALIES
+*   **FIFO orphan**: `2026-11-03 21:04:59,648 | WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for QQQM has no prior lot and no tracker record — fill unmatched.` This indicates a ledger synchronization failure for the swing tier.
+*   **P&L Drift**: `EOD P&L DRIFT: Alpaca=$-7.90 tracker=$0.00 drift=$-7.90` persists across multiple logs. While the header states this is expected pre-heal, the consistency of this drift suggests the tracker is failing to ingest the specific AAPL fill noted in the telemetry.
+*   **Anomalies**: `[ANOMALY-2] [MSFT] confirm_gate=7 scans but no entry` appears repeatedly. This indicates the `confirm_gate` logic is successfully counting but failing to trigger the entry, likely due to a conflict between the `risk.open_positions` count and the `tracker` state.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `AAPL` trade (entry 335.24, exit 327.34) resulted in a realized P&L of -7.90. The math (327.34 - 335.24 = -7.90) is correct.
+*   **Score Correlation**: The bot is consistently scanning high-score tickers (e.g., AMD 11/12, NET 11/12) but failing to enter. The `confirm_gate` logic is effectively preventing entries, which is preserving capital but limiting opportunity capture.
+*   **Stop Rate**: The stop-hit rate remains high for the day-trading tier, but the swing-breakout entries are being filtered effectively by the new `last_trade` check in `swing_breakout_manager.py`.
+
+### TRADE INTEGRITY
+*   **Recording**: The `FIFO orphan` for `QQQM` confirms that the `PortfolioTracker` is not correctly mapping fills to lots for the swing tier. This is a recording bug that will cause inaccurate P&L reporting for swing positions.
+
+### MODIFIED FILE FINDINGS
+*   **`strategy/run_cycle.py`**: The new `_todays_scheduled_close_et` function correctly handles the calendar, but the `_venue_uncertain` logic relies on `_mwcb_unknown_reason`. If `SPY` data is missing, the bot fails-closed. This is safe but potentially aggressive.
+*   **`execution/swing_breakout_manager.py`**: The addition of `last = self._last_trade(symbol)` and the subsequent check `if level > 0 and last < level:` is a robust fix for the IEX ask-price crosstalk issue.
+*   **`execution/swing_overnight.py`**: The `post_flatten_positions` and `day_tier_flatten_lots` functions introduce complex logic to net out day-tier positions. The check `if qty * d > 0 and qty * rest < 0:` is a correct safety guard to prevent over-flattening co-held lots.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-M1**: UNTOUCHED
+*   **P5-M2**: UNTOUCHED
+*   **P5-M3**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/portfolio_tracker.py | FIFO orphan handling | The tracker fails to match closing fills for swing-tier lots (QQQM), leading to orphaned fills and P&L drift.**
+*   **ALPHA ISSUE | LOW | strategy/run_cycle.py | Anomaly-2 persistence | The `confirm_gate` logic is stuck in a loop for MSFT; the `risk.open_positions` vs `tracker` mismatch is not being resolved by the `CYCLE-SYNC` as claimed in the logs.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate `PortfolioTracker`**: Resolve the `FIFO orphan` issue for `QQQM` to ensure swing-tier P&L is accurately recorded.
+2.  **Sync Logic**: Debug the `CYCLE-SYNC` mechanism in `run_cycle.py` to understand why it is failing to reconcile the `risk.open_positions` count with the `tracker` state for `MSFT`.
+3.  **Telemetry**: Monitor the `P&L DRIFT` after the 8:30 PM ET ledger heal to confirm if the `AAPL` drift self-heals as expected.
+================================================================================
+BROKER GROUND TRUTH (2026-11-03, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: 09:15-09:43, 10:30-10:45, 10:54-11:23 (times PT)
+  AAPL   COVERED                  owners=core exposed=3m no-broker-stop=0m [-] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [07:04-07:04] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  QQQM   BROKER-STOP-LAPSED       owners=core exposed=0m no-broker-stop=0m [12:59-13:00] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=342m no-broker-stop=0m [07:18-07:18] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  XOM    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
