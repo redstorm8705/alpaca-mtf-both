@@ -44,7 +44,13 @@ Each item was checked against the code, the mechanical gates and the latest reco
    (`execution/entry_logic.py:1371`, `int(raw_shares * size_multiplier)`). No staging record found in
    `logs/design_records/`, `logs/tb_audit_log.md` or `handoff.md`. This is risk-path (size): either the rule text is
    stale or the code drifted from it.
-2. **Overnight automated sessions shipping code.** `CLAUDE.md` 5-hour chain: "Scheduled sessions NEVER apply patches" vs
+   **Board finding (3 seats, 2026-11-04):** the 1.25 changes no share counts, and neither does any non-zero multiplier in
+   the core-tier stack; the value cap at `execution/entry_logic.py:1397-1398` cancels them. See
+   `logs/design_records/regime_size_2026-11-04.md` (REGIME-SIZE-1104).
+2. **Overnight automated sessions shipping code.** Written trail found: commit messages for ACCOUNT-PNL-1020 ("Owner
+   pre-approved"), TREND-NIGHT-DAYLOTS-1103 and SWING-LEVEL-LAST-1103 ("Owner: CEO pre-approval 2026-11-02 night, ship
+   on full BGC alignment"). The owner's own wording is only in the Mac session transcript and the local approval store
+   (`<git common dir>/owner-approvals/`), neither of which is in git. Scope unknown from here. `CLAUDE.md` 5-hour chain: "Scheduled sessions NEVER apply patches" vs
    the 11-03 handoff block titled "owner CEO pre-approval: ship on full BGC alignment" (`handoff.md:42`). No written
    record of that pre-approval's scope was found.
 
