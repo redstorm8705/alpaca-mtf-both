@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-11-03 (Claude, overnight AWP: TREND-NIGHT-DAYLOTS-1103 deployed) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-11-04 (Claude: GAP-EXIT, EARN-GAP-REVIEW, LOSS-PM approved; builds queued) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,7 +8,38 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-03 overnight AWP, Claude signed) — owner CEO pre-approval: ship on full BGC alignment
+## ⏩ LATEST (2026-11-04, Claude signed) — 4 owner approvals; builds queued behind GAI/Codex quota
+
+Owner-approved designs (approvals recorded in the shared store):
+- GAP-EXIT-1029 rev 3.2 (`logs/design_records/gap_exit_2026-10-29.md` §3e-3f): non-earnings gap-downs wait (budget-floor
+  pre-open stop, raised after the open; residual-only marketable-limit exits). Build not started. Paper probe narrowed by
+  Alpaca docs: PATCH is refused on `accepted` orders, so pre-open moves are cancel + new + read-back.
+- EARN-GAP-REVIEW-1104 (`logs/design_records/earn_gap_review_2026-11-04.md`): no sale on an earnings gap-down until a
+  verified review (EDGAR press release + Alpha Vantage transcript + FMP/Finnhub facts, GAI + reviewer #2 with verbatim
+  quotes) decides QHM promotion (BEAT, thesis intact, cap room for the whole lot) or the bounce path; close-of-gap-day
+  rule = MISS takes the bounce path, unconfirmed BEAT holds and retries up to 5 sessions. Owner still needs to add
+  ALPHAVANTAGE_API_KEY to the OCI .env.
+  - Build step 1 `data/earnings_documents.py` + tests: cold-2nd PASS (round 4), markers recorded, sitting STAGED in
+    worktree `scratchpad/ed` branch `claude/earnings-docs-1104`; preship_audit FAILED only on GAI HTTP 429 quota (Codex
+    at usage limit until 10:58 AM PT) — rerun `preship_audit.py data/earnings_documents.py --context scratchpad/ed_ctx.txt`,
+    then commit/PR/merge/deploy (inert).
+- LOSS-PM-1104 (`logs/design_records/loss_post_mortem_2026-11-04.md`): same-day post-mortem for every losing trade +
+  weekly remedy roll-up with a cumulative registry, multiple-testing-adjusted or frozen-holdout proposals, capacity-
+  constrained dollar replay. Board LdP + Gro changes folded. GAI design review owed BEFORE any code (quota).
+- SCHWAB-QUOTES-1103 code staged on branch claude/schwab-quotes-1103b; needs GAI + reviewer #2 preship (quota).
+
+Findings today (11-04): XOM Swing stop loss −$34.98 — full post-mortem `logs/research/swing_pm/xom_post_mortem_2026-11-04.md`
+(oil shock; entry was the 5th breakout because XOM joined the Swing list 10-26; the filters it points to cut profitable
+trades — not remedies). Opening-window stop delay tested: no edge (`logs/research/gap_exit/open_window_stop_out_*`).
+Earnings-gap waiting without a review loses in 54 variants; BEAT vs MISS split inconclusive after SPY adjustment.
+Open bugs (PR 822 post-live BUGS_OPEN): tracker FIFO orphan on trend-night fills; QHM overnight-room check fail-closed
+on the unpriced trend-night market buy.
+
+**Exact next action:** when GAI quota returns, (1) rerun preship on data/earnings_documents.py and ship it; (2) GAI
+design review of LOSS-PM-1104, then build `scripts/loss_post_mortem.py`; (3) capacity-constrained Swing replay with
+point-in-time universe membership.
+
+## ⏩ PREVIOUS (2026-11-03 overnight AWP, Claude signed) — owner CEO pre-approval: ship on full BGC alignment
 
 - TREND-NIGHT-DAYLOTS-1103 (PR 822, merged 782ab62; OCI pull printed DEPLOY_OK at 782ab62, services active).
   trend_night's 11-02 QQQM entry was skipped (k_room -763.74) because a Day-tier AMZN short (6 sh, closed 15:58 ET by
