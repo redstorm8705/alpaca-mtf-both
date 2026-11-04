@@ -518,10 +518,12 @@ def test_dashboard_renders_broker_stop_action_table_and_exact_daily_brake(
         )
     assert "Swing 1" not in html
     assert ">Swing<" in html
-    assert "$328.70 (1 sh)" in html
+    assert "$328.70 (1)" in html
+    assert "(1 sh)" not in html
     assert "1/1 protected" in html
     assert "PROTECTED" in html
-    assert "Protection &amp; next action" in html
+    assert "Protection &amp; next action" not in html
+    assert "Today&#39;s Trades" in html
     assert ">Open Orders<" not in html
     assert "Day + Swing loss vs 7% daily brake" in html
     assert "$-9.80 of $188.12" in html

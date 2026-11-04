@@ -20,6 +20,7 @@ import sys
 import json
 import logging
 import math
+import re
 import config as bot_config
 from html import escape
 from datetime import datetime, timedelta
@@ -407,16 +408,24 @@ def _position_protection(
             # limit is NEW); a bracket-entry stop is conditional on an entry
             # that may not have filled.  Count only the broker-proven OCO case.
             owner_status = str(order.get("owner_status") or "").lower()
-            held_oco = status == "held" and str(
+            owner_class = str(
                 order.get("owner_order_class") or order.get("order_class") or ""
-            ).lower() == "oco" and owner_status in {
+            ).lower()
+            held_oco = status == "held" and owner_class == "oco" and owner_status in {
                 "accepted", "new", "partially_filled",
             }
+            # A bracket's stop leg stays HELD at Alpaca until it triggers; once the
+            # bracket's entry (parent) is FILLED that held leg is the live protective
+            # stop for the filled shares (2026-11-04 MSFT Day: parent buy 2 filled,
+            # child sell stop $548.51 held).  An unfilled parent's leg is not counted.
+            held_bracket = (
+                status == "held" and owner_class == "bracket" and owner_status == "filled"
+            )
             if (
                 str(order.get("symbol") or "").upper() != symbol
                 or str(order.get("side") or "").lower() != reducing_side
                 or status not in protective_statuses
-                or (status == "held" and not held_oco)
+                or (status == "held" and not (held_oco or held_bracket))
             ):
                 continue
             owner = _order_tier(order)
@@ -493,6 +502,571 @@ def _position_protection(
     return facts
 
 
+# ── Per-tier exit plans (display only; local state files, no network) ───────
+
+_UNKNOWN = object()  # a tier's state source could not be read → its cells render "—"
+
+
+def _session_holidays() -> tuple[set, set]:
+    """(full-closure holiday dates, years the list covers) from events.calendar."""
+    from events.calendar import STATIC_EVENTS, EventRisk, EventType
+
+    days = set()
+    for ev in STATIC_EVENTS:
+        if ev.get("type") == EventType.MARKET_HOLIDAY and ev.get("risk") == EventRisk.BLACKOUT:
+            days.add(datetime.strptime(str(ev["date"]), "%Y-%m-%d").date())
+    return days, {d.year for d in days}
+
+
+def _nth_session(start_iso: str, n: int):
+    """Date of the n-th trading session counting `start_iso` as session 1, or None
+    when the holiday list does not cover every year walked (never guessed)."""
+    holidays, years = _session_holidays()
+    day = datetime.strptime(start_iso, "%Y-%m-%d").date()
+    count = 0
+    while True:
+        if day.year not in years:
+            return None
+        if day.weekday() < 5 and day not in holidays:
+            count += 1
+            if count >= n:
+                return day
+        day += timedelta(days=1)
+
+
+def _fmt_day(day, today) -> str:
+    return day.strftime("%b %-d" if day.year == today.year else "%b %-d %Y")
+
+
+def _load_tier_plans(ownership_positions: dict, qhm_holds: dict) -> dict:
+    """Read every tier's own open-lot state once per render. Each source fails
+    independently to _UNKNOWN; nothing here touches the network or the broker."""
+    plans: dict = {"qhm": qhm_holds if isinstance(qhm_holds, dict) else _UNKNOWN}
+    state_dir = ROOT / "data" / "state"
+    try:
+        raw = json.loads((state_dir / "swing_breakout.json").read_text())
+        plans["breakout"] = {
+            str(sym).upper(): rec
+            for sym, rec in (raw.get("positions") or {}).items()
+            if isinstance(rec, dict) and rec.get("status") in ("open", "exit_unverified")
+        }
+    except FileNotFoundError:
+        plans["breakout"] = {}
+    except Exception as e:
+        logger.warning("tier plans: swing_breakout state unreadable: %s", e)
+        plans["breakout"] = _UNKNOWN
+    try:
+        from execution.swing_overnight import trend_night_quantities
+
+        plans["trend_night"] = trend_night_quantities()
+        plans["trend_night_symbol"] = str(bot_config.SWING_TREND_NIGHT_SYMBOL).upper()
+    except Exception as e:
+        logger.warning("tier plans: trend-night state unreadable: %s", e)
+        plans["trend_night"] = _UNKNOWN
+    try:
+        from strategy import day_tier_logger
+
+        day_lots: dict = {}
+        for lot in day_tier_logger.open_trades_from_log().values():
+            day_lots.setdefault(str(lot.get("symbol") or "").upper(), []).append(lot)
+        plans["day"] = day_lots
+    except Exception as e:
+        logger.warning("tier plans: day-tier event log unreadable: %s", e)
+        plans["day"] = _UNKNOWN
+    try:
+        day_state = _load_json(LOG_DIR / "day_tier_state.json", {})
+        plans["day_promoting"] = {
+            str(v.get("symbol") or "").upper()
+            for k, v in day_state.items()
+            if str(k).startswith("entry::") and isinstance(v, dict)
+            and v.get("state") == "promote_pending"
+        }
+    except Exception as e:
+        logger.warning("tier plans: day-tier state unreadable: %s", e)
+        plans["day_promoting"] = set()
+    plans["day_flat_pt"] = None
+    try:
+        cal = _load_json(state_dir / "swing_trend_night.json", {}).get("calendar") or {}
+        today_et = datetime.now(ET).date().isoformat()
+        if cal.get("date") == today_et and cal.get("is_session") is True and cal.get("close"):
+            close = datetime.fromisoformat(str(cal["close"]))
+            if close.tzinfo is not None:
+                flat = close - timedelta(minutes=float(bot_config.DAYTRADE_FORCE_FLAT_MINUTES))
+                plans["day_flat_pt"] = flat.astimezone(PT).strftime("%-I:%M %p PT")
+    except Exception as e:
+        logger.warning("tier plans: session calendar unreadable: %s", e)
+    plans["qhm_trim"] = _load_json(state_dir / "qhm_earnings_trim.json", _UNKNOWN)
+    plans["ledger"] = ownership_positions if isinstance(ownership_positions, dict) else {}
+    return plans
+
+
+def _money(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def _limit_targets(fact: dict | None) -> list[str]:
+    return [
+        f"limit {_money(px)} ({q:g})" for px, q in ((fact or {}).get("targets") or [])
+    ]
+
+
+def _weighted_basis(lots: list[tuple[float, float]], owned: float) -> float | None:
+    """Qty-weighted basis when the lots explain exactly the owned quantity."""
+    total = sum(q for q, _px in lots)
+    if not lots or abs(total - owned) > 1e-6 or any(px <= 0 for _q, px in lots):
+        return None
+    return sum(q * px for q, px in lots) / total
+
+
+def _tier_slice_plan(
+    tier: str, sym: str, owned: float, plans: dict, td: dict, fact: dict | None, today,
+) -> tuple[float | None, str]:
+    """(tier's own entry basis or None, target cell HTML) for one (symbol, tier) slice.
+    Every value comes from that tier's own state or a live broker limit order;
+    a rule whose level is not in state is shown as text, never as a number."""
+    parts = _limit_targets(fact)
+    basis = None
+    if tier == "swing":
+        breakout = plans.get("breakout")
+        night = plans.get("trend_night")
+        if breakout is _UNKNOWN and night is _UNKNOWN:
+            return None, "—"
+        lots: list[tuple[float, float]] = []
+        rec = breakout.get(sym) if isinstance(breakout, dict) else None
+        if rec:
+            qty = float(rec.get("qty") or 0)
+            lots.append((qty, float(rec.get("entry_px") or 0)))
+            max_hold = int(bot_config.SWING_BREAKOUT_MAX_HOLD)
+            exit_day = _nth_session(str(rec.get("entry_date")), max_hold)
+            time_txt = (
+                f"time exit {_fmt_day(exit_day, today)}" if exit_day
+                else f"time exit on session {max_hold}"
+            )
+            parts.append(f"close &lt; 20-session low · {time_txt}")
+        if isinstance(night, dict) and night.get(sym):
+            parts.append("sells at next open")
+        if td.get("target"):
+            parts.append(_money(float(td["target"])))
+            legacy_qty = td.get("qty_remaining") or td.get("qty")
+            if td.get("entry_price") and legacy_qty:
+                lots.append((abs(float(legacy_qty)), float(td["entry_price"])))
+        basis = _weighted_basis(lots, owned)
+    elif tier == "day":
+        day = plans.get("day")
+        if day is _UNKNOWN:
+            return None, "—"
+        lots = [
+            (abs(float(lot.get("fill_qty") or 0)), float(lot.get("entry_price") or 0))
+            for lot in (day or {}).get(sym, [])
+        ]
+        basis = _weighted_basis(lots, owned)
+        if sym in plans.get("day_promoting", set()):
+            parts.append("moves to Swing at close")
+        elif plans.get("day_flat_pt"):
+            parts.append(f"flat by {plans['day_flat_pt']}")
+        else:
+            parts.append(
+                f"flat {float(bot_config.DAYTRADE_FORCE_FLAT_MINUTES):g} min before close"
+            )
+    elif tier == "qhm":
+        holds = plans.get("qhm")
+        hold = holds.get(sym) if isinstance(holds, dict) else None
+        if not isinstance(hold, dict):
+            return None, "—"
+        from execution import quarterly_hold_manager as qhm_mod
+
+        avg = float(hold.get("avg_entry_price") or 0)
+        if abs(float(hold.get("qty_filled") or 0) - owned) <= 1e-6 and avg > 0:
+            basis = avg
+        trims = plans.get("qhm_trim")
+        rung = trims.get(sym) if isinstance(trims, dict) else None
+        if isinstance(rung, dict) and avg > 0 and rung.get("gate_date"):
+            gate = datetime.strptime(str(rung["gate_date"]), "%Y-%m-%d").date()
+            qty = int(owned)
+            if gate >= today and rung.get("tier1") == "none" and qty >= 2:
+                pct = rung.get("t1_target_pct")
+                if isinstance(pct, (int, float)) and pct > 0:
+                    trim_qty = min(
+                        max(int(qty * qhm_mod._EARNINGS_TRIM_TIER1_FRAC), 1), qty - 1
+                    )
+                    parts.append(
+                        f"trim {trim_qty} at {_money(avg * (1 + pct))} (+{pct:.1%}) "
+                        f"before earnings {_fmt_day(gate, today)}"
+                    )
+            elif gate >= today and rung.get("tier1") == "done" and rung.get("tier2") == "none":
+                fired = rung.get("t1_fired_pct")
+                if isinstance(fired, (int, float)) and fired > 0:
+                    pct = fired * qhm_mod._EARNINGS_TRIM_TIER2_MULT
+                    parts.append(
+                        f"sell rest at {_money(avg * (1 + pct))} (+{pct:.1%}) "
+                        f"before earnings {_fmt_day(gate, today)}"
+                    )
+        if hold.get("entry_day"):
+            start = datetime.strptime(str(hold["entry_day"]), "%Y-%m-%d").date()
+            exit_day = start + timedelta(days=int(qhm_mod._MAX_HOLD_CALENDAR_DAYS))
+            parts.append(f"max-hold exit {_fmt_day(exit_day, today)}")
+    elif tier == "forever_6":
+        rec = plans.get("ledger", {}).get(sym) or {}
+        claim = normalize_tier_mapping(rec.get("tiers") or {}).get("forever_6") or {}
+        cost = float(claim.get("avg_cost") or 0)
+        mult = float(bot_config.FOREVER6_TRIM_1_MULT)
+        frac = float(bot_config.FOREVER6_TRIM_1_FRAC)
+        if cost > 0:
+            basis = cost
+            trim_qty = int(owned * frac)
+            trim_txt = (
+                f"trims {trim_qty} at {_money(cost * mult)} ({mult:g}× cost)"
+                if trim_qty >= 1 else f"no trim below {math.ceil(1 / frac)} shares"
+            )
+            parts.append(f"never sells all · {trim_txt}")
+        else:
+            parts.append("never sells all")
+    else:
+        if td.get("target"):
+            parts.append(_money(float(td["target"])))
+    return basis, (" · ".join(parts) if parts else "—")
+
+
+# ── Today's trades (local tier records; no network on the render path) ───────
+
+_TRADE_EVENT_KINDS = ('"event": "entry"', '"event": "exit"', '"event": "partial_exit"',
+                      '"event": "fill"')
+_TAIL_CHUNK_BYTES = 1 << 20          # read trade_events.jsonl backwards 1 MiB at a time
+_TAIL_MAX_BYTES = 64 << 20           # never read more than this per render
+_TS_RE = re.compile(r'"ts": "([^"]+)"')
+_EXIT_REASON_LABELS = {
+    "protective_stop": "protective stop",
+    "protective_stop_partial": "protective stop (part)",
+    "take_profit": "target",
+    "trend_break": "trend break",
+    "time": "time exit",
+    "qhm_stop_out": "protective stop",
+    "external_close_detected": "closed outside the bot",
+    "external_close_unverified": "closed outside the bot",
+    "eod_force_flat": "end-of-day flat",
+    "stop_breach_cover": "stop breach",
+}
+
+
+def _read_today_trade_events(path: Path, today_pt) -> list[dict]:
+    """Today's (PT session date) entry/exit/fill events from trade_events.jsonl, read
+    from the end of the file so a large log costs only today's bytes."""
+    if not path.exists():
+        return []
+    events: list[dict] = []
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        pos = end
+        carry = b""
+        done = False
+        while pos > 0 and not done and end - pos < _TAIL_MAX_BYTES:
+            step = min(_TAIL_CHUNK_BYTES, pos)
+            pos -= step
+            f.seek(pos)
+            block = f.read(step) + carry
+            lines = block.split(b"\n")
+            carry = lines[0] if pos > 0 else b""
+            body = lines[1:] if pos > 0 else lines
+            for raw in reversed(body):
+                line = raw.decode("utf-8", "replace")
+                match = _TS_RE.search(line)
+                if not match:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(match.group(1))
+                except ValueError:
+                    continue
+                if ts.tzinfo is None:
+                    continue
+                day = ts.astimezone(PT).date()
+                if day < today_pt:
+                    done = True          # the log is appended in time order
+                    break
+                if day != today_pt or not any(k in line for k in _TRADE_EVENT_KINDS):
+                    continue
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(ev, dict):
+                    ev["_ts"] = ts
+                    events.append(ev)
+    return events  # newest first
+
+
+def _event_tier(ev: dict) -> str:
+    raw = ev.get("tier")
+    if raw:
+        try:
+            return canonical_tier(raw)
+        except ValueError:
+            return "unattributed"
+    src = str(ev.get("data_source") or "")
+    if src.startswith("qhm"):
+        return "qhm"
+    if str(ev.get("trade_mode") or "") == "intraday":
+        return "swing"
+    return "unattributed"
+
+
+def _today_trade_rows(events: list[dict]) -> list[dict]:
+    """One row per fill the tiers recorded today, newest first."""
+    rows = []
+    for ev in events:
+        kind = ev.get("event")
+        tier = _event_tier(ev)
+        trend_night = ev.get("strategy") == "trend_night"
+        short = str(ev.get("direction") or "").lower() == "short" or "-s-" in str(
+            ev.get("trade_id") or ""
+        )
+        if kind == "fill":
+            # trend_night logs each broker fill; its sells are booked once by its
+            # own "exit" record (with the night's P&L), so only its buys are rows here.
+            if not trend_night or str(ev.get("side") or "").lower() != "buy":
+                continue
+            side, qty, pnl, reason = "BUY", ev.get("qty"), None, ""
+        elif kind == "entry":
+            side = "SELL" if short else "BUY"
+            qty, pnl, reason = ev.get("size"), None, ""
+        else:  # exit / partial_exit
+            side = "BUY" if short else "SELL"
+            qty = ev.get("size")
+            pnl = ev.get("realized_pnl", ev.get("pnl"))
+            raw_reason = str(ev.get("exit_reason") or ev.get("reason") or "")
+            reason = "next open" if trend_night else _EXIT_REASON_LABELS.get(
+                raw_reason, raw_reason.replace("_", " ")
+            )
+        price = _order_number(ev.get("price"))
+        rows.append({
+            "time": ev["_ts"].astimezone(PT).strftime("%-I:%M %p PT"),
+            "symbol": str(ev.get("symbol") or "?"),
+            "tier": tier,
+            "side": side,
+            "qty": _order_number(qty),
+            "price": price if price and price > 0 else None,
+            "pnl": _order_number(pnl),
+            "reason": reason,
+        })
+    return rows
+
+
+def _today_trades_html(rows: list[dict]) -> str:
+    if not rows:
+        return ('<tr><td colspan="8" style="color:#3a5068;text-align:center;padding:20px">'
+                'No fills recorded today</td></tr>')
+    out = []
+    for r in rows:
+        side_col = "#30d158" if r["side"] == "BUY" else "#ff3b30"
+        qty = "—" if r["qty"] is None else f"({abs(r['qty']):g})"
+        price = "—" if r["price"] is None else _money(r["price"])
+        if r["pnl"] is None:
+            pnl = "<td>—</td>"
+        else:
+            pnl = (f'<td style="color:{_col(r["pnl"])};font-weight:700">'
+                   f'{"+" if r["pnl"] >= 0 else "-"}${abs(r["pnl"]):.2f}</td>')
+        out.append(
+            "<tr>"
+            f'<td style="color:#b8bdd4;white-space:nowrap">{r["time"]}</td>'
+            f'<td style="color:#e2e4ee;font-weight:700">{escape(r["symbol"])}</td>'
+            f'<td>{tier_badges([(r["tier"], 0.0)], show_qty=False)}</td>'
+            f'<td style="color:{side_col};font-weight:700">{r["side"]}</td>'
+            f"<td>{qty}</td><td>{price}</td>{pnl}"
+            f'<td style="color:#b8bdd4">{escape(r["reason"]) or "—"}</td>'
+            "</tr>"
+        )
+    return "".join(out)
+
+
+# ── Today's trades from broker fills (tier / P&L / reason joined from tier records) ─
+
+_JOIN_WINDOW = timedelta(minutes=90)   # a tier may book an exit well after its fill
+_FRACTION_RE = re.compile(r"\.(\d+)")
+
+
+def _parse_broker_time(raw: object) -> datetime:
+    """Alpaca timestamps carry 1-9 fractional digits ("…37.37442Z"); Python 3.10's
+    fromisoformat accepts only 3 or 6, so normalise to microseconds first."""
+    text = str(raw).replace("Z", "+00:00")
+    text = _FRACTION_RE.sub(lambda m: "." + (m.group(1) + "000000")[:6], text, count=1)
+    return datetime.fromisoformat(text)
+
+
+def _event_side(ev: dict) -> str:
+    """BUY/SELL the broker executed for one tier event."""
+    short = str(ev.get("direction") or "").lower() == "short" or "-s-" in str(
+        ev.get("trade_id") or ""
+    )
+    kind = ev.get("event")
+    if kind == "fill":
+        return "BUY" if str(ev.get("side") or "").lower() == "buy" else "SELL"
+    if kind == "entry":
+        return "SELL" if short else "BUY"
+    return "BUY" if short else "SELL"
+
+
+def _local_order_tiers(orders: list[dict], events: list[dict]) -> dict[str, str]:
+    """{broker order id: tier} from what the bot already records locally: open
+    orders' client ids, tier state files, the Day log and today's tier events."""
+    out: dict[str, str] = {}
+
+    def put(oid: object, tier: str) -> None:
+        if oid and str(oid) not in out:
+            out[str(oid)] = tier
+
+    for order in orders or []:
+        tier = _order_tier(order)
+        if tier:
+            put(order.get("id"), tier)
+    for ev in events:
+        if ev.get("order_id"):
+            put(ev.get("order_id"), _event_tier(ev))
+    state_dir = ROOT / "data" / "state"
+    breakout = _load_json(state_dir / "swing_breakout.json", {})
+    if isinstance(breakout, dict):
+        recs = list((breakout.get("positions") or {}).values()) + list(
+            breakout.get("closed_lots") or []
+        )
+        for rec in recs:
+            if isinstance(rec, dict):
+                for key in ("entry_order_id", "stop_order_id", "close_order_id"):
+                    put(rec.get(key), "swing")
+    night = _load_json(state_dir / "swing_trend_night.json", {})
+    if isinstance(night, dict):
+        for rec in (night.get("nights") or {}).values():
+            for o in ((rec or {}).get("orders") or {}).values() if isinstance(rec, dict) else []:
+                if isinstance(o, dict):
+                    put(o.get("order_id"), "swing")
+    day_state = _load_json(LOG_DIR / "day_tier_state.json", {})
+    if isinstance(day_state, dict):
+        for key, rec in day_state.items():
+            if str(key).startswith("entry::") and isinstance(rec, dict):
+                for k in ("order_id", "stop_order_id", "tp_order_id", "oco_order_id",
+                          "stop2_order_id"):
+                    put(rec.get(k), "day")
+    holds = _load_json(state_dir / "quarterly_holds.json", {})
+    if isinstance(holds, dict):
+        for rec in holds.values():
+            if isinstance(rec, dict):
+                for k in ("entry_order_id", "stop_order_id"):
+                    put(rec.get(k), "qhm")
+    return out
+
+
+def _single_holding_tiers(ownership_positions: dict, qhm_holds: dict) -> dict[str, str]:
+    """{symbol: tier} where exactly one tier holds (or held, for a QHM hold) the symbol."""
+    out: dict[str, str] = {}
+    for sym, rec in (ownership_positions or {}).items():
+        try:
+            tiers = normalize_tier_mapping((rec or {}).get("tiers") or {})
+            held = [t for t, c in tiers.items()
+                    if isinstance(c, dict) and abs(float(c.get("qty") or 0)) > 1e-9]
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if len(held) == 1:
+            out[str(sym).upper()] = held[0]
+    for sym, rec in (qhm_holds or {}).items():
+        if isinstance(rec, dict) and str(sym).upper() not in out and (
+            float(rec.get("qty_filled") or 0) > 0 or rec.get("state") == "ACTIVE"
+        ):
+            out[str(sym).upper()] = "qhm"
+    return out
+
+
+def _broker_trade_rows(
+    fills: list[dict],
+    events: list[dict],
+    order_tiers: dict[str, str],
+    holding_tiers: dict[str, str],
+    qhm_holds: dict,
+) -> list[dict]:
+    """One row per broker ORDER filled today (partial fills of one order are
+    aggregated: total qty, volume-weighted price, time of the last fill), newest
+    first. Tier: local order id → nearest same-symbol/side tier event → the single
+    tier holding the symbol → "unattributed". A sale's P&L is qty × (fill − the
+    lot's cost), the cost taken from the tier's exit record (price − P&L/size) or,
+    for QHM, the hold's own average entry; unknown cost → no P&L."""
+    groups: dict[str, dict] = {}
+    unreadable = 0
+    for fill in fills:
+        qty = _order_number(fill.get("qty"))
+        price = _order_number(fill.get("price"))
+        try:
+            ts = _parse_broker_time(fill["transaction_time"])
+        except (KeyError, ValueError):
+            unreadable += 1
+            continue
+        if qty is None or price is None or qty <= 0 or price <= 0 or ts.tzinfo is None:
+            unreadable += 1
+            continue
+        oid = str(fill.get("order_id") or fill.get("id") or "")
+        g = groups.setdefault(oid, {
+            "symbol": str(fill.get("symbol") or "?").upper(),
+            "side": "BUY" if str(fill.get("side") or "").lower() == "buy" else "SELL",
+            "qty": 0.0, "notional": 0.0, "ts": ts,
+        })
+        g["qty"] += qty
+        g["notional"] += qty * price
+        g["ts"] = max(g["ts"], ts)
+
+    if unreadable:
+        logger.warning("Today's trades: %d broker fill record(s) unreadable — not shown", unreadable)
+    tagged = []
+    for ev in events:
+        if ev.get("event") not in ("entry", "exit", "partial_exit", "fill"):
+            continue
+        tagged.append((ev, str(ev.get("symbol") or "").upper(), _event_side(ev), _event_tier(ev)))
+
+    rows = []
+    for oid, g in groups.items():
+        sym, side, ts = g["symbol"], g["side"], g["ts"]
+        vwap = g["notional"] / g["qty"]
+        tier = order_tiers.get(oid)
+        cands = [
+            (ev, ev_tier) for ev, ev_sym, ev_side, ev_tier in tagged
+            if ev_sym == sym and ev_side == side and abs(ev["_ts"] - ts) <= _JOIN_WINDOW
+            and (tier is None or ev_tier == tier)
+        ]
+        match = min(
+            cands,
+            key=lambda c: (c[0].get("event") == "fill", abs(c[0]["_ts"] - ts)),
+            default=None,
+        )
+        hit = match[0] if match else None
+        if tier is None:
+            tier = match[1] if match else holding_tiers.get(sym, "unattributed")
+        reason, cost, short = "", None, False
+        if hit is not None and hit.get("event") in ("exit", "partial_exit"):
+            short = _event_side(hit) == "BUY"
+            if hit.get("strategy") == "trend_night":
+                reason = "next open"
+            else:
+                raw = str(hit.get("exit_reason") or hit.get("reason") or "")
+                reason = _EXIT_REASON_LABELS.get(raw, raw.replace("_", " "))
+            ev_px = _order_number(hit.get("price"))
+            ev_pnl = _order_number(hit.get("realized_pnl", hit.get("pnl")))
+            ev_size = _order_number(hit.get("size"))
+            if ev_px and ev_pnl is not None and ev_size:
+                cost = ev_px + ev_pnl / ev_size if short else ev_px - ev_pnl / ev_size
+        closing = (hit is not None and hit.get("event") in ("exit", "partial_exit")) or (
+            tier == "qhm" and side == "SELL"
+        )
+        if cost is None and closing and tier == "qhm" and side == "SELL":
+            avg = _order_number(((qhm_holds or {}).get(sym) or {}).get("avg_entry_price"))
+            cost = avg if avg and avg > 0 else None
+        pnl = None
+        if closing and cost is not None:
+            pnl = g["qty"] * ((cost - vwap) if short else (vwap - cost))
+        rows.append({
+            "_ts": ts,
+            "time": ts.astimezone(PT).strftime("%-I:%M %p PT"),
+            "symbol": sym, "tier": tier, "side": side, "qty": g["qty"],
+            "price": vwap, "pnl": pnl, "reason": reason,
+        })
+    rows.sort(key=lambda r: r["_ts"], reverse=True)
+    return rows
+
+
 def _compute_spy_levels() -> dict:
     """SPY GEX regime/flip (from gex_snapshot.json) + floor-trader pivot S/R from
     the last completed SPY daily bar (Alpaca Data API, T1). Standalone + fail-soft:
@@ -544,6 +1118,35 @@ def _compute_spy_levels() -> dict:
     return out
 
 
+_FILL_PAGE_SIZE = 100   # Alpaca account-activities maximum page size
+_FILL_MAX_PAGES = 20    # bounds one render's paging (2,000 fills)
+
+
+def _fetch_today_fills(get) -> list[dict]:
+    """Today's (PT session date) FILL activities, newest first, via the caller's
+    read-only GET. Pages with page_token until a short page; raises on anything
+    unexpected so the caller can fall back to the tiers' own records."""
+    start = datetime.now(PT).replace(hour=0, minute=0, second=0, microsecond=0)
+    after = start.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fills: list[dict] = []
+    token = None
+    for _page in range(_FILL_MAX_PAGES):
+        path = (f"/v2/account/activities/FILL?after={after}&direction=desc"
+                f"&page_size={_FILL_PAGE_SIZE}")
+        if token:
+            path += f"&page_token={token}"
+        page = get(path)
+        if not isinstance(page, list):
+            raise ValueError(f"fills page is {type(page).__name__}, not a list")
+        fills.extend(item for item in page if isinstance(item, dict))
+        if len(page) < _FILL_PAGE_SIZE:
+            return fills
+        token = page[-1].get("id") if isinstance(page[-1], dict) else None
+        if not token:
+            raise ValueError("fills page has no id to continue from")
+    raise ValueError("fills paging did not finish")
+
+
 def _load_alpaca():
     """
     Fetch live account, positions, and open orders via direct Alpaca REST.
@@ -576,6 +1179,7 @@ def _load_alpaca():
             "status": "unknown", "shorting": False,
             "positions": [], "orders":[],
             "orders_available": False,
+            "fills": [], "fills_available": False,
         }
     try:
         import certifi as _cert
@@ -642,6 +1246,14 @@ def _load_alpaca():
             return flattened
 
         flat_o = _flatten_orders(raw_o)
+        # Today's fills: read-only, isolated — a failure here only switches the
+        # Today's Trades table to the tiers' own records.
+        try:
+            fills = _fetch_today_fills(_get)
+            fills_available = True
+        except Exception as _fills_e:
+            logger.warning("Alpaca fills fetch failed — tier records used: %s", _fills_e)
+            fills, fills_available = [], False
         return {
             "equity":       float(acct.get("equity", 0) or 0),
             "last_equity":  float(acct.get("last_equity", 0) or 0),
@@ -691,6 +1303,8 @@ def _load_alpaca():
                 isinstance(raw_o, list)
                 and len(raw_o) < _ALPACA_OPEN_ORDER_PAGE_SIZE
             ),
+            "fills": fills,
+            "fills_available": fills_available,
             "error": None,
         }
     except Exception as e:
@@ -700,6 +1314,7 @@ def _load_alpaca():
             "cash": 0, "buying_power": 0,
             "status": "unknown", "shorting": False,
             "positions": [], "orders": [], "orders_available": False,
+            "fills": [], "fills_available": False,
         }
 
 
@@ -1028,7 +1643,6 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
 
     # Build open positions rows
     pos_rows = ""
-    protection_rows = ""
     protection_issues = 0
     orders_available = alpaca.get("orders_available") is True
     _open_tier_symbols: dict[str, set[str]] = {k: set() for k in TIER_LABELS}
@@ -1052,31 +1666,32 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
         _qhm_syms = set()
         _qh = {}
 
+    try:
+        _plans = _load_tier_plans(ownership_positions, _qh)
+    except Exception as _plans_e:
+        logger.warning("_build_html: tier plans unavailable: %s", _plans_e)
+        _plans = {}
+    _today_et = datetime.now(ET).date()
+
     if open_pos:
         for p in open_pos:
             sym   = p["symbol"]
             side  = p["side"].upper()
-            qty   = int(p["qty"])
             price = p["current_price"]
-            upnl  = p["unrealized_pl"]            # Total P&L since entry (not intraday-only)
-            ucol  = _col(upnl)
-            sign  = "+" if upnl >= 0 else ""
 
             entry_price = p["avg_entry_price"]
             tl_open = {t["symbol"]: t for t in trade_log.get("open",[])} if isinstance(trade_log.get("open"), list) else {}
             td = tl_open.get(sym, {})
-            _is_qhm = sym in _qhm_syms
             _tier_rows = _exact_position_tiers(sym, float(p["qty"]))
             if not _tier_rows:
                 _tier_rows = [("unattributed", float(p["qty"]))]
             for _tier, _tier_qty in _tier_rows:
                 _open_tier_symbols.setdefault(_tier, set()).add(sym)
                 _open_tier_qty[_tier] = _open_tier_qty.get(_tier, 0.0) + abs(_tier_qty)
-            _tier_html = tier_badges(_tier_rows, show_qty=False)
             _protection = _position_protection(
                 p, _tier_rows, orders, orders_available=orders_available
             )
-            _stop_parts = []
+            _facts_by_tier = {fact["tier"]: fact for fact in _protection}
             for fact in _protection:
                 _status = fact["status"]
                 _status_col = {
@@ -1089,20 +1704,20 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
                     "UNATTRIBUTED": "#ff9f0a",
                 }[_status]
                 _stop_text = " + ".join(
-                    f"${stop_px:.2f} ({stop_qty:g} sh)"
+                    f"${stop_px:.2f} ({stop_qty:g})"
                     for stop_px, stop_qty in fact["stops"]
                 ) or _status
                 _coverage = f'{fact["stop_qty"]:g}/{fact["owned_qty"]:g} protected'
                 _distance = fact["distance_pct"]
                 _distance_text = "—" if _distance is None else f"{_distance:.1f}%"
                 _targets = " + ".join(
-                    f"${limit_px:.2f} ({limit_qty:g} sh)"
+                    f"${limit_px:.2f} ({limit_qty:g})"
                     for limit_px, limit_qty in fact["targets"]
                 )
                 if _status == "MISSING":
                     _action = "Place broker stop now"
                 elif _status == "PARTIAL":
-                    _action = f'Protect {fact["owned_qty"] - fact["stop_qty"]:g} remaining sh'
+                    _action = f'Protect remaining ({fact["owned_qty"] - fact["stop_qty"]:g})'
                 elif _status == "OVER-COVERED":
                     _action = "Resolve excess stop coverage"
                 elif _status == "BREACHED":
@@ -1115,24 +1730,27 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
                     _action = "Stop active · no resting target"
                 if _status != "PROTECTED":
                     protection_issues += 1
-                _stop_parts.append(
-                    f'<div style="color:{_status_col};white-space:nowrap">'
-                    f'{escape(TIER_LABELS[fact["tier"]])}: {_stop_text}</div>'
+                # Protection stays in the Open Positions STOP cell: the stop(s) in the
+                # status colour; anything other than PROTECTED also shows its status
+                # and the next action on a second line.
+                _stop_title = escape(f"{_status} · {_coverage} · distance {_distance_text} · {_action}")
+                _stop_note = (
+                    "" if _status == "PROTECTED" or _stop_text == _status
+                    else f'<br><span style="font-size:10px">{_status} · {_coverage}</span>'
                 )
-                protection_rows += f"""
-                <tr>
-                  <td style="color:#e2e4ee;font-weight:700">{escape(sym)}</td>
-                  <td>{tier_badges([(fact["tier"], 0.0)], show_qty=False)}</td>
-                  <td style="color:{_status_col};font-weight:700">{_status}</td>
-                  <td style="color:#ffd60a">{_stop_text}</td>
-                  <td>{_coverage}</td>
-                  <td>{_distance_text}</td>
-                  <td style="color:{_status_col}">{_action}</td>
-                </tr>"""
-            stop_str = "".join(_stop_parts)
+                _action_note = (
+                    "" if _status == "PROTECTED"
+                    else f'<br><span style="font-size:10px">{escape(_action)}</span>'
+                )
+                fact["stop_html"] = (
+                    f'<span style="color:{_status_col};white-space:nowrap" title="{_stop_title}">'
+                    f'{_stop_text}{_stop_note}{_action_note}</span>'
+                )
             # Overnight-held soft-exit (~entry−0.5×ATR) + live breach count, non-QHM only.
             # be_mult is dynamic [0.25,0.65] in exit_logic; 0.5 is the representative midpoint
             # (RIVN's actual), labelled "~". Exact per-scan threshold persist = queued follow-up.
+            # Shown on the Swing / unattributed slice only: trade_log "open" is the legacy
+            # intraday (Swing-tier) tracker.
             _soft_html = ""
             _atr_v = td.get("atr_value")
             if td.get("overnight") and sym not in _qhm_syms and _atr_v and td.get("entry_price"):
@@ -1143,32 +1761,109 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
                 _soft_html = (f'<br><span style="font-size:10px;color:{_brc_col}" '
                               f'title="Overnight breakeven buffer: exits ~entry−0.5×ATR after a 9-scan breach. '
                               f'The $ stop above is only the catastrophe backstop.">soft ~${_soft:.2f} · {_brc}/9</span>')
-            # QHM holds have a real stop but NO price target and NO 12-pt confluence score (they
-            # use an equity-allocation target + a pre-earnings trim, and are conviction picks).
-            # Show "n/a" (with a tooltip) rather than "—" so it reads as not-applicable, not missing.
-            _qhm_na = ('<span title="Quarterly holds use an equity-allocation target + a '
-                       'pre-earnings trim, not a fixed price target/score.">n/a</span>')
-            target_str = (f"${td['target']:.2f}" if td.get("target")
-                          else (_qhm_na if _is_qhm else "—"))
-            score_str  = (f"{td['score']}/12" if td.get("score")
-                          else (_qhm_na if _is_qhm else "—"))
-            overnight  = "🌙" if td.get("overnight") else ""
-            pos_rows += f"""
+            # QHM holds have NO 12-pt confluence score (conviction picks) → "n/a", not "—".
+            _qhm_na = ('<span title="Quarterly holds are conviction picks, not scored '
+                       'by the 12-point confluence system.">n/a</span>')
+            # One row per (symbol, tier) slice: that tier's quantity, its own entry basis,
+            # its slice P&L, its broker stop(s) and its exit plan. Any per-tier lookup error
+            # renders "—" for that cell only; the page always writes.
+            for _tier, _tier_qty in _tier_rows:
+                _slice_qty = abs(float(_tier_qty))
+                _slice_short = float(_tier_qty) < 0 or (float(_tier_qty) == 0 and side == "SHORT")
+                _slice_side = "SHORT" if _slice_short else "LONG"
+                _fact = _facts_by_tier.get(_tier)
+                try:
+                    _basis, target_str = _tier_slice_plan(
+                        _tier, sym, _slice_qty, _plans, td, _fact, _today_et
+                    )
+                except Exception as _plan_e:
+                    logger.warning(
+                        "_build_html: %s %s exit plan unavailable: %s", sym, _tier, _plan_e
+                    )
+                    _basis, target_str = None, "—"
+                if _basis is not None:
+                    _basis_html = f"${_basis:.2f}"
+                    _px_basis = _basis
+                else:
+                    _basis_html = (
+                        f'${entry_price:.2f} <span style="font-size:10px;color:#8a94ae" '
+                        'title="This tier\'s own entry price is not in its state file; '
+                        'showing the broker average for the whole symbol.">broker avg</span>'
+                    )
+                    _px_basis = entry_price
+                try:
+                    _slice_pnl = _slice_qty * (
+                        (_px_basis - price) if _slice_short else (price - _px_basis)
+                    )
+                    _slice_pnl_html = (
+                        f'<td style="color:{_col(_slice_pnl)};font-weight:700">'
+                        f'{"+" if _slice_pnl >= 0 else "-"}${abs(_slice_pnl):.2f}</td>'
+                    )
+                except (TypeError, ValueError):
+                    _slice_pnl_html = "<td>—</td>"
+                _row_stop = (_fact or {}).get("stop_html", "—")
+                _legacy_row = _tier in ("swing", "unattributed")
+                if _tier == "qhm":
+                    score_str = _qhm_na
+                elif _legacy_row and td.get("score"):
+                    score_str = f"{td['score']}/12"
+                else:
+                    score_str = "—"
+                overnight = "🌙" if (_legacy_row and td.get("overnight")) else ""
+                _row_soft = _soft_html if _legacy_row else ""
+                pos_rows += f"""
             <tr>
               <td style="color:#e2e4ee;font-weight:700">{sym} {overnight}</td>
-              <td>{_tier_html}</td>
-              <td style="color:{'#30d158' if side=='LONG' else '#ff3b30'}">{side}</td>
-              <td>{qty}</td>
+              <td>{tier_badges([(_tier, 0.0)], show_qty=False)}</td>
+              <td style="color:{'#30d158' if _slice_side=='LONG' else '#ff3b30'}">{_slice_side}</td>
+              <td>{_slice_qty:g}</td>
               <td>${price:.2f}</td>
-              <td style="color:#b8bdd4">${entry_price:.2f}</td>
-              <td style="color:{ucol};font-weight:700">{sign}${abs(upnl):.2f}</td>
-              <td>{stop_str}{_soft_html}</td>
+              <td style="color:#b8bdd4">{_basis_html}</td>
+              {_slice_pnl_html}
+              <td>{_row_stop}{_row_soft}</td>
               <td style="color:#30d158">{target_str}</td>
               <td style="color:#b8bdd4">{score_str}</td>
             </tr>"""
     else:
         pos_rows = '<tr><td colspan="10" style="color:#3a5068;text-align:center;padding:20px">No open positions</td></tr>'
-        protection_rows = '<tr><td colspan="7" style="color:#3a5068;text-align:center;padding:20px">No positions to protect</td></tr>'
+
+    protection_badge = (
+        "" if protection_issues == 0
+        else f' · <b style="color:#ff3b30">{protection_issues} issue{"s" if protection_issues != 1 else ""}</b>'
+    )
+
+    # Today's trades (PT session date): broker fills are the source of time, side,
+    # qty and price; tier, P&L and exit reason are joined from the tiers' records.
+    # Without broker fills the tiers' own records are shown, and the header says so.
+    try:
+        _events = _read_today_trade_events(LOG_DIR / "trade_events.jsonl", datetime.now(PT).date())
+        _fills_ok = alpaca.get("fills_available") is True
+        if _fills_ok:
+            try:
+                _trade_rows = _broker_trade_rows(
+                    alpaca.get("fills") or [],
+                    _events,
+                    _local_order_tiers(orders, _events),
+                    _single_holding_tiers(ownership_positions, _qh),
+                    _qh,
+                )
+            except Exception as _join_e:
+                logger.warning("_build_html: broker-fill join failed — tier records used: %s", _join_e)
+                _fills_ok = False
+        if not _fills_ok:
+            _trade_rows = _today_trade_rows(_events)
+        today_trades_rows = _today_trades_html(_trade_rows)
+        _n_rows = len(_trade_rows)
+        today_trades_meta = (
+            f"{_n_rows} order{'s' if _n_rows != 1 else ''} filled · broker fills"
+            if _fills_ok
+            else f"{_n_rows} fill{'s' if _n_rows != 1 else ''} · from tier records (broker fills unavailable)"
+        )
+    except Exception as _tt_e:
+        logger.warning("_build_html: today's trades unavailable: %s", _tt_e)
+        today_trades_rows = ('<tr><td colspan="8" style="color:#ff9f0a;text-align:center;padding:20px">'
+                             "Today's trades unavailable</td></tr>")
+        today_trades_meta = "unavailable"
 
     _tier_cards = []
     _edge_by_tier = edge_snapshot.get("by_tier", {})
@@ -1185,7 +1880,7 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
         _tier_cards.append(
             f'<div class="tier-card" style="border-top-color:{_color}">'
             f'<div class="tier-name" style="color:{_color}">{TIER_LABELS[_tier]}</div>'
-            f'<div class="tier-open">{_open_n} open <span>· {_open_tier_qty.get(_tier, 0):g} sh</span></div>'
+            f'<div class="tier-open">{_open_n} open <span>· ({_open_tier_qty.get(_tier, 0):g})</span></div>'
             f'<div class="tier-history"><b style="color:{_rpnl_c}">{_rpnl_s}</b>'
             f'<span>{_n} completed · {_wr_s}</span></div></div>'
         )
@@ -1436,7 +2131,7 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
   <div class="panel">
     <div class="ph">
       <span class="pt">Open Positions</span>
-      <span class="pm">{len(open_pos)} active</span>
+      <span class="pm">{len(open_pos)} active{protection_badge}</span>
     </div>
     <table>
       <thead><tr>
@@ -1447,15 +2142,15 @@ footer{{padding:12px 24px;font-size:11px;color:var(--muted);border-top:1px solid
     </table>
 
     <div class="ph" style="margin-top:1px">
-      <span class="pt">Protection &amp; next action</span>
-      <span class="pm" style="color:{'#30d158' if protection_issues == 0 else '#ff9f0a'}">{protection_issues} issue{'s' if protection_issues != 1 else ''}</span>
+      <span class="pt">Today&#39;s Trades</span>
+      <span class="pm">{today_trades_meta}</span>
     </div>
     <table>
       <thead><tr>
-        <th>Symbol</th><th>Tier</th><th>Status</th><th>Broker stop</th>
-        <th>Coverage</th><th>Distance</th><th>Next action</th>
+        <th>Time</th><th>Symbol</th><th>Tier</th><th>Side</th><th>Qty</th>
+        <th>Fill Price</th><th>Realized P&amp;L</th><th>Exit Reason</th>
       </tr></thead>
-      <tbody>{protection_rows}</tbody>
+      <tbody>{today_trades_rows}</tbody>
     </table>
   </div>
 
