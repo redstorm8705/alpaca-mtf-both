@@ -1,0 +1,5 @@
+live rule                2020-23: final $6,680 CAGR  27.9% maxDD 27.2% n=299 win 46.5% | 2024-26: final $6,603 CAGR  40.8% maxDD 18.7% n=258 win 44.2%
+earnings skip 10         2020-23: final $6,233 CAGR  25.7% maxDD 21.7% n=295 win 47.1% | 2024-26: final $6,522 CAGR  40.2% maxDD 22.6% n=247 win 50.2%
+late-breakout skip >=4   2020-23: final $5,582 CAGR  22.3% maxDD 24.4% n=295 win 45.1% | 2024-26: final $7,353 CAGR  46.2% maxDD 19.4% n=226 win 43.4%
+sector 50d               2020-23: final $7,114 CAGR  30.0% maxDD 26.0% n=291 win 47.1% | 2024-26: final $5,755 CAGR  34.1% maxDD 17.4% n=247 win 47.4%
+all three                2020-23: final $6,155 CAGR  25.3% maxDD 22.7% n=265 win 48.7% | 2024-26: final $6,661 CAGR  41.2% maxDD 18.5% n=208 win 48.1%

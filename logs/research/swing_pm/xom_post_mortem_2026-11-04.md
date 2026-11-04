@@ -37,3 +37,13 @@ They raise the average of the trades that remain only by cutting trades that sti
 was an ordinary loss of a breakout rule that earns +0.37 to +0.59 R per trade with a 45% win rate. The real lesson is
 entry timing: XOM's first breakout (10-13) came before it joined the Swing list (10-26) — a universe-change effect,
 to be tested with point-in-time membership.
+
+## Capacity-constrained dollar replay (`capacity_replay.py`, 10 slots, r 1.48%, Swing notional <= 1.25x equity, $2,500 start)
+| Rule | 2020-23 CAGR / max DD / trades | 2024-26 CAGR / max DD / trades |
+|---|---|---|
+| Live rule | 27.9% / 27.2% / 299 | 40.8% / 18.7% / 258 |
+| Earnings skip 10 | 25.7% / 21.7% / 295 | 40.2% / 22.6% / 247 |
+| Late-breakout skip (>=4 in 20) | 22.3% / 24.4% / 295 | 46.2% / 19.4% / 226 |
+| Sector ETF > 50-day | 30.0% / 26.0% / 291 | 34.1% / 17.4% / 247 |
+| All three | 25.3% / 22.7% / 265 | 41.2% / 18.5% / 208 |
+No candidate beats the live rule in both periods; the live rule stays. Survivorship: today's top-50 list.
