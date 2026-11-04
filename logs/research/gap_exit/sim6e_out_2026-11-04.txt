@@ -1,0 +1,4 @@
+EARNINGS w=0.1 disc n=  23 mean=  +34.5 med= +45.3 p05= -130.9 worst= -273.7 worse%=26.1
+EARNINGS w=0.1 test n=  75 mean=  -38.3 med= -11.9 p05= -299.6 worst= -434.3 worse%=52.0
+EARNINGS w=0.25 disc n=  23 mean=  +34.5 med= +45.3 p05= -130.9 worst= -273.7 worse%=26.1
+EARNINGS w=0.25 test n=  75 mean=  -38.3 med= -11.9 p05= -299.6 worst= -434.3 worse%=52.0
