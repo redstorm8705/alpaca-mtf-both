@@ -27,3 +27,11 @@ top to bottom. All files named below are on that branch.
    Also update the user-level reminder hook text from "board + Gro + GAI" to BGC.
 6. **Post-live audits overdue: 86 changes since 10-09**, ordered in `logs/research/post_live_backlog_2026-11-04.md`
    (start with #825, #823, #822, #817, #753, #760, #583; `record_post_live.py`).
+7. **Branch clean-up (owner-approved 2026-11-04 for branches certainly unused only).**
+   - Delete the 428 branches listed in `logs/research/branches_deleted_2026-11-04.md`: each is already in main, has no
+     open PR, no commit since before 2026-10-28, and no script names it. Re-check each before deleting
+     (`git branch -r --merged origin/main` or `git cherry origin/main <b>` empty; not an open PR head), then
+     `git push origin --delete <name>`. The file keeps every branch's last SHA for restore.
+   - Do NOT delete the 63 branches with unmerged work (`logs/research/branch_inventory_2026-11-04.md`). Review each:
+     superseded by a merged PR, still wanted, or abandoned. The 6 `feat/f6-*` / allocator branches belong to the
+     Codex lane. Bring the owner a short list before removing any of them.
