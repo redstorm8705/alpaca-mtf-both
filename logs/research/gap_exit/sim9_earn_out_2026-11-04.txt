@@ -1,0 +1,15 @@
+ disc R4 k=1: +19.9
+ disc R1 k=1: +14.1
+ disc R4 k=3: +12.5
+ disc R3: +8.3
+ disc R4 k=2: +8.2
+ disc R4 k=6: +5.5
+ disc R1 k=2: +4.6
+ disc R2: +0.1
+ disc R1 k=3: -1.8
+ disc R1 k=6: -2.6
+WINNER R4 k=1
+  disc n= 33 mean=  +19.9 med= +43.0 p05= -229.4 worst= -332.5 worse%=45.5
+   95% CI (date-clustered) [-42.3  86.3]
+  test n= 69 mean=  -51.4 med= -79.9 p05= -247.6 worst= -366.2 worse%=60.9
+   95% CI (date-clustered) [-82.2 -18.3]

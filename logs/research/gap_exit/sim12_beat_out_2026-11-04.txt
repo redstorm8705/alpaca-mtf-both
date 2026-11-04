@@ -1,0 +1,15 @@
+disc BEAT hold-5-days n= 22 mean=  +67.7 med= -49.3 p05= -614.3 worst= -920.2 worse%=59.1
+disc BEAT target-q50    n= 12 mean=  -46.8 med=-126.4 p05= -302.4 worst= -320.2 worse%=58.3
+disc MISS hold-5-days n= 31 mean=  -65.1 med=-239.8 p05=-1157.5 worst=-1348.3 worse%=54.8
+disc MISS target-q50    n= 21 mean=  -25.4 med=-245.9 p05= -622.2 worst= -852.1 worse%=52.4
+test BEAT hold-5-days n= 45 mean= +135.7 med= +74.8 p05= -465.1 worst= -530.5 worse%=44.4
+test BEAT target-q50    n= 45 mean=  -37.7 med=-134.0 p05= -329.2 worst= -478.5 worse%=60.0
+test MISS hold-5-days n= 24 mean= -125.9 med=-183.1 p05= -972.4 worst=-1151.3 worse%=70.8
+test MISS target-q50    n= 24 mean= -102.0 med=-217.5 p05= -446.5 worst= -512.9 worse%=70.8
+all  BEAT hold-5-days n= 67 mean= +113.4 med= +17.6 p05= -512.7 worst= -920.2 worse%=49.3
+all  BEAT target-q50    n= 57 mean=  -39.6 med=-134.0 p05= -322.5 worst= -478.5 worse%=59.6
+all  MISS hold-5-days n= 55 mean=  -91.6 med=-227.5 p05=-1077.5 worst=-1348.3 worse%=61.8
+all  MISS target-q50    n= 45 mean=  -66.3 med=-225.8 p05= -515.0 worst= -852.1 worse%=62.2
+CI disc: BEAT hold-5 [-175.  346.] P(>0)=0.68 | BEAT-MISS [-236.  534.]
+CI test: BEAT hold-5 [-34. 333.] P(>0)=0.94 | BEAT-MISS [-43. 572.]
+CI all: BEAT hold-5 [-28. 271.] P(>0)=0.93 | BEAT-MISS [-37. 449.]
