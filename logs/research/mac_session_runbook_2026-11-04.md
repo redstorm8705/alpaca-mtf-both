@@ -25,4 +25,5 @@ top to bottom. All files named below are on that branch.
 5. **Gated doc fixes** (`CLAUDE.md`, `handoff.md`, `rules/*.md`) from `logs/research/md_contradictions_2026-11-04.md`
    section A and `logs/research/session_start_master_brain_audit_2026-11-04.md` §4 — one diff, through the preship gate.
    Also update the user-level reminder hook text from "board + Gro + GAI" to BGC.
-6. **Post-live audits overdue:** #825, #823, #822, #817, #813, #809, #808, #801 (`record_post_live.py`).
+6. **Post-live audits overdue: 86 changes since 10-09**, ordered in `logs/research/post_live_backlog_2026-11-04.md`
+   (start with #825, #823, #822, #817, #753, #760, #583; `record_post_live.py`).
