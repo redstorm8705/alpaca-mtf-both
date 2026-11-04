@@ -1,0 +1,31 @@
+base       disc n= 723 meanR=+0.374 win%=45.5 medR=-0.23 p05=-1.12 | test n= 555 meanR=+0.592 win%=45.0 medR=-0.36 p05=-1.07
+E N=3      disc n= 716 meanR=+0.379 win%=45.7 medR=-0.22 p05=-1.11 | test n= 553 meanR=+0.591 win%=44.8 medR=-0.36 p05=-1.04
+E N=5      disc n= 711 meanR=+0.371 win%=45.6 medR=-0.22 p05=-1.10 | test n= 550 meanR=+0.603 win%=45.1 medR=-0.31 p05=-1.03
+E N=10     disc n= 695 meanR=+0.390 win%=46.5 medR=-0.16 p05=-1.09 | test n= 542 meanR=+0.586 win%=45.2 medR=-0.30 p05=-1.03
+X x=0.5    disc n= 645 meanR=+0.385 win%=48.5 medR=-0.07 p05=-1.08 | test n= 483 meanR=+0.573 win%=47.0 medR=-0.27 p05=-1.02
+X x=1.0    disc n= 695 meanR=+0.359 win%=46.8 medR=-0.16 p05=-1.09 | test n= 518 meanR=+0.614 win%=46.3 medR=-0.24 p05=-1.03
+X x=1.5    disc n= 710 meanR=+0.363 win%=46.2 medR=-0.19 p05=-1.09 | test n= 535 meanR=+0.612 win%=46.2 medR=-0.23 p05=-1.06
+B y=1      disc n= 825 meanR=+0.245 win%=26.7 medR=+0.00 p05=-1.04 | test n= 658 meanR=+0.348 win%=25.5 medR=+0.00 p05=-1.02
+B y=1.5    disc n= 770 meanR=+0.275 win%=32.5 medR=+0.00 p05=-1.06 | test n= 603 meanR=+0.422 win%=30.5 medR=+0.00 p05=-1.02
+B y=2      disc n= 751 meanR=+0.313 win%=36.9 medR=+0.00 p05=-1.08 | test n= 583 meanR=+0.427 win%=32.8 medR=+0.00 p05=-1.02
+T z=2.5    disc n= 820 meanR=+0.198 win%=44.0 medR=-0.21 p05=-1.00 | test n= 661 meanR=+0.296 win%=45.4 medR=-0.17 p05=-1.00
+T z=3      disc n= 768 meanR=+0.257 win%=45.7 medR=-0.17 p05=-1.03 | test n= 615 meanR=+0.371 win%=46.3 medR=-0.21 p05=-1.02
+S sma=20   disc n= 700 meanR=+0.383 win%=45.9 medR=-0.22 p05=-1.12 | test n= 539 meanR=+0.537 win%=44.0 medR=-0.38 p05=-1.03
+S sma=50   disc n= 693 meanR=+0.393 win%=46.0 medR=-0.23 p05=-1.11 | test n= 533 meanR=+0.587 win%=45.4 medR=-0.25 p05=-1.03
+F prior>=2 disc n= 523 meanR=+0.358 win%=45.9 medR=-0.18 p05=-1.06 | test n= 367 meanR=+0.651 win%=46.6 medR=-0.19 p05=-1.03
+F prior>=3 disc n= 587 meanR=+0.378 win%=45.5 medR=-0.22 p05=-1.06 | test n= 411 meanR=+0.666 win%=47.0 medR=-0.17 p05=-1.03
+F prior>=4 disc n= 621 meanR=+0.382 win%=45.7 medR=-0.22 p05=-1.06 | test n= 440 meanR=+0.680 win%=46.8 medR=-0.18 p05=-1.03
+discovery picks: ['E N=10', 'X x=0.5', 'S sma=50', 'F prior>=4']
+E N=10 + X x=0.5               disc n= 619 meanR=+0.379 win%=48.5 medR=-0.08 p05=-1.06 | test n= 467 meanR=+0.579 win%=47.1 medR=-0.19 p05=-1.00
+E N=10 + S sma=50              disc n= 666 meanR=+0.415 win%=47.3 medR=-0.14 p05=-1.09 | test n= 519 meanR=+0.582 win%=45.5 medR=-0.25 p05=-1.02
+E N=10 + F prior>=4            disc n= 592 meanR=+0.407 win%=46.5 medR=-0.15 p05=-1.06 | test n= 421 meanR=+0.682 win%=47.0 medR=-0.17 p05=-1.02
+X x=0.5 + S sma=50             disc n= 618 meanR=+0.410 win%=49.0 medR=-0.06 p05=-1.07 | test n= 461 meanR=+0.578 win%=47.7 medR=-0.16 p05=-1.01
+X x=0.5 + F prior>=4           disc n= 538 meanR=+0.369 win%=49.1 medR=-0.04 p05=-1.05 | test n= 362 meanR=+0.633 win%=46.7 medR=-0.21 p05=-1.01
+S sma=50 + F prior>=4          disc n= 586 meanR=+0.392 win%=46.2 medR=-0.22 p05=-1.06 | test n= 411 meanR=+0.714 win%=47.4 medR=-0.13 p05=-1.02
+E N=10 + X x=0.5 + S sma=50    disc n= 593 meanR=+0.405 win%=49.1 medR=-0.06 p05=-1.06 | test n= 443 meanR=+0.588 win%=47.9 medR=-0.14 p05=-1.00
+E N=10 + X x=0.5 + F prior>=4  disc n= 509 meanR=+0.380 win%=49.5 medR=-0.03 p05=-1.05 | test n= 340 meanR=+0.639 win%=46.8 medR=-0.21 p05=-1.01
+E N=10 + S sma=50 + F prior>=4 disc n= 560 meanR=+0.427 win%=47.1 medR=-0.14 p05=-1.06 | test n= 392 meanR=+0.721 win%=47.7 medR=-0.11 p05=-1.00
+X x=0.5 + S sma=50 + F prior>=4 disc n= 506 meanR=+0.391 win%=49.8 medR=-0.01 p05=-1.05 | test n= 334 meanR=+0.685 win%=48.2 medR=-0.13 p05=-1.00
+E N=10 + X x=0.5 + S sma=50 + F prior>=4 disc n= 480 meanR=+0.400 win%=50.2 medR=+0.01 p05=-1.05 | test n= 313 meanR=+0.692 win%=48.2 medR=-0.14 p05=-1.00
+candidates tried: 27 | test years read once per candidate in this run
+XOM 2026 trades (base): [('2026-03-16', np.float64(-0.66)), ('2026-08-11', np.float64(-0.09))]
