@@ -1,0 +1,114 @@
+data: giveback_daily.pkl; symbols=48; last completed bar=2026-11-04
+
+=== DISCOVERY 2020-2023 (selection made here) ===
+base       n= 723 meanR=+0.374 win%=45.5 medR=-0.23 p05=-1.12 totR= +270.1 giveback=0.88(n358) net5bp=+0.356
+R k=1      n= 736 meanR=+0.348 win%=40.2 medR=+0.00 p05=-1.09 totR= +255.8 giveback=0.87(n366) net5bp=+0.330
+R k=1.5    n= 726 meanR=+0.352 win%=43.3 medR=-0.06 p05=-1.10 totR= +255.4 giveback=0.90(n362) net5bp=+0.335
+R k=2      n= 724 meanR=+0.373 win%=44.5 medR=-0.16 p05=-1.10 totR= +269.8 giveback=0.88(n358) net5bp=+0.355
+R k=3      n= 723 meanR=+0.378 win%=45.4 medR=-0.22 p05=-1.10 totR= +273.0 giveback=0.88(n358) net5bp=+0.360
+R+ k=2     n= 725 meanR=+0.377 win%=46.9 medR=-0.16 p05=-1.10 totR= +273.4 giveback=0.86(n358) net5bp=+0.360
+R+ k=3     n= 723 meanR=+0.378 win%=45.8 medR=-0.22 p05=-1.10 totR= +273.5 giveback=0.88(n358) net5bp=+0.361
+C k=2      n= 724 meanR=+0.376 win%=45.3 medR=-0.21 p05=-1.10 totR= +272.1 giveback=0.87(n358) net5bp=+0.359
+C k=3      n= 723 meanR=+0.376 win%=45.5 medR=-0.22 p05=-1.10 totR= +271.6 giveback=0.88(n358) net5bp=+0.358
+discovery pick (all families): R+ k=3 | best of the owner's R/R+ families: R+ k=3
+
+=== TEST 2024-2026 (printed once, after the picks were fixed) ===
+base       n= 555 meanR=+0.592 win%=45.0 medR=-0.36 p05=-1.07 totR= +328.3 giveback=0.98(n288) net5bp=+0.576
+R k=1      n= 571 meanR=+0.494 win%=36.6 medR=+0.00 p05=-1.03 totR= +282.0 giveback=1.00(n294) net5bp=+0.478
+R k=1.5    n= 561 meanR=+0.546 win%=40.6 medR=-0.16 p05=-1.04 totR= +306.5 giveback=1.01(n291) net5bp=+0.531
+R k=2      n= 556 meanR=+0.567 win%=42.8 medR=-0.31 p05=-1.07 totR= +315.3 giveback=1.01(n288) net5bp=+0.552
+R k=3      n= 555 meanR=+0.590 win%=44.5 medR=-0.35 p05=-1.07 totR= +327.6 giveback=0.98(n288) net5bp=+0.575
+R+ k=2     n= 556 meanR=+0.572 win%=46.0 medR=-0.31 p05=-1.07 totR= +317.9 giveback=1.00(n288) net5bp=+0.556
+R+ k=3     n= 555 meanR=+0.592 win%=45.0 medR=-0.35 p05=-1.07 totR= +328.3 giveback=0.98(n288) net5bp=+0.576   <- pick
+C k=2      n= 555 meanR=+0.582 win%=44.1 medR=-0.35 p05=-1.07 totR= +323.1 giveback=0.99(n288) net5bp=+0.566
+C k=3      n= 555 meanR=+0.590 win%=44.9 medR=-0.36 p05=-1.07 totR= +327.7 giveback=0.98(n288) net5bp=+0.575
+
+=== EVERY VARIANT vs BASE, same trades (paired on symbol + entry date) ===
+R k=1      mean dR disc -0.026 test -0.098 | paired disc dR=-0.032 t=-1.66 (n=715) | paired test dR=-0.078 t=-2.14 (n=541)
+R k=1.5    mean dR disc -0.022 test -0.045 | paired disc dR=-0.028 t=-1.82 (n=719) | paired test dR=-0.035 t=-2.03 (n=550)
+R k=2      mean dR disc -0.001 test -0.024 | paired disc dR=+0.001 t=+0.14 (n=722) | paired test dR=-0.020 t=-1.90 (n=551)
+R k=3      mean dR disc +0.004 test -0.001 | paired disc dR=+0.004 t=+1.54 (n=723) | paired test dR=-0.001 t=-0.85 (n=555)
+R+ k=2     mean dR disc +0.004 test -0.020 | paired disc dR=+0.008 t=+1.10 (n=722) | paired test dR=-0.016 t=-1.52 (n=551)
+R+ k=3     mean dR disc +0.005 test -0.000 | paired disc dR=+0.005 t=+1.62 (n=723) | paired test dR=-0.000 t=-0.01 (n=555)
+C k=2      mean dR disc +0.002 test -0.009 | paired disc dR=+0.004 t=+0.89 (n=723) | paired test dR=-0.009 t=-1.24 (n=554)
+C k=3      mean dR disc +0.002 test -0.001 | paired disc dR=+0.002 t=+1.00 (n=723) | paired test dR=-0.001 t=-1.00 (n=555)
+PICK R+ k=3: test paired dR=-0.000 t=-0.01 n=555, one-sided p(better)=0.505, Bonferroni x8=1.000, x46=1.000
+BEST R/R+ R+ k=3: test paired dR=-0.000 t=-0.01 n=555, one-sided p(better)=0.505, Bonferroni x8=1.000, x46=1.000
+
+=== WHERE THE DIFFERENCE COMES FROM (matched trades; R summed) ===
+R k=1      disc: cut short  39 trades ( -56.2R; 11 of them base exit > +2R) | saved  63 ( +33.2R) | other matched  +0.0R | chain: +21 new trades  +5.7R, -8 base trades  +3.0R
+R k=1      test: cut short  44 trades ( -72.5R; 11 of them base exit > +2R) | saved  49 ( +30.1R) | other matched  +0.0R | chain: +30 new trades  +2.1R, -14 base trades  -6.1R
+R k=1.5    disc: cut short  17 trades ( -32.4R;  7 of them base exit > +2R) | saved  23 ( +12.2R) | other matched  +0.0R | chain: +7 new trades  +3.4R, -4 base trades  +2.2R
+R k=1.5    test: cut short  23 trades ( -31.9R;  6 of them base exit > +2R) | saved  24 ( +12.9R) | other matched  +0.0R | chain: +11 new trades  -2.0R, -5 base trades  -0.7R
+R k=2      disc: cut short   7 trades (  -7.4R;  2 of them base exit > +2R) | saved  12 (  +8.1R) | other matched  +0.0R | chain: +2 new trades  -2.0R, -1 base trades  +1.0R
+R k=2      test: cut short  12 trades ( -13.9R;  3 of them base exit > +2R) | saved   8 (  +2.9R) | other matched  +0.0R | chain: +5 new trades  -0.2R, -4 base trades  -1.7R
+R k=3      disc: cut short   1 trades (  -0.0R;  0 of them base exit > +2R) | saved   3 (  +2.9R) | other matched  +0.0R | chain: +0 new trades  +0.0R, -0 base trades  +0.0R
+R k=3      test: cut short   3 trades (  -1.1R;  0 of them base exit > +2R) | saved   1 (  +0.4R) | other matched  +0.0R | chain: +0 new trades  +0.0R, -0 base trades  +0.0R
+R+ k=2     disc: cut short   7 trades (  -6.8R;  2 of them base exit > +2R) | saved  15 ( +12.3R) | other matched  +0.0R | chain: +3 new trades  -3.1R, -1 base trades  +1.0R
+R+ k=2     test: cut short  12 trades ( -13.3R;  3 of them base exit > +2R) | saved  11 (  +4.8R) | other matched  +0.0R | chain: +5 new trades  -0.2R, -4 base trades  -1.7R
+R+ k=3     disc: cut short   0 trades (  +0.0R;  0 of them base exit > +2R) | saved   4 (  +3.3R) | other matched  +0.0R | chain: +0 new trades  +0.0R, -0 base trades  +0.0R
+R+ k=3     test: cut short   2 trades (  -0.6R;  0 of them base exit > +2R) | saved   2 (  +0.6R) | other matched  +0.0R | chain: +0 new trades  +0.0R, -0 base trades  +0.0R
+C k=2      disc: cut short   1 trades (  -2.3R;  1 of them base exit > +2R) | saved   6 (  +5.2R) | other matched  +0.0R | chain: +1 new trades  -1.0R, -0 base trades  +0.0R
+C k=2      test: cut short   5 trades (  -6.7R;  1 of them base exit > +2R) | saved   2 (  +1.4R) | other matched  +0.0R | chain: +1 new trades  -1.0R, -1 base trades  +1.0R
+C k=3      disc: cut short   0 trades (  +0.0R;  0 of them base exit > +2R) | saved   1 (  +1.5R) | other matched  +0.0R | chain: +0 new trades  +0.0R, -0 base trades  +0.0R
+C k=3      test: cut short   1 trades (  -0.7R;  0 of them base exit > +2R) | saved   0 (  +0.0R) | other matched  +0.0R | chain: +0 new trades  +0.0R, -0 base trades  +0.0R
+
+=== Q2: base exits above +2R, variant stops out at its ratchet level (counts, matched trades) ===
+R k=1      disc  11 of 125 base >+2R winners cut (gave up  36.7R) | test  11 of 120 base >+2R winners cut (gave up  48.7R)
+R k=1.5    disc   7 of 125 base >+2R winners cut (gave up  25.1R) | test   6 of 120 base >+2R winners cut (gave up  19.5R)
+R k=2      disc   2 of 125 base >+2R winners cut (gave up   4.4R) | test   3 of 120 base >+2R winners cut (gave up   9.1R)
+R k=3      disc   0 of 125 base >+2R winners cut (gave up   0.0R) | test   0 of 120 base >+2R winners cut (gave up   0.0R)
+R+ k=2     disc   2 of 125 base >+2R winners cut (gave up   3.9R) | test   3 of 120 base >+2R winners cut (gave up   8.4R)
+R+ k=3     disc   0 of 125 base >+2R winners cut (gave up   0.0R) | test   0 of 120 base >+2R winners cut (gave up   0.0R)
+C k=2      disc   1 of 125 base >+2R winners cut (gave up   2.3R) | test   1 of 120 base >+2R winners cut (gave up   3.9R)
+C k=3      disc   0 of 125 base >+2R winners cut (gave up   0.0R) | test   0 of 120 base >+2R winners cut (gave up   0.0R)
+base disc: 184 trades reached a +2R close; 14 of them still closed below entry (sum -10.3R)
+base test: 177 trades reached a +2R close; 10 of them still closed below entry (sum -7.3R)
+
+=== INDEPENDENT RE-PRICE from raw bars (not the replay loop): test trades with base > +2R cut by R k=2 ===
+  NBIS   entry 2024-12-03 @ 25.80, 1R $4.43; +2R close on 2024-12-06 (36.77); low 25.77 on 2024-12-23 -> fill 25.80 = +0.00R (replay +0.00R) | base exit +2.66R (time)
+  WDC    entry 2024-01-19 @ 54.00, 1R $2.82; +2R close on 2024-01-25 (60.33); low 53.92 on 2024-02-16 -> fill 54.00 = +0.00R (replay +0.00R) | base exit +3.65R (time)
+  WDC    entry 2025-10-30 @ 137.75, 1R $17.51; +2R close on 2025-11-10 (174.22); low 137.63 on 2025-11-20 -> fill 137.75 = +0.00R (replay +0.00R) | base exit +2.82R (time)
+
+candidates this run: 8 (R x4, R+ x2, C x2) + base; test years computed for all after the picks were fixed. Cumulative looks at the 2024-26 test years: 38 earlier + 8 = 46.
+
+=== BRK.B ===
+today's partial-session last price (not used): 580.96
+bars check: highest close since 2026-10-27 = 579.09; last close 579.09 on 2026-11-04; prior 20-session low (close-exit level) 505.27
+LIVE lot: entry 544.60, 1R $16.39, initial stop 528.21, peak close 579.09 = +2.10R
+  base       stop   528.21 (-1.00R)  base: initial stop
+  R k=1      stop   544.60 (+0.00R)  armed
+  R k=1.5    stop   544.60 (+0.00R)  armed
+  R k=2      stop   544.60 (+0.00R)  armed
+  R k=3      stop   528.21 (-1.00R)  not armed (needs close >= 593.77)
+  R+ k=2     stop   548.70 (+0.25R)  armed
+  R+ k=3     stop   528.21 (-1.00R)  not armed (needs close >= 593.77)
+  C k=2      stop   528.21 (-1.00R)  armed: exit at the close if a close < 544.60; intraday stop 528.21
+  C k=3      stop   528.21 (-1.00R)  not armed (needs close >= 593.77)
+REPLAY lot (replay enters on the first breakout's next open, which live did not take):
+  base       entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 516.34 (-1.00R)
+  R k=1      entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 530.00 (+0.00R) armed 2026-10-22
+  R k=1.5    entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 530.00 (+0.00R) armed 2026-11-02
+  R k=2      entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 530.00 (+0.00R) armed 2026-11-04
+  R k=3      entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 530.00 (+0.00R) armed 2026-11-04
+  R+ k=2     entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 533.42 (+0.25R) armed 2026-11-04
+  R+ k=3     entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 533.42 (+0.25R) armed 2026-11-04
+  C k=2      entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 516.34 (-1.00R) armed 2026-11-04
+  C k=3      entry 2026-10-19 @ 530.00 R$=13.66 peak 579.09 (+3.59R) stop 516.34 (-1.00R) armed 2026-11-04
+
+=== WHERE THIS REPLAY DIFFERS FROM LIVE (execution/swing_breakout_manager.py) ===
+1. Entry timing: replay buys the next session's OPEN after the signal close. Live keeps a pending setup at the 55-day level
+   and enters on the first cycle >= 10:05 ET when the session open, live ask and fresh last trade are all >= the level,
+   possibly days later (BRK.B: replay 2026-10-19 @ 530.00, live 2026-10-27 @ 544.60). Live fill = marketable DAY limit at
+   ask + up to 0.2%.
+2. Stop distance: replay 2.5 x ATR14 of the 14 bars BEFORE the signal bar. Live 2.5 x ATR14 on closed bars at entry, floored
+   at the stock's own 10th-percentile ATR% x price. The ratchet trigger (k x R) inherits whichever R the lot was sized with.
+3. Ratchet fill: replay assumes the break-even stop fills at min(open, stop) from daily OHLC; live would be a resting GTC
+   stop fed by the SIP/IEX tape (gap-through and queue slippage not modelled). Live has NO ratchet today.
+4. Close exits: replay uses the official daily close; live checks the last trade in the final 10 minutes before the close.
+5. Universe: replay = fixed list of the 48 symbols with data out of the 2026-10-26 top-50 (survivorship: today's leaders);
+   live re-ranks the top 50 daily by 60-day median dollar volume. Replay skips nothing for F6-reserved or wash-trade names.
+6. Sizing/caps: replay is in R per trade, one lot per name, unlimited concurrent lots; live caps 10 slots, K-limb overnight
+   notional, gap-resize and the 7% kill switch (new entries only).
+7. Costs: headline has none; net5bp column = 5 bps per side (assumption, not measured live slippage).
+8. Data: bars cache giveback_daily.pkl fetched 2026-11-05 12:10 ET; last completed bar 2026-11-04; today's partial bar dropped.
