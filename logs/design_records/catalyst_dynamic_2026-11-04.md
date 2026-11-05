@@ -1,9 +1,7 @@
 # CATALYST-DYNAMIC-1104 — whole-article news judgement for the bad-news entry block (signed: Claude, 2026-11-04)
 
 Approval-ID: CATALYST-DYNAMIC-1104
-Status: **board review done (5 cold seats, all APPROVE-WITH-CHANGES). GAI + Codex review owed** (BGC: board, GAI, Codex; Gro only as
-fallback when Codex is unavailable; this cloud session has no reviewer keys). No code written. Owner approval of the exact
-design comes after GAI + Codex.
+Status: rev 3.1 — BGC aligned on Phase A (board 5/5, GAI, Codex); awaiting owner approval. No code written.
 Covers (planned): events/catalyst_engine.py, execution/entry_logic.py, execution/forever_hold_manager.py, the Swing / QHM /
 Day entry paths, tests/test_catalyst_*.py (new).
 
@@ -101,3 +99,118 @@ move to `logs/archive/pending_2026/` once the owner closes it.
 2. Read the OCI crontab line for `catalyst_engine.py` and `logs/catalyst_engine.log` to confirm defect 4 and measure the
    live block rate and false blocks.
 3. Owner one-page approval: Phase A first, then Phase B after the replay.
+
+## Rev 2 (2026-11-04 evening, Mac session, signed: Claude) — server facts + GAI / reviewer #2 round 1 folded
+
+### Server facts (read-only, OCI; `logs/mtf_bot.log` starts 2026-07-19)
+- **Defect 4 confirmed.** Crontab line 88 runs `events/catalyst_engine.py` with no arguments every 10 minutes, 13-21 UTC
+  on weekdays. `logs/catalyst_engine.log` prints `watched: 10 names` on every run checked: `trade_log.json` `open` is empty
+  (the tiers keep their own state files), so the watch set is only the 10 fixed names. RIVN, MU, SNDK, PLTR, COIN, SOFI
+  are never scanned.
+- **Live block record: 4 blocks since 2026-07-19, all false.**
+  - MSFT ×3 (2026-08-24): "What's Going on With Nebius Shares on Monday?" classified `dilution_offering`. The subject was
+    Nebius, not MSFT.
+  - SPY ×1 (2026-09-30): "White House Aide Gorka Tells Jerusalem Post That Iran Deal Remains Possible…" classified
+    `dilution_offering`.
+  - So in 3.5 months the gate blocked 0 real bad-news entries, blocked 4 good ones, and could not have seen the names
+    the bot trades outside the 10 fixed ones. It also shows the attribution rule (primary symbol) is not enough.
+- State file `data/state/catalyst_state.json`: `gate_enabled: true`, `active: {}` at 2026-11-04 13:52 PT.
+
+### What changed after GAI + reviewer #2 (round 1)
+GAI: correct on all defects; Phase A approve-with-changes (owner signs the entry-count effect). Reviewer #2 (Codex):
+REJECT overall because its sandbox showed no repository (the code is now pasted in round 2), Phase A approve-with-changes,
+Phase B blocking rule rejected as written. Folded:
+
+**Phase A (first diff; changes which entries are blocked → owner approval):**
+1. Keep every material item per symbol inside its own type window (no newest-wins); each item expires on its own.
+2. Coverage: incremental ingestion with a persisted cursor plus a one-time backfill to the longest window, instead of
+   re-fetching 720h every run; complete paging; batched requests allowed.
+3. Watch set: scanner candidates + `config.WATCHLIST` + Day universe + F6 universe + QHM holds + every broker position +
+   pending orders + any symbol sent to entry admission after the scan.
+4. **Attribution fix (from the live false blocks):** an item counts for a symbol only when that company is named in the
+   headline or first sentence; a co-tag alone never blocks. Regression fixtures: the Nebius/MSFT and Gorka/SPY items.
+5. `catalyst_decision` event in `trade_events.jsonl` for allows, blocks and degraded decisions: article id, URL,
+   created_at, age, type, rule version, source.
+6. Stale text fixed (docstring "DARK", handoff state path); a startup log line with the real flag and state path; a test
+   on the configured path.
+7. Measured effect to report to the owner: on the 4 live blocks, all 4 would be lifted by item 4; the watch-set change
+   adds names, so new blocks become possible on RIVN-style offerings.
+
+**Phase B (after the replay; not in the first diff):**
+- Cache key = source id + revision time + content hash + reader version + prompt/schema version; raw text archived with
+  sha256.
+- SEC filings parsed for purpose, effective status, amount, issuer — a form type alone is not an offering.
+- Blocking rule tightened (reviewer #2): point-in-time availability, verified company identity, evidence spans that
+  support each field, current revision, source tier, freshness, and an owner-approved event list. Active only after the
+  replay shows blocked signals do worse than admitted ones after costs.
+
+### Split point 1 (model outage) — resolved
+Reviewer #2: "unconfirmed = no new model-derived block; no keyword fallback" (it is the static trap the owner ruled out).
+Board rev 1 majority was keyword fallback "because it is today's behaviour" — but the server record shows today's
+keyword behaviour produced 4 of 4 false blocks. Recommendation: no keyword fallback; Phase A structured rules
+(offering filings, verified items) still apply during an outage; the outage is logged and alerted.
+
+### Split point 2 (price confirmation) — unchanged
+Pre-register both variants in the replay; both counted in the multiple-testing adjustment.
+
+### July guidance-cut patch
+Unchanged: not shipped; its phrases become regression fixtures.
+
+## Rev 3 (2026-11-04 night, signed: Claude) — round 2 folded
+
+**No code exists yet.** This is a design review; the source excerpts in the review prompts show the CURRENT gate that
+Phase A replaces.
+
+1. **Attribution is by role, not mention (reviewer #2 failing input: "Microsoft partner Nebius announces $500 million
+   offering", symbols [MSFT, NBIS]).** Phase A has no reader that can establish the issuer, so Phase A blocks a symbol
+   only when the story is about one company: the Alpaca item lists exactly one symbol, and that symbol is the watched
+   name. A multi-symbol story never blocks in Phase A; it is logged `catalyst_decision: ambiguous_attribution` with
+   all symbols, and Phase B's reader (issuer / affected-party role per event type: offering → issuer only; guidance
+   cut → reporting company; solvency → the debtor; legal probe → the named defendant) decides it later. The cost is
+   lost true blocks on co-tagged stories (e.g. an offering co-tagged with a peer); the replay counts them.
+   Regression tests: the MSFT/Nebius failing input above, the live Nebius/MSFT and Gorka/SPY items, a single-symbol
+   offering (blocks), a two-symbol offering (does not block, logged).
+2. **State schema:** `data/state/catalyst_state.json` holds, per symbol, a list of items (id, revision time, type,
+   created_at, expires_at, symbols, rule version) plus a top-level cursor (last created_at + ids seen at that
+   timestamp), coverage start/end and a completeness flag. Revised articles replace their earlier revision by id. A
+   crash before the atomic replace re-reads from the old cursor (idempotent by id). A failed or truncated page marks
+   coverage incomplete → degraded allow + one alert, never a silent "fresh".
+3. **One admission function** `catalyst_admission(symbol, path, signal_id)` used by core MTF, Swing, QHM, Day,
+   mean-reversion and F6 entries, after the signal and before the order; never on the exit path. Full-path tests per
+   entry path.
+4. **Decision record** per call: signal id, path, symbol, decision (allow / block / degraded / ambiguous), reason code,
+   every candidate item id considered, the blocking item's id / URL / type / age / window, attribution result, cache
+   age, cursor and coverage status, rule version, timestamp.
+5. **Before commit:** end-to-end replay ingestion → state → each admission path → decision event on the 07-19 → 11-04
+   server window, reporting blocks lifted, new blocks and ambiguous items; owner approves the exact rules with that
+   result.
+6. Age windows 48h / 720h stay in Phase A, labelled inherited; every decision logs the item age so Phase B can replace
+   them with measured decay.
+
+## Rev 3.1 — round 3 verdicts and final changes (2026-11-04 night, signed: Claude)
+
+| Voice | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|
+| Board (5 cold seats) | 5/5 approve-with-changes | — | — |
+| GAI | approve-with-changes (Phase A) | reject (read the current code as if it were the fix; corrected with the fact that no code exists) | approve-with-changes |
+| Codex (reviewer #2) | reject (no repo in sandbox; Phase A approve-with-changes) | reject (MSFT/Nebius attribution failing input) | approve-with-changes |
+
+Folded from round 3:
+1. **Revised older articles (Codex failing input: an article created 11-01, revised into an offering on 11-05, missed
+   by a created_at cursor).** Each run re-reads with an overlap window equal to the longest type window (720h), with
+   complete paging, and replaces any item whose revision time changed (idempotent by id). Regression test: exactly
+   that input must end in `block` for a single-symbol item.
+2. **Durable evidence in state (Codex):** each stored item also keeps URL, source / source id, data tier, attribution
+   result (single-symbol / ambiguous), classification type and rule version, and the window used for expiry, so a
+   decision can be rebuilt after a restart.
+3. **Cache fault (GAI):** `catalyst_admission` checks the state's `ok` / freshness first; on a fault it returns a
+   degraded allow with reason `cache_fault` and the caller fires the alert (today's never-mask behaviour, kept).
+4. **Watch-set metric (Codex):** each run logs the watched count by source; a post-scan symbol with no coverage gets a
+   logged degraded allow, never a silent allow.
+5. **Tests:** `tests/test_catalyst_attribution.py` covers MSFT/Nebius (ambiguous, no block), the two live false blocks
+   (Nebius/MSFT, Gorka/SPY), a single-symbol offering (block), a newer positive item not erasing an older block, and the
+   revised-article case. No ship until they pass and the end-to-end replay is reported to the owner.
+6. Ambiguous (multi-symbol) items are counted daily in the post-session report so a missed co-tagged offering is seen.
+
+**Alignment reached:** board, GAI and Codex on Phase A (Rev 3 / 3.1). Phase B stays behind its replay. Owner approval
+of the exact Phase A design comes next; then the build and the full code gate.
