@@ -426,6 +426,123 @@ class TestQuoteCalls(Base):
         self.assertEqual(sq._timeouts(), (sq._ALPACA_QUOTE_TIMEOUT, sq._ALPACA_QUOTE_TIMEOUT))
 
 
+def ibody(**entries):
+    """Index response shaped like the live 2026-11-04 read: {"$VIX": {"symbol", "assetMainType": "INDEX",
+    "realtime": true, "quote": {"lastPrice", "tradeTime"(epoch ms)}}}. Overrides go to the entry or, under
+    key "quote", to the quote."""
+    now_ms = int(time.time() * 1000)
+    out = {}
+    for sym, over in entries.items():
+        over = dict(over or {})
+        q = {"lastPrice": 16.61, "closePrice": 16.61, "tradeTime": now_ms}
+        q.update(over.pop("quote", {}))
+        e = {"symbol": sym, "assetMainType": "INDEX", "realtime": True, "quote": q}
+        e.update(over)
+        out[sym] = e
+    return out
+
+
+class TestIndexValues(Base):
+    """REGIME-SIZE-1104 rev 3.3-3.6: CBOE index values through their own path."""
+
+    def test_live_shape_with_no_bid_ask_is_accepted(self):
+        self.valid_token()
+        self.route_get(quotes_resp=FakeResp(200, ibody(**{"$VIX": {}, "$VIX3M": {"quote": {"lastPrice": 18.8}}})))
+        vals, reasons = sq.index_last_with_reasons(["$VIX", "$vix3m"], {"$VIX": 600, "$VIX3M": 600})
+        self.assertEqual(reasons, {})
+        self.assertEqual(vals["$VIX"].last, 16.61)
+        self.assertEqual(vals["$VIX3M"].last, 18.8)
+        self.assertIsNotNone(vals["$VIX"].trade_time.tzinfo)
+        self.assertEqual(vals["$VIX"].source, "schwab_index")
+        self.assertEqual(self.http.get.call_args.kwargs["params"]["symbols"], "$VIX,$VIX3M")
+
+    def test_rejections_each_have_a_reason(self):
+        self.valid_token()
+        old_ms = int((time.time() - 1200) * 1000)
+        body = ibody(**{"$A": {"realtime": False}, "$B": {"assetMainType": "EQUITY"},
+                        "$C": {"quote": {"lastPrice": 0}}, "$D": {"quote": {"lastPrice": float("nan")}},
+                        "$E": {"quote": {"tradeTime": None}}, "$F": {"quote": {"tradeTime": old_ms}},
+                        "$G": {"quote": {"lastPrice": True}}, "$H": {}})
+        self.route_get(quotes_resp=FakeResp(200, body))
+        syms = ["$A", "$B", "$C", "$D", "$E", "$F", "$G", "$H", "$ZZ", "VIX"]
+        bounds = {s: 600 for s in syms if s != "$H"}
+        vals, reasons = sq.index_last_with_reasons(syms, bounds)
+        self.assertEqual(vals, {})
+        self.assertEqual(reasons, {"$A": "not_realtime", "$B": "not_index", "$C": "bad_last", "$D": "bad_last",
+                                   "$E": "bad_timestamp", "$F": "stale", "$G": "bad_last", "$H": "no_bound",
+                                   "$ZZ": "MISSING_IN_RESPONSE", "VIX": "not_index_symbol"})
+
+    def test_future_trade_time_beyond_bound_is_clock_skew(self):
+        self.valid_token()
+        future_ms = int((time.time() + 900) * 1000)
+        self.route_get(quotes_resp=FakeResp(200, ibody(**{"$VIX": {"quote": {"tradeTime": future_ms}}})))
+        vals, reasons = sq.index_last_with_reasons(["$VIX"], {"$VIX": 600})
+        self.assertEqual((vals, reasons), ({}, {"$VIX": "clock_skew"}))
+
+    def test_shape_and_symbol_mismatch(self):
+        self.valid_token()
+        body = ibody(**{"$VIX": {}})
+        body["$VIX"]["symbol"] = "$VXX"
+        self.route_get(quotes_resp=FakeResp(200, body))
+        self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}), ({}, {"$VIX": "shape"}))
+        self.route_get(quotes_resp=FakeResp(200, bad_json=True))
+        self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}), ({}, {"$VIX": "shape"}))
+        self.assertEqual(sum("index values" in t for t in self.slack), 1)   # paged once a day, own kind
+
+    def test_disabled_flag_makes_no_call(self):
+        self.valid_token()
+        with mock.patch.object(sq, "SCHWAB_INDEX_ENABLED", False):
+            self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}), ({}, {"$VIX": "disabled"}))
+        self.assertEqual(self.http.get.call_count + self.http.post.call_count, 0)
+
+    def test_auth_refusal_kills_400_does_not(self):
+        self.valid_token()
+        self.route_get(quotes_resp=FakeResp(400))
+        self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}), ({}, {"$VIX": "http_400"}))
+        self.assertFalse(sq.KILL_FILE.exists())
+        self.route_get(quotes_resp=FakeResp(403))
+        self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}), ({}, {"$VIX": "auth_403"}))
+        self.assertEqual(json.loads(sq.KILL_FILE.read_text())["date"], sq._et_today())
+        self.http.get.reset_mock()
+        self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600})[1]["$VIX"], "killed:index_http_403")
+        self.assertEqual(self.http.get.call_count, 0)
+        self.assertEqual(sq.nbbo(["AAPL"], {"AAPL": 5}), {})                 # same token: whole module off today
+        self.assertTrue(sq.last_reasons()["AAPL"].startswith("killed"))
+
+    def test_deadline_lock_timeout_and_no_shared_reasons(self):
+        self.valid_token()
+        sq._last_reasons.update({"AAPL": "sentinel"})
+        gate = threading.Event()
+
+        def _slow(url, **kw):
+            gate.wait(5)
+            return FakeResp(200, ibody(**{"$VIX": {}}))
+        self.http.get.side_effect = _slow
+        t0 = time.monotonic()
+        self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}, deadline_s=0.2), ({}, {"$VIX": "deadline"}))
+        self.assertLess(time.monotonic() - t0, 2.0)
+        gate.set()
+        with sq._FileLock():
+            with mock.patch.object(sq, "_lock_deadline_s", return_value=0.05):
+                self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}), ({}, {"$VIX": "LOCK_TIMEOUT"}))
+        self.assertEqual(sq.last_reasons(), {"AAPL": "sentinel"})              # nbbo's shared reasons untouched
+
+    def test_never_raises(self):
+        self.valid_token()
+        self.route_get(quotes_resp=RuntimeError("boom"))
+        self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}), ({}, {"$VIX": "network_error"}))
+        with mock.patch.object(sq, "_ensure_token_locked", side_effect=KeyError("x")):
+            self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}), ({}, {"$VIX": "internal_error"}))
+        self.assertEqual(sq.index_last_with_reasons(None, None), ({}, {}))
+        for bad in (float("nan"), "x", -1):
+            self.assertEqual(sq.index_last_with_reasons(["$VIX"], {"$VIX": 600}, deadline_s=bad),
+                             ({}, {"$VIX": "internal_error"}))
+
+    def test_index_symbols_do_not_change_the_stock_symbol_map(self):
+        self.assertIsNone(sq.to_schwab("$VIX"))
+        self.assertIsNone(sq.to_alpaca("$VIX"))
+
+
 class TestRedaction(Base):
     def test_every_failure_path_is_redacted(self):
         leak = (f"conn failed Authorization: Bearer {ACCESS} refresh_token={REFRESH} code={CODE} "
