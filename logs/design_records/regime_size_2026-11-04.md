@@ -57,6 +57,23 @@ change. No staging record exists.
 6. Remove or wire `stop_mult`; retire or ship `research/regime_empirical.py` (log-only, against the no-shadow rule).
 7. Add a unit test that pins the share count as a function of the multiplier, so this cannot silently drift again.
 
+## Item 2 spec — which control set the share count (added 2026-11-05; all tiers; no behaviour change)
+Source: `logs/research/sizing_bind_audit_2026-11-05.md`. Every entry, in every tier, writes one `sizing` record to
+`logs/trade_events.jsonl` (and the same text to the tier's log) with each bound computed and the one that won:
+- core (`execution/entry_logic.py` execute_entries): `dollar_cap` after each step (score, Kelly, TQI, TSMOM, earnings,
+  VOTE-3, FVG, leveraged ring-fence), `raw_shares`, `size_multiplier`, value cap, VOTE-5, Kelly clamp, Leg-2 / Leg-1,
+  `binding_term`;
+- Day (`execution/day_trade_manager.py` `_bounded_entry_qty`): `requested_qty`, `risk_qty`, each room in `rooms`,
+  `risk_mult`, `max_size`, budget fit, `binding_term`;
+- Swing (`execution/swing_breakout_manager.py` `size_order` + `gap_resize`): `q_risk`, `q_cap`, `q_room`, 1-share floor,
+  gap `q_max`, `binding_term`; trend_night (`execution/swing_overnight.py` `size_night`): budget, K room, gap, buying
+  power, `binding_term`; QHM tranche: target, available equity, caps, RC-7 floor, `binding_term`.
+Notes and docstrings that describe a size change that does not happen are corrected in the same diff ("sizing up
+1.25x", "half size, wider stops", "MAXIMUM SIZE", "0.5x standard per-trade risk", the Track-B "default ON" docstring,
+the losing-band "takes no entry" docstring, the MR "full 4.5% Kelly clamp" comment). Pure observability: size,
+frequency and exposure unchanged (not risk-path); a test asserts the logged `binding_term` equals the term that
+produced the final quantity. This is also the evidence the owner's later decisions (item 4) need.
+
 ## Replay required before item 4 (or any regime-based size)
 About a year of Alpaca T1 bars and the logged decision stacks: recompute every core-tier entry's shares under (a) current
 code and (b) the multiplier applied before the value cap. Wrong if any logged entry shows the multiplier was the binding

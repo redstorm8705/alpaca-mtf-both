@@ -6,15 +6,19 @@ config values as committed. Live state files (`logs/kelly_stats.json`, `data/sta
 it **can** bind is from the code arithmetic. Key claims re-checked at source by the author (marked ✓).
 
 ## A. Controls that can never block or cut the way they are described (safety-relevant first)
-1. **Swing margin-buffer check always buys at least 1 share.** ✓ `execution/swing_breakout_manager.py:401`
-   `new = max(1, min(int(qty), q_max))` — when the gap check finds the margin buffer already used up (`q_max ≤ 0`), it
-   still returns 1 share; its error paths also return 1 (`:395-396`, `:404-406`). A check meant to keep a one-day gap
-   inside the margin buffer can never stop an entry.
+1. **Swing margin-buffer check always buys at least 1 share — by owner rule.** ✓ the gap check returns at least 1
+   share even when the margin buffer is already used up or its inputs are unknown. This is the approved design:
+   `logs/design_records/swing_owner_design_2026-10-25.md:39-41` "resized down to a MINIMUM OF ONE SHARE (never a
+   skip)". Re-examined: the extra exposure is one share, still bounded by the K limb (total overnight ≤ K × equity)
+   and the 2% risk-at-stop cap, so it is not a defect. (Corrected 2026-11-05: an earlier version of this note called it
+   one.)
 2. **Core stacked size multiplier** (event, regime, time of day, SPY, session P&L, overnight; "half size" in high vol)
    changes no shares unless it is 0. ✓ `execution/entry_logic.py:1371` vs `:1397-1398`. REGIME-SIZE-1104.
-3. **Core earnings half-size can end up larger.** ✓ The Leg-2 rescue (`execution/entry_logic.py:1458-1478`) lifts a
-   0-1 share result to 2 shares whenever `size_multiplier > 0`, with no earnings check. Example: score 10, $450 stock
-   near earnings: halved budget buys 0 → rescued to 2 shares ($900), where without earnings it bought 1 and skipped.
+3. **Core earnings half-size can be undone by the 2-share rescue — interaction of two approved rules.** ✓ The Leg-2
+   rescue (owner mandate 2026-08-08, "more trades") lifts a 0-1 share result to exactly 2 when the Kelly risk clamp,
+   the vol cap and buying power all allow it, independent of the earnings-halved budget. Per-trade risk stays inside
+   the Kelly cap. Example: score 10, $450 stock near earnings → 2 shares instead of a skip. Owner question only: should
+   the earnings cut also apply to the rescue? (Not a defect.)
 4. **Day-tier conviction sizing has no effect on shares.** ✓ `execution/day_trade_manager.py:532-535`:
    `safe_qty = min(risk_qty, notional_qty)`; the conviction share count (`requested_qty`) is only a "≥ 1" check. Only
    conviction ≤ 0 (no trade) acts.
@@ -44,11 +48,10 @@ Day: per-trade risk basis (wide stops) and the per-name / gross / buying-power /
 Swing: stop-based `q_risk`, K-limb room, 1-share floor. trend_night: K room, gap limit, buying power.
 QHM: tranche target × available equity, 40% aggregate cap, overnight room. Overnight K: binds as designed.
 
-## C. Recommended order (each through the normal gate; risk-path where it changes size)
-1. **Swing gap check (A1)** — let it return 0 when the buffer is used up or its inputs are unknown. Narrows the
-   envelope (fewer, not larger, entries in a margin squeeze); owner approval (fewer trades).
-2. **Earnings vs Leg-2 (A3)** — the rescue should not undo the earnings cut. Fewer shares only on earnings names.
-3. **Honest logs** — every entry logs which term set its share count (REGIME-SIZE-1104 item 2 extended to Day and
-   Swing), and the misleading notes/docstrings (A2, A4, A5, A11) are corrected.
-4. **Owner decisions, after a replay of logged entries:** whether the inert stress cuts (A2, A5) should start working,
-   whether Day conviction should size (A4), and the leveraged-ETF core path (A6).
+## C. Recommended order (each through the normal gate)
+1. **Honest sizing logs (no behaviour change):** every entry, in every tier, logs the term that set its final share
+   count (`binding_term=`), and the misleading notes and docstrings (A2, A4, A5, A11) are corrected. Pure observability:
+   no size, frequency or exposure change. Extends REGIME-SIZE-1104 item 2.
+2. **Owner decisions, after a replay of logged entries:** whether the inert stress cuts should start working (A2, A5),
+   whether Day conviction should size (A4), whether the earnings cut should also bind the 2-share rescue (A3), and the
+   leveraged-ETF core path (A6). Each changes size or trade count, so each is risk-path.

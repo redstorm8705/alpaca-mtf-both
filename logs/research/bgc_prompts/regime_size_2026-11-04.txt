@@ -22,7 +22,6 @@ change. No staging record exists.
    max_shares_by_value)` (L1397-1398). Because a stop distance is a small fraction of price, the value cap always wins
    unless the multiplier is below about stop/price (~0.02-0.10). Example (seat LdP): price $100, stop $2.40, cap $1,000 →
    10 shares at 0.5, 1.0 and 1.25. The trade count is also unchanged: `_can_afford_one` (L1372) ignores the multiplier.
-
 2. **So the 1.25 "size up" is inert — and so is every protective cut in the same product** (`strategy/run_cycle.py:1827`:
    event × regime × time-of-day × SPY × session P&L × overnight), including HIGH_VOL 0.5. Only the 0.0 blockade
    (L1374) acts. What really sizes positions acts on `dollar_cap` earlier: Kelly, TSMOM vol-scaling, FVG, VOTE-3,
@@ -43,7 +42,7 @@ change. No staging record exists.
 7. A previous design pass (`logs/design_records/regime_state_phase2_design_2026-09-14.md`, `research/regime_empirical.py`
    commit `00774fcf`) assumed the 1.25 had an effect.
 
-## Proposed changes 
+## Proposed changes
 1. **Fix the field-mixing bug first** (separate `vix_level` and `spy_rvol_10d`; each gate reads the series it was set
    on; a fallback is labelled). The only item here that changes live behaviour today. Risk-path by frequency (score
    gates) → full gate + owner approval.
@@ -60,6 +59,23 @@ change. No staging record exists.
    shares, and drop "DOWN-sizing (protective)".
 6. Remove or wire `stop_mult`; retire or ship `research/regime_empirical.py` (log-only, against the no-shadow rule).
 7. Add a unit test that pins the share count as a function of the multiplier, so this cannot silently drift again.
+
+## Item 2 spec — which control set the share count (added 2026-11-05; all tiers; no behaviour change)
+Source: `logs/research/sizing_bind_audit_2026-11-05.md`. Every entry, in every tier, writes one `sizing` record to
+`logs/trade_events.jsonl` (and the same text to the tier's log) with each bound computed and the one that won:
+- core (`execution/entry_logic.py` execute_entries): `dollar_cap` after each step (score, Kelly, TQI, TSMOM, earnings,
+  VOTE-3, FVG, leveraged ring-fence), `raw_shares`, `size_multiplier`, value cap, VOTE-5, Kelly clamp, Leg-2 / Leg-1,
+  `binding_term`;
+- Day (`execution/day_trade_manager.py` `_bounded_entry_qty`): `requested_qty`, `risk_qty`, each room in `rooms`,
+  `risk_mult`, `max_size`, budget fit, `binding_term`;
+- Swing (`execution/swing_breakout_manager.py` `size_order` + `gap_resize`): `q_risk`, `q_cap`, `q_room`, 1-share floor,
+  gap `q_max`, `binding_term`; trend_night (`execution/swing_overnight.py` `size_night`): budget, K room, gap, buying
+  power, `binding_term`; QHM tranche: target, available equity, caps, RC-7 floor, `binding_term`.
+Notes and docstrings that describe a size change that does not happen are corrected in the same diff ("sizing up
+1.25x", "half size, wider stops", "MAXIMUM SIZE", "0.5x standard per-trade risk", the Track-B "default ON" docstring,
+the losing-band "takes no entry" docstring, the MR "full 4.5% Kelly clamp" comment). Pure observability: size,
+frequency and exposure unchanged (not risk-path); a test asserts the logged `binding_term` equals the term that
+produced the final quantity. This is also the evidence the owner's later decisions (item 4) need.
 
 ## Replay required before item 4 (or any regime-based size)
 About a year of Alpaca T1 bars and the logged decision stacks: recompute every core-tier entry's shares under (a) current

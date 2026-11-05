@@ -86,4 +86,4 @@ These need OCI logs and Alpaca fills.
 - #811 (F6 crash-only trigger restored, OpenAI Codex) merged to main (`fd2f700f`, deployment note `152de542`); F6 stays OFF.
 - New design: VIX-FIELD-1105 (`logs/design_records/vix_field_2026-11-05.md`) — VIX rules read SPY realized vol on VIX-outage days; also reaches three exit rules. Board review done (rev 2); GAI + Codex owed.
 - Sizing audit across all tiers: `logs/research/sizing_bind_audit_2026-11-05.md` — 11 size controls that cannot act as
-  described; top item: the Swing margin-buffer check always buys at least 1 share.
+  described; the main finding is size controls that never act (no change to the envelope); the 1-share Swing floor is the owner's approved design.
