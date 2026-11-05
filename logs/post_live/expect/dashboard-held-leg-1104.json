@@ -1,6 +1,6 @@
 {
   "change": "dashboard-held-leg-1104",
-  "tier": 3,
+  "tier": 2,
   "paths": [
     "generate_dashboard.py"
   ],
