@@ -1,0 +1,27 @@
+{
+  "change": "dashboard-held-leg-1104",
+  "tier": 2,
+  "paths": [
+    "generate_dashboard.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/live_writer.log",
+      "pattern": "swing trend exit level [A-Z.]+ .*change=dashboard-held-leg-1104"
+    }
+  ],
+  "expected_rate": "one line per open Swing breakout symbol per day (the level is cached per symbol per day), on the first render after the writer starts or the day rolls",
+  "window_sessions": 1,
+  "window_reason": "Swing breakout lots are open now (BRK.B, V, WMT, MSFT), so the first render after deploy shows the trend-exit level",
+  "reversal": "a Day or Swing slice shown MISSING / 'Place broker stop now' while Alpaca lists a HELD stop leg under a FILLED bracket parent for that symbol, or a trend-exit level that differs from prior_low(daily bars, 20) for that symbol",
+  "metrics": [
+    {
+      "name": "false MISSING stop badges on bracket lots",
+      "source": "dashboard.html protection badge vs /v2/orders?status=closed&nested=true held legs",
+      "direction": "down",
+      "bound": "zero"
+    }
+  ],
+  "verification": "tests/test_dashboard_tier_rows.py",
+  "baseline_exempt_reason": "the '[change=dashboard-held-leg-1104]' log tag is new in this change, so a match can only come from the new code"
+}
