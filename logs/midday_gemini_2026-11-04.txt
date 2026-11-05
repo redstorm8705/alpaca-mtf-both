@@ -1,0 +1,40 @@
+Midday Gemini Audit — 2026-11-04
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `execution.ownership_guard` sync_ledger REFUSED — protected floor shrink(s) {'GE/qhm': {'was': 1.0, 'would_be': 0.0, 'net': 0.0}} | GE
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** The `execution.fifo_pnl` log reports a critical failure: "closing sell with no open long lots" for GE. This confirms the `ownership_guard` refusal is due to a state mismatch between the bot's internal ledger and the actual Alpaca fills.
+*   **P&L:** The session P&L is $-25.34. The XOM loss ($-34.98) and AMZN gain (+$9.64) are mathematically consistent with the provided entry/exit prices.
+*   **Drift:** There is a significant EOD P&L drift of $+14.09 (Alpaca $14.09 vs. Tracker $0.00). This indicates the tracker is failing to reconcile fills, likely due to the "FIFO orphan" issues logged.
+
+### ENTRY QUALITY
+*   **No issues:** Entries appear to follow the confluence scoring logic. The ORB gate correctly blocked entries (MARA, EWY, NVDL, INTC, TQQQ) when SPY failed to confirm the breakdown.
+
+### EXIT QUALITY
+*   **No issues:** Exits were triggered, though the internal state tracking failed to map them to the correct lots, leading to the FIFO orphan warnings.
+
+### MRI ALIGNMENT
+*   **Regime:** The MRI score of 24 (ELEVATED) correctly triggered a size floor of 0.85x. The bot successfully identified the "Mid-day doldrums" and "FOMC Rate Decision" risk, reducing sizing accordingly.
+
+### LOG ANOMALIES
+*   `CRITICAL | execution.ownership_guard`: Sync ledger refused for GE.
+*   `CRITICAL | execution.fifo_pnl`: GE closing sell with no open long lots.
+*   `WARNING | execution.portfolio_tracker`: Multiple "FIFO orphan" warnings for QQQM, AMZN, and GE.
+*   `WARNING | macro_risk_index`: MRI VIX cache stale (age=6328s), forcing a yfinance fallback.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | FIFO/Ledger State Corruption |** The bot is experiencing a persistent state mismatch where closing fills are not being matched to open lots, resulting in "FIFO orphan" warnings and a refusal to heal the ledger for GE. This prevents the bot from accurately tracking position ownership.
+*   **INFRASTRUCTURE | MEDIUM | MRI Data Stale |** The MRI VIX cache is failing to refresh (age > 6000s), causing the bot to rely on yfinance fallbacks, which degrades the quality of the MRI score.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Run `confirm_ledger_heal.py GE qhm 0` to manually reconcile the GE position and clear the `ownership_guard` block.
+2.  **INFRASTRUCTURE:** Investigate `ledger_sync` and `portfolio_tracker` for the root cause of the FIFO orphan/state corruption (likely a race condition or failure to persist state during the 5-minute crash-safety flushes).
+3.  **INFRASTRUCTURE:** Debug the `macro_risk_index` cache refresh logic to ensure VIX data is updated within the expected window.
