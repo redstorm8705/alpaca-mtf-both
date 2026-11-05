@@ -1,0 +1,27 @@
+{
+  "change": "dashboard-held-leg-1104",
+  "tier": 3,
+  "paths": [
+    "generate_dashboard.py"
+  ],
+  "proof": [
+    {
+      "log": "dashboard.html",
+      "pattern": "trend exit: price near close &lt; \\$[0-9]"
+    }
+  ],
+  "expected_rate": "every dashboard render while a Swing breakout lot is open (re-rendered about every 30 s by mtf-writer)",
+  "window_sessions": 1,
+  "window_reason": "Swing breakout lots are open now (BRK.B, V, WMT, MSFT), so the first render after deploy shows the trend-exit level",
+  "reversal": "a Day or Swing slice shown MISSING / 'Place broker stop now' while Alpaca lists a HELD stop leg under a FILLED bracket parent for that symbol, or a trend-exit level that differs from prior_low(daily bars, 20) for that symbol",
+  "metrics": [
+    {
+      "name": "false MISSING stop badges on bracket lots",
+      "source": "dashboard.html protection badge vs /v2/orders?status=closed&nested=true held legs",
+      "direction": "down",
+      "bound": "zero"
+    }
+  ],
+  "verification": "tests/test_dashboard_tier_rows.py",
+  "baseline_exempt_reason": "the 'trend exit: price near close' text is new in this change, so a match can only come from the new code"
+}

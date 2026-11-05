@@ -20,6 +20,7 @@ import sys
 import json
 import logging
 import math
+import time
 import re
 import config as bot_config
 from html import escape
@@ -600,6 +601,43 @@ def _load_tier_plans(ownership_positions: dict, qhm_holds: dict) -> dict:
     return plans
 
 
+_TREND_LEVEL_CACHE: dict = {}
+_TREND_LEVEL_MISS: dict = {}
+# Retry a failed bar read after one Swing exit-check window (the level is only acted on near the close).
+_TREND_LEVEL_RETRY_S = 60 * float(getattr(bot_config, "SWING_BREAKOUT_EXIT_MINUTES", 10))
+
+
+def _swing_trend_level(sym: str, today) -> float | None:
+    """The Swing breakout exit level for `sym`: the lowest low of the last 20 COMPLETED sessions — the same
+    `prior_low(df, 20)` the tier checks against the live price near the close (execution/swing_breakout_manager.py
+    run_exit_check). T1 Alpaca daily bars via data.fetcher. Cached per symbol per day (the level only changes once
+    a session closes). Display only; None on any failure (the cell then shows the rule as text)."""
+    key = (str(sym).upper(), str(today))
+    if key in _TREND_LEVEL_CACHE:
+        return _TREND_LEVEL_CACHE[key]
+    miss_at = _TREND_LEVEL_MISS.get(key)
+    if miss_at is not None and time.monotonic() - miss_at < _TREND_LEVEL_RETRY_S:
+        return None          # a recent fetch failed: do not re-fetch on every render
+    level = None
+    try:
+        from data.fetcher import fetch_closed_bars
+        from execution.swing_breakout_manager import prior_low
+
+        df = fetch_closed_bars(key[0], getattr(bot_config, "TF_DAILY", "1Day"), num_bars=260).df
+        level = prior_low(df, 20)
+    except Exception as e:
+        logger.warning("swing trend level unavailable for %s: %s", key[0], e)
+        _TREND_LEVEL_MISS[key] = time.monotonic()
+        return None
+    if level is None:
+        _TREND_LEVEL_MISS[key] = time.monotonic()
+        return None
+    if level is not None:
+        _TREND_LEVEL_CACHE.clear() if len(_TREND_LEVEL_CACHE) > 200 else None
+        _TREND_LEVEL_CACHE[key] = level
+    return level
+
+
 def _money(value: float) -> str:
     return f"${value:,.2f}"
 
@@ -642,7 +680,7 @@ def _tier_slice_plan(
                 f"time exit {_fmt_day(exit_day, today)}" if exit_day
                 else f"time exit on session {max_hold}"
             )
-            parts.append(f"close &lt; 20-session low · {time_txt}")
+            parts.append(f"no profit target (trend exit) · {time_txt}")
         if isinstance(night, dict) and night.get(sym):
             parts.append("sells at next open")
         if td.get("target"):
@@ -1246,6 +1284,40 @@ def _load_alpaca():
             return flattened
 
         flat_o = _flatten_orders(raw_o)
+        # A filled bracket parent drops out of status=open, and Alpaca then returns only its NEW
+        # take-profit leg; the HELD stop leg is invisible (2026-11-04 MSFT Day: stop $548.51 held,
+        # dashboard showed MISSING). Read recent closed brackets once and add the HELD stop legs of
+        # FILLED parents for symbols still held. Isolated: a failure leaves the open list as it was.
+        try:
+            _held_syms = {str(p.get("symbol") or "").upper() for p in (raw_p or []) if isinstance(p, dict)}
+            _seen_ids = {str(o.get("id") or "") for o in flat_o}
+            _closed = _get(
+                f"/v2/orders?status=closed&limit={_ALPACA_OPEN_ORDER_PAGE_SIZE}&nested=true&direction=desc"
+            )
+            _extra = [
+                o for o in (_closed if isinstance(_closed, list) else [])
+                if isinstance(o, dict)
+                and str(o.get("order_class") or "").lower() == "bracket"
+                and str(o.get("status") or "").lower() == "filled"
+                and str(o.get("symbol") or "").upper() in _held_syms
+                and any(
+                    isinstance(leg, dict)
+                    and str(leg.get("status") or "").lower() == "held"
+                    and str(leg.get("id") or "") not in _seen_ids
+                    for leg in (o.get("legs") or [])
+                )
+            ]
+            if _extra:
+                # Only the HELD legs are added (never the filled parent or legs already listed),
+                # so nothing else on the page sees a closed order as open.
+                flat_o = flat_o + [
+                    o for o in _flatten_orders(_extra)
+                    if str(o.get("id") or "") not in _seen_ids
+                    and str(o.get("status") or "").lower() == "held"
+                    and o.get("owner_client_order_id")
+                ]
+        except Exception as _held_e:
+            logger.warning("held bracket legs not read — open orders only: %s", _held_e)
         # Today's fills: read-only, isolated — a failure here only switches the
         # Today's Trades table to the tiers' own records.
         try:
@@ -1802,6 +1874,16 @@ def _build_html(alpaca, trade_log, hybrid, eod, bot_status=None, market_news=Non
                 except (TypeError, ValueError):
                     _slice_pnl_html = "<td>—</td>"
                 _row_stop = (_fact or {}).get("stop_html", "—")
+                if _tier == "swing" and isinstance(_plans.get("breakout"), dict) and _plans["breakout"].get(sym):
+                    try:
+                        _lvl = _swing_trend_level(sym, _today_et)
+                    except Exception:
+                        _lvl = None
+                    _row_stop += (
+                        f'<br><span style="font-size:10px;color:#ff9f0a" title="Sells near the close when the price '
+                        f'is below the lowest low of the last 20 completed sessions.">trend exit: price near close &lt; '
+                        f'{"$" + format(_lvl, ".2f") if _lvl else "20-session low"}</span>'
+                    )
                 _legacy_row = _tier in ("swing", "unattributed")
                 if _tier == "qhm":
                     score_str = _qhm_na
