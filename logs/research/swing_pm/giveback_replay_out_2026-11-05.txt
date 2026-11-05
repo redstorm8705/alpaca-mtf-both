@@ -1,0 +1,68 @@
+data: fresh fetch (data.fetcher, SIP, split); symbols=48; last completed bar=2026-11-04
+
+=== DISCOVERY 2020-2023 (selection made here) ===
+base         n= 723 meanR=+0.374 win%=45.5 medR=-0.23 p05=-1.12 totR= +270.1 giveback=0.88(n358) net5bp=+0.356
+W z=4        n= 737 meanR=+0.311 win%=46.9 medR=-0.13 p05=-1.09 totR= +229.4 giveback=0.90(n362) net5bp=+0.294
+W z=5        n= 728 meanR=+0.338 win%=46.6 medR=-0.19 p05=-1.10 totR= +246.2 giveback=0.90(n361) net5bp=+0.321
+W z=6        n= 725 meanR=+0.377 win%=45.7 medR=-0.21 p05=-1.10 totR= +273.0 giveback=0.87(n358) net5bp=+0.359
+L k=2R       n= 734 meanR=+0.336 win%=47.0 medR=-0.18 p05=-1.09 totR= +246.8 giveback=0.90(n359) net5bp=+0.319
+L k=3R       n= 727 meanR=+0.355 win%=45.7 medR=-0.22 p05=-1.10 totR= +258.3 giveback=0.89(n358) net5bp=+0.338
+L k=4R       n= 724 meanR=+0.364 win%=45.6 medR=-0.23 p05=-1.12 totR= +263.4 giveback=0.90(n358) net5bp=+0.347
+Q low=10     n= 758 meanR=+0.295 win%=43.7 medR=-0.23 p05=-1.01 totR= +223.5 giveback=0.94(n343) net5bp=+0.278
+Q low=15     n= 729 meanR=+0.356 win%=45.1 medR=-0.25 p05=-1.08 totR= +259.8 giveback=0.90(n352) net5bp=+0.339
+H half@2R    n= 723 meanR=+0.332 win%=47.9 medR=-0.12 p05=-1.10 totR= +240.4 giveback=0.97(n358) net5bp=+0.315
+H half@3R    n= 723 meanR=+0.357 win%=45.9 medR=-0.22 p05=-1.10 totR= +258.1 giveback=0.92(n358) net5bp=+0.340
+D dd90       n= 705 meanR=+0.247 win%=42.7 medR=-0.32 p05=-1.05 totR= +174.3 giveback=0.87(n311) net5bp=+0.230
+discovery picks: ['W z=6', 'L k=4R', 'Q low=15', 'H half@3R', 'D dd90']
+
+=== TEST 2024-2026 (read once, after picks were fixed) ===
+base         n= 555 meanR=+0.592 win%=45.0 medR=-0.36 p05=-1.07 totR= +328.3 giveback=0.98(n288) net5bp=+0.576
+W z=4        n= 577 meanR=+0.454 win%=45.4 medR=-0.24 p05=-1.03 totR= +262.2 giveback=1.01(n294) net5bp=+0.439
+W z=5        n= 558 meanR=+0.534 win%=45.9 medR=-0.27 p05=-1.04 totR= +298.1 giveback=1.02(n292) net5bp=+0.519
+W z=6        n= 557 meanR=+0.521 win%=44.2 medR=-0.36 p05=-1.06 totR= +290.1 giveback=1.07(n289) net5bp=+0.505   <- pick
+L k=2R       n= 567 meanR=+0.515 win%=46.9 medR=-0.25 p05=-1.03 totR= +292.1 giveback=0.99(n294) net5bp=+0.500
+L k=3R       n= 556 meanR=+0.572 win%=45.3 medR=-0.34 p05=-1.07 totR= +317.9 giveback=0.99(n290) net5bp=+0.556
+L k=4R       n= 555 meanR=+0.593 win%=45.2 medR=-0.35 p05=-1.07 totR= +328.9 giveback=0.98(n288) net5bp=+0.577   <- pick
+Q low=10     n= 580 meanR=+0.552 win%=45.7 medR=-0.21 p05=-1.02 totR= +320.3 giveback=0.99(n283) net5bp=+0.537
+Q low=15     n= 558 meanR=+0.586 win%=45.7 medR=-0.28 p05=-1.03 totR= +326.9 giveback=0.99(n289) net5bp=+0.570   <- pick
+H half@2R    n= 555 meanR=+0.479 win%=47.6 medR=-0.19 p05=-1.03 totR= +265.9 giveback=1.19(n288) net5bp=+0.464
+H half@3R    n= 555 meanR=+0.516 win%=45.4 medR=-0.33 p05=-1.06 totR= +286.6 giveback=1.12(n288) net5bp=+0.501   <- pick
+D dd90       n= 623 meanR=+0.406 win%=44.9 medR=-0.20 p05=-1.00 totR= +253.2 giveback=0.96(n286) net5bp=+0.391   <- pick
+
+=== PICKS vs BASE ===
+W z=6        dMean disc +0.003 test -0.071 | dGiveback disc -0.02 test +0.09 | paired test dR=-0.068 t=-2.78 (n=550) one-sided p=0.997 Bonf x11=1.000 x38=1.000 | beats base on both + cuts give-back: False
+L k=4R       dMean disc -0.010 test +0.001 | dGiveback disc +0.01 test -0.00 | paired test dR=+0.001 t=+0.13 (n=555) one-sided p=0.446 Bonf x11=1.000 x38=1.000 | beats base on both + cuts give-back: False
+Q low=15     dMean disc -0.017 test -0.006 | dGiveback disc +0.02 test +0.01 | paired test dR=-0.002 t=-0.11 (n=548) one-sided p=0.545 Bonf x11=1.000 x38=1.000 | beats base on both + cuts give-back: False
+H half@3R    dMean disc -0.017 test -0.075 | dGiveback disc +0.03 test +0.14 | paired test dR=-0.075 t=-3.29 (n=555) one-sided p=0.999 Bonf x11=1.000 x38=1.000 | beats base on both + cuts give-back: False
+D dd90       dMean disc -0.126 test -0.185 | dGiveback disc -0.02 test -0.02 | paired test dR=-0.136 t=-2.75 (n=525) one-sided p=0.997 Bonf x11=1.000 x38=1.000 | beats base on both + cuts give-back: False
+
+=== GIVE-BACK CUT PER UNIT OF MEAN R LOST (all variants; disc | test) ===
+W z=4        gb cut -0.02R, meanR lost +0.062, ratio  -0.29 | gb cut -0.03R, meanR lost +0.137, ratio  -0.20
+W z=5        gb cut -0.02R, meanR lost +0.035, ratio  -0.43 | gb cut -0.05R, meanR lost +0.057, ratio  -0.81
+W z=6        gb cut +0.02R, meanR lost -0.003, ratio    inf | gb cut -0.09R, meanR lost +0.071, ratio  -1.29
+L k=2R       gb cut -0.01R, meanR lost +0.037, ratio  -0.38 | gb cut -0.02R, meanR lost +0.076, ratio  -0.20
+L k=3R       gb cut -0.01R, meanR lost +0.018, ratio  -0.49 | gb cut -0.01R, meanR lost +0.020, ratio  -0.73
+L k=4R       gb cut -0.01R, meanR lost +0.010, ratio  -1.48 | gb cut +0.00R, meanR lost -0.001, ratio    inf
+Q low=10     gb cut -0.06R, meanR lost +0.079, ratio  -0.73 | gb cut -0.01R, meanR lost +0.039, ratio  -0.21
+Q low=15     gb cut -0.02R, meanR lost +0.017, ratio  -1.01 | gb cut -0.01R, meanR lost +0.006, ratio  -1.80
+H half@2R    gb cut -0.08R, meanR lost +0.041, ratio  -2.02 | gb cut -0.22R, meanR lost +0.113, ratio  -1.93
+H half@3R    gb cut -0.03R, meanR lost +0.017, ratio  -2.02 | gb cut -0.14R, meanR lost +0.075, ratio  -1.93
+D dd90       gb cut +0.02R, meanR lost +0.126, ratio   0.13 | gb cut +0.02R, meanR lost +0.185, ratio   0.11
+
+DSR: best discovery variant W z=6: per-trade SR=0.217, expected max SR of 12 trials under no skill=0.028, DSR prob=1.000. (Prior day's 27 candidates on the same data not in this SR set; with them the hurdle only rises.)
+candidates tried this run: 11 (+ base); test years read once for all of them after picks were fixed; same 2024-26 data was also read for 27 candidates on 2026-11-04 -> cumulative 38 looks at these test years.
+
+=== BRK.B open trade, per variant, as of the last completed session ===
+today's partial-session last price (not used in decisions): 580.96
+base         signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 516.34 (-1.00R); close-exit if close < 505.27 (prior 20-session low, -1.81R)
+W z=4        signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 557.23 (+1.99R); close-exit if close < 505.27 (prior 20-session low, -1.81R)
+W z=5        signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 551.77 (+1.59R); close-exit if close < 505.27 (prior 20-session low, -1.81R)
+W z=6        signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 546.31 (+1.19R); close-exit if close < 505.27 (prior 20-session low, -1.81R)
+L k=2R       signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 554.55 (+1.80R); close-exit if close < 505.27 (prior 20-session low, -1.81R)
+L k=3R       signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 554.55 (+1.80R); close-exit if close < 505.27 (prior 20-session low, -1.81R)
+L k=4R       signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 516.34 (-1.00R); close-exit if close < 505.27 (prior 20-session low, -1.81R)
+Q low=10     signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 516.34 (-1.00R); close-exit if close < 539.23 (prior 10-session low, +0.68R)
+Q low=15     signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 516.34 (-1.00R); close-exit if close < 525.53 (prior 15-session low, -0.33R)
+H half@2R    signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 516.34 (-1.00R); close-exit if close < 505.27 (prior 20-session low, -1.81R); half-target 557.32 FILLED @ 557.32
+H half@3R    signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 516.34 (-1.00R); close-exit if close < 505.27 (prior 20-session low, -1.81R); half-target 570.98 FILLED @ 570.98
+D dd90       signal 2026-10-16 entry 2026-10-19 @ 530.00 ATR 5.46 R$=13.66 held 13 sessions; last close 579.09 (+3.59R) peak close 579.09 (+3.59R); resting stop 559.15 (+2.13R); close-exit if close < 505.27 (prior 20-session low, -1.81R); dd90 allowance 3.4%

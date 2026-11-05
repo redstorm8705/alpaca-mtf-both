@@ -1,7 +1,7 @@
 # KILL-PARTIAL-1104 — kill switch caches a partly-filled order as final (signed: Claude, 2026-11-04)
 
 Approval-ID: KILL-PARTIAL-1104
-Status: rev 2.1 — board 3/3 approve-with-changes (on rev 1; extra-call concerns removed by rev 2); GAI rev 2 re-review pending.
+Status: rev 2.2 — BGC aligned (board 3/3, GAI, Codex approve-with-changes, all folded). Awaiting owner approval. No code written.
 Covers: execution/risk_manager.py, tests/test_kill_switch_partial_fill.py (new)
 
 ## What happened (server logs, 2026-11-04)
@@ -50,6 +50,32 @@ do not apply to rev 2, which adds no broker call. Folded:
    summing above the order qty each degrade.
 4. Mismatch warnings carry the order qty, activity qty and cum_qty, rate-limited like `_log_kill_attr` (Peterffy P5).
 
+## Rev 2.2 — reviewer round 2 folded (2026-11-05, signed: Claude)
+
+| Voice | Rev 1 (re-read) | Rev 2 / 2.1 (cum_qty, no broker call) |
+|---|---|---|
+| Board (Taleb + Thorp masked-loss, Peterffy) | 3/3 approve-with-changes | extra-call concerns removed by rev 2 |
+| GAI | reject (re-read race) | approve-with-changes |
+| Codex (reviewer #2) | — (usage limit) | approve-with-changes: "no valid input where this design measures an active Day/Swing loss smaller than the activities supplied" |
+
+Folded:
+1. **Sequence validation, not just sum (Codex failing inputs `1/cum2, 2/cum3` and `2/cum3, 1/cum3`):** group the
+   pass's activities by order id; reject duplicate activity ids; sort by transaction time, activity id as tie-break;
+   require `cum_qty[i] == cum_qty[i-1] + qty[i]` and every `cum_qty <= order qty`. The first activity of the session may
+   start above its own qty only for an order that began filling on an earlier session (a GTC stop): the derived
+   starting base `cum_qty[0] - qty[0]` must be >= 0 and is logged; that case has its own test.
+2. **Whole pass or nothing (GAI 3):** any invalid activity anywhere → the pass returns ok=False and the kill switch
+   uses the equity fallback for that check; nothing is partly attributed (today's behaviour, kept).
+3. **Pagination complete (Codex):** the fills fetch (`reporting.pnl_ledger.fetch_all_fills`) must have exhausted its
+   pages; an unconfirmed last page → ok=False. Verified in the build by reading `fetch_all_fills` in full.
+4. **Mismatch log (Codex 15, GAI 2):** order id, symbol, side, order qty, activity id, activity qty, cum_qty, position
+   in the sequence, reason, and that the equity fallback was selected; rate-limited like `_log_kill_attr`.
+5. **Tests:** the 11-04 XOM sequence (exact, no degradation); both Codex malformed sequences; cum_qty above the order
+   qty (GAI 1); a duplicate activity id; a missing / non-numeric cum_qty; a cross-session GTC order; a protected QHM
+   order filling in two pieces (Taleb T2). All broker and activity calls mocked.
+
+**Alignment reached:** board, GAI and Codex on rev 2.2. Owner approval next; then build through the full gate.
+
 ## Required questions
 Q1: Keeps the 7% kill switch on its exact Day + Swing measure instead of a day-long fallback after any multi-piece fill; restores the owner-visible brake status. Not conservative: it removes a false degradation.
 Q2: No direct change. The fallback measure (whole account incl. QHM/F6) is different and broader than the exact Day + Swing measure: it can trip on QHM/F6 moves, or hide a Day/Swing loss when QHM/F6 is up. Removing a false degradation keeps the brake on the measure the owner approved.
@@ -65,7 +91,7 @@ Q11: No size/frequency/concurrency change by design; it touches the kill-switch 
 Q12: Touches the kill switch's input. Bounded: failure modes still degrade to the more sensitive measure; nothing widens the envelope.
 Q13: A failed re-read returns the unresolved sentinel → degrade (unchanged).
 Q14: No shadow — the fix acts live on the kill-switch measure; logging only records what live code did.
-Q15: The existing attribution log (`kill-switch attribution exact=…`) and snapshot record the result; the mismatch warning adds the activity cum_qty and order qty so a degradation can be traced.
+Q15: The existing attribution log (`kill-switch attribution exact=…`) and snapshot record the result; each mismatch warning carries order id, symbol, side, order qty, activity id, qty, cum_qty, sequence position, reason and the fallback selected.
 Q16: Proof: no mismatch warning for a multi-fill order and `attribution_exact: true` snapshots through the session; audit the first session with a partial fill.
 Q17: Read-only replay of 11-04 on the server against the real fills before ship.
 Q18: Yes — the "Daily brake status unavailable" banner had been read as a display issue; it was a real degradation.
