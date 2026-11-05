@@ -135,10 +135,10 @@ trend_night's next night (sizing record must carry `day_lots`).
 - `FOREVER6_ENABLED=False` remains binding. This approval authorizes the corrected prerequisite only; it does not
   authorize enabling F6 or placing an F6 order.
 
-**⏩ EXACT NEXT ACTION (OpenAI Codex):** Rafael waived Groq for the quota-blocked remainder, Google AI Studio
-approved the exact remaining files, and Rafael renewed `F6-CRASH-1028` approval. Record the approval,
-then commit, run CI, merge and deploy the prerequisite to OCI.
-After that, prepare the separate F6 enablement decision. Do not enable F6.
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** PR #811 merged and OCI returned `DEPLOY_OK:fd2f700` on
+2026-11-04 PT. All three services are active, startup reconciliation completed cleanly, and
+`FOREVER6_ENABLED=False` remains live. Prepare the separate F6 enablement decision; do not enable F6
+without that owner approval.
 
 ## ⏩ PARALLEL (2026-10-28, OpenAI Codex signed) — F6 full-path proof live, F6 OFF
 
