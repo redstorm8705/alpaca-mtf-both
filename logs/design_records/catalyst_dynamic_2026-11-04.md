@@ -1,9 +1,8 @@
 # CATALYST-DYNAMIC-1104 — whole-article news judgement for the bad-news entry block (signed: Claude, 2026-11-04)
 
 Approval-ID: CATALYST-DYNAMIC-1104
-Status: rev 3.1 — BGC aligned on Phase A (board 5/5, GAI, Codex); awaiting owner approval. No code written.
-Covers (planned): events/catalyst_engine.py, execution/entry_logic.py, execution/forever_hold_manager.py, the Swing / QHM /
-Day entry paths, tests/test_catalyst_*.py (new).
+Status: rev 3.1 — BGC aligned on Phase A (board 5/5, GAI, Codex). Awaiting the owner's re-approval with the real Covers list.
+Covers: events/catalyst_engine.py, execution/entry_logic.py, execution/swing_breakout_manager.py, execution/quarterly_hold_manager.py, execution/day_trade_manager.py, execution/mr_regime.py, execution/forever_hold_manager.py, tests/test_catalyst_attribution.py (new), tests/test_catalyst_admission.py (new)
 
 ## Owner direction (2026-11-04, verbatim)
 "This feels like it can fall into a static trap of headlines similar to the regime keyword trap we spent months trying to
@@ -214,3 +213,49 @@ Folded from round 3:
 
 **Alignment reached:** board, GAI and Codex on Phase A (Rev 3 / 3.1). Phase B stays behind its replay. Owner approval
 of the exact Phase A design comes next; then the build and the full code gate.
+
+## Required questions
+Q1: Data collection and edge: the gate blocked 4 entries since 07-19, all false (Nebius→MSFT ×3, Gorka/Iran→SPY), and watched only 10 fixed names; Phase A lifts false blocks, covers the names the bot trades and logs every admission decision for evaluation. It justifies itself on growth (fewer wrongly blocked trades), not preservation.
+Q2: Lifts the 4 known false-block kinds (more trades); wider coverage can add real blocks on single-company bad news (e.g. a RIVN-style offering). Net count is measured in the end-to-end replay and reported before commit.
+Q3: Yes — a confirmed offering or guidance cut changes entry expectancy. Simpler safe Phase A: single-company attribution, full coverage, item lists, logging; the whole-article reader waits for its replay.
+Q4: logs/design_records/news_venue_halt_v2_2026-11-03.md (market-wide halts, separate path, #825); the July guidance-cut patch logs/pending_patch_2026-07-14_catalyst_guidance.patch (not shipped; its phrases become fixtures); EARN-GAP-REVIEW-1104 reader pattern (Phase B reuses it); strategy/day_tier_mechanism_context.py empty catalyst fields (Phase A fills them via the admission call). No open PR touches events/catalyst_engine.py (origin/main 11-04).
+Q5: Inherited 48h / 720h windows stay in Phase A, labelled; each decision logs item age so Phase B can replace them with measured decay per event type. Watch set and coverage are data-driven (positions, scanner, universes).
+Q6: Exposed assumption: a headline keyword on any tagged symbol means bad news for that symbol. Next: role-aware whole-article reading (issuer / reporting company / debtor / defendant) plus the market's price reaction, validated by replay.
+Q7: One admission function for core MTF, Swing, QHM, Day, mean-reversion and F6 entries (today only core and F6, F6 off); fills the Day tier's empty catalyst fields. Never exits or sizing. Each path gets a logged allow / block / degraded / ambiguous result; a cache fault allows and alerts.
+Q8: Measured: crontab line 88 (no symbols); logs/catalyst_engine.log "watched: 10 names"; the 4 CATALYST BLOCK lines in logs/mtf_bot.log since 07-19; code lines in events/catalyst_engine.py (newest-wins L194, limit 25 L127/137, 72h L64/135).
+Q9: End-to-end replay 07-19 → 11-04 on the server's raw news: blocks lifted, new blocks, ambiguous items, per entry path. Expected: the 4 false blocks become allows; new blocks only on single-company offering/guidance/solvency/legal items. Wrong if a mentioned-only company is blocked, or blocked signals do no worse than admitted ones once Phase B data exists.
+Q10: No validated edge is held back; the current gate has a negative record.
+Q11: Changes frequency (which entries are admitted) — not size or concurrency. Board 5/5 reviewed incl. Taleb + Thorp (masked-loss). The verdict can only remove an entry, never add size or unblock.
+Q12: No change to stops, the 7% kill switch, never-mask-a-loss or paper=True. Data: T1 Alpaca news (same source); SEC for Phase B only, owner approval then.
+Q13: Missing / stale / truncated news → coverage marked incomplete → degraded allow + one alert; never a silent fresh state; a cache fault allows and alerts (today's never-mask behaviour).
+Q14: No shadow: Phase A acts live after the replay and gate; Phase B is not built until its replay passes, then ships live.
+Q15: Yes — catalyst_decision per admission call with signal id, path, symbol, decision, reason, every candidate item, the blocking item's id/URL/type/age/window, attribution, cache age, cursor, coverage and rule version; evidence persisted in state.
+Q16: Proof lines: one catalyst_decision per entry signal in trade_events.jsonl; the engine's per-run watched-count-by-source line. Post-live: join every first-session entry signal to exactly one decision and replay from the archived raw items.
+Q17: Run the real cron command on the server read-only first (state written to a scratch path), then the first session's decisions checked against signals.
+Q18: Yes — "co-tag false positives fixed 2026-07-14" was the code's own claim; the live log shows they were not; the design was reopened.
+Q19: Yes (entry admission) — owner approves this exact Rev 3.1 Phase A design before commit.
+Q20: Prompts neutralised (bias gate refused drafts with prior votes until stripped); server logs fully read for blocks; board 5 seats, GAI and Codex over 3 rounds.
+Q21: The watch set reads broker positions and pending orders: every broker call is mocked in tests and the broker client raises under test.
+Q22: Not fail-closed (fails open with an alert); the cron and watch-set reads are run read-only on the server before going live.
+Q23: Full-path replay ingestion → state → each admission path → decision event must pass before calling it ready.
+Q24: "watched: 10 names", the crontab line and the 4 false blocks were checked at source on the server this session.
+Q25: No market statistics claimed; event decay per type is to be measured from bars in Phase B.
+Q26: T1 Alpaca News /v1beta1/news, complete paging, 720h overlap reread; fallback: none needed for correctness — missing coverage = degraded allow + alert. Phase B adds SEC EDGAR (owner approval).
+Q27: data/state/catalyst_state.json, atomic tmp → fsync → os.replace (existing pattern); decisions append one JSON line each to logs/trade_events.jsonl.
+Q28: The cron worker (every 10 min, off the trading thread) ingests and writes state; run_cycle loads the state once per cycle (no network on the trading thread); each entry path calls the admission function after the signal and before the order; check_exits is untouched.
+Q29: High: the gate today removes good trades and misses the traded names; Phase A is a bounded correctness diff; ahead of Phase B model work.
+Q30: Missing: immutable raw-news archive, entity-role resolution, coverage completeness metrics, admission-to-order correlation. Underweighted: silent false negatives from truncated paging.
+Q31: No edge claim in Phase A; Phase B pre-registers two price-confirmation variants, counted in the multiple-testing adjustment, deflated Sharpe on articles after the model's training cutoff.
+Q32: Phase A replay uses created_at ≤ decision time and the historical watch set from logs; Phase B adds masking and a memorisation probe.
+Q33: Phase A no cost claim; Phase B replay uses live-fill costs and the opportunity cost of false blocks.
+Q34: Phase B measures blocked-vs-admitted abnormal returns vs SPY and sector.
+Q35: Phase B stratifies by VIX regime, trend/chop and event class with worst day.
+Q36: Not a capacity question at $25K; thin-name news is covered by paging.
+Q37: Four false blocks prove the correctness defect; edge power for Phase B is computed from the eligible-signal count before activation.
+Q38: Owner-defined rolling blocked-vs-admitted gap; non-negative → zero blocks and back to Phase A behaviour.
+Q39: Not a sizing feature; size is untouched.
+Q40: Protects correct admission. Machine check: every entry signal has exactly one decision; every block has a single-company item inside its window; the replay reproduces the logged decision.
+Q41: Build an event-sourced catalyst ledger with entity roles and provenance, then evaluate text and price reaction as separate versioned features.
+Q42: Raw Alpaca news payloads (archived with sha256), the bot's logged entry signals, Alpaca bars and fills.
+Q43: Point-in-time event extraction with entity resolution, immutable provenance, event-study labels, purged walk-forward validation, cost-adjusted counterfactuals.
+Q44: Codex and GAI reviews (3 rounds), cold second review of the code, the end-to-end replay on server data, and first-session reconciliation of decisions to orders.

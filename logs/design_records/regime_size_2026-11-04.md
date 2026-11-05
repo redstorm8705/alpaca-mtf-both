@@ -1,9 +1,8 @@
 # REGIME-SIZE-1104 — the core-tier size multipliers change no share counts (signed: Claude, 2026-11-04)
 
 Approval-ID: REGIME-SIZE-1104
-Status: rev 3.1 — BGC aligned (board 3/3, GAI, Codex); awaiting owner approval. No code written.
-Covers (planned): config.py, strategy/volatility_regime.py, strategy/run_cycle.py, execution/entry_logic.py, CLAUDE.md
-(Rule E text), tests/test_core_sizing_multiplier.py (new).
+Status: rev 3.6 — aligned: board 3/3 (rev 3.1) + data seats 3/3 (rev 3.5), GAI (rev 3.6), Codex (rev 3.1), Gro (rev 3.4). Awaiting the owner's re-approval with the real Covers list.
+Covers: data/schwab_quotes.py, config.py, strategy/volatility_regime.py, strategy/run_cycle.py, strategy/regime_state.py, events/macro_risk_index.py, execution/entry_logic.py, execution/exit_logic.py, research/regime_empirical.py, CLAUDE.md, tests/test_core_sizing_multiplier.py (new), tests/test_vix_source.py (new), tests/test_schwab_quotes.py
 
 ## Question that started it
 `CLAUDE.md` Rule E (2026-08-02) says the regime layer's up-multiplier `REGIME_LOW_VOL_SIZE_MULT` is "pinned to 1.0 until
@@ -158,3 +157,173 @@ Folded from round 3 (GAI):
 **Alignment reached:** board, GAI and Codex on the Rev 3 / 3.1 scope. Item 4 (making protective cuts bite) stays out of
 scope; all voices agree nothing activates before a factor-by-factor replay. Owner approval of the exact Rev 3.1 design
 comes next; then the build and the full code gate.
+
+## Rev 3.2 — the real VIX from Schwab (owner direction 2026-11-04 night)
+
+Owner: "We should be able to get the actual box reading now, not some composite reading."
+
+**Measured on the server 2026-11-04 night (read-only, one request):** the owner's Schwab Market Data app returns the
+CBOE indexes directly: `$VIX` last 16.61, `$VIX3M` 18.8, `$SPX` 7688.62, each `assetMainType INDEX`, `realtime: true`,
+with a `tradeTime` (epoch ms; the VIX print was 21:15 UTC = the 4:15 PM ET settlement). Index quotes carry no bid/ask,
+so the existing `nbbo()` path (which validates bid/ask and rejects `$` symbols) cannot read them.
+
+**Design change (adds `data/schwab_quotes.py` to Covers):**
+1. New read-only `index_last(symbols, max_age_s)` in `data/schwab_quotes.py`: one quotes request for `$`-prefixed index
+   symbols through the same token lock, request budget, kill switch, timeouts and redaction as `nbbo()`; returns
+   `{symbol: (last, trade_time_utc)}` only for finite last > 0 whose own `tradeTime` is within the caller's bound; a
+   reason per missing symbol; never raises.
+2. VIX source order for the regime layer: **(a) Schwab `$VIX`** (live CBOE value, as-of = its own tradeTime);
+   **(b) the existing T4 yfinance `^VIX`** if Schwab has no fresh value; **(c) neither → VIX rules not applied**
+   (`not_applied: vix_unavailable`), trading continues. **SPY realized volatility is never used as VIX** — it stays a
+   separate, labelled `spy_rvol_10d` field.
+3. Freshness is measured from the index's own trade time during regular hours (VIX prints every 15 s), bound
+   2 × `SCAN_INTERVAL_INTRADAY` (10 min) as in Rev 3.
+4. Every regime record logs `vix_source` (schwab / yfinance / none), value, trade time and age.
+5. Not in this diff (anti-silo follow-up, separate gated diff): the same `index_last` gives a live `$VIX3M`, which the MRI
+   and the composite-regime term structure currently read from yfinance (T4) — CLAUDE.md roadmap "real-time VIX3M
+   source investigation" is answered by this measurement.
+
+## Rev 3.3 — VIX-source review round 1 folded (2026-11-04 night, signed: Claude)
+
+Reviewer #2 this round was Gro (Codex at its usage limit until 11:02 PM PT). Points folded:
+1. **Index path is separate from the stock-quote path (both reviewers).** `index_last()` never calls `_validate()`,
+   `to_schwab()` or `_nbbo_impl()`; it has its own index check: `assetMainType == "INDEX"`, finite `lastPrice` > 0,
+   integer `tradeTime`. Index symbols are validated by a local pattern (`$` + letters/digits) inside `index_last` —
+   the global `_SYMBOL_RE` is NOT widened.
+2. **Freshness from the index's own tradeTime (GAI 4):** age = fetch time − tradeTime. Stale when age > bound. A
+   tradeTime more than the existing clock-skew tolerance in the future → stale with reason `future_trade_time` (Gro).
+3. **Shared lock and budget, bounded wait (GAI):** `index_last` takes the same token lock and request budget as
+   `nbbo()`, and the regime caller passes a deadline (as `nbbo_with_reasons` does) so the run_cycle thread never waits
+   past it; on a lock timeout → reason `LOCK_TIMEOUT` → yfinance fallback.
+4. **Source switches are visible (GAI):** one WARNING line when the VIX source changes (schwab → yfinance → none and
+   back), not one per cycle; every regime record carries `vix_source`, value, trade time and age.
+5. Not adopted: Gro's "fall back to a pure SPY realized-vol regime when both VIX sources are stale" — that is the
+   substitution the owner ruled out on 11-04 ("not some composite reading"); with no fresh VIX the VIX rules are not
+   applied and trading continues. Not adopted: raising the Schwab request budget — one extra request per 5-minute
+   cycle; the budget logic already pages on 429s.
+6. Tests (with the Rev 3 list): index payload with bid/ask None accepted; `realtime` false or last ≤ 0 rejected;
+   stale and future tradeTime rejected; lock timeout → yfinance; yfinance missing → not applied; source-switch WARNING
+   once; no equity `nbbo()` behaviour change (existing 37 Schwab tests stay green).
+
+## Rev 3.4 — VIX-source review round 2 (2026-11-04 night, signed: Claude)
+
+| Voice | VIX-source round 1 | Round 2 |
+|---|---|---|
+| GAI | reject (read index_last as going through nbbo/_validate; corrected: it is a separate path) | approve-with-changes |
+| Gro (reviewer #2 fallback; Codex at usage limit until 11:02 PM PT) | approve-with-changes | approve-with-changes |
+
+Folded from round 2:
+1. **No stale carry-over (GAI):** when neither Schwab nor yfinance has a fresh VIX, `_refresh` sets the VIX value to
+   None and the regime label to NORMAL with `vix_source = "none"`; the previous reading is never kept. The VIX score
+   gates and the VIX>35 overnight zero read None as "not applied".
+2. **`vix_source`, value, trade time and age are in `_build_result`** (GAI) so every consumer and every record carries
+   them.
+3. **`$` handling stays local to `index_last`** (Gro round 1); GAI's request to accept `$` is met by that local pattern,
+   without widening the shared `_SYMBOL_RE` used by the stock-quote path.
+4. Future tradeTime beyond the existing clock-skew tolerance and age over the bound are both rejected, measured
+   against `datetime.now(timezone.utc)` (GAI, Gro).
+5. The regime size multiplier is neutral (1.0) when `vix_source = "none"` (GAI nit; it changes no shares today).
+
+## Rev 3.5 — data-source board seats folded (2026-11-04 night, signed: Claude)
+
+Board (cold, McKinney + Katsuyama + Harris): 3/3 approve-with-changes. All agree the CBOE index value is the right VIX,
+SPY realized vol must never stand in for it, and freshness is measured from the index's own time stamp. Folded:
+
+1. **Read Schwab `$VIX` every cycle (M1).** The detector's 15-minute cache (`volatility_regime.py:45`
+   `_refresh_mins = 15`) would make a healthy value look stale under a 10-minute bound. The Schwab read runs every
+   cycle (one request per 5 min); the fallbacks keep their own caches. Freshness bound = 2 × `SCAN_INTERVAL_INTRADAY`.
+2. **Source order with as-of times on every tier (M2, K1):** Schwab `$VIX` (tradeTime) → FMP `^VIX` (T2, which the MRI
+   already reads at `macro_risk_index.py:624`, with its quote timestamp) → yfinance `^VIX` (T4, as-of from the chart
+   `regularMarketTime`) → unavailable. A value with no as-of time is unavailable, never "fresh". One shared VIX
+   provider serves the regime layer and the MRI, so the bot never holds two VIX numbers.
+3. **Every consumer and its behaviour when VIX is unavailable (M3):**
+   - Score gates (`run_cycle.py:1671-1676`): not applied (no +2/+3), trading continues.
+   - VIX > 35 overnight zero (`run_cycle.py:1812`): sticky for the day — if any fresh reading today was > 35 it stays
+     applied (tightens only, as Invariant #11's "stale → last good") (H3).
+   - **Stop width and stop-confirm counts** (`execute_entries` vix → `entry_logic.py:1004` stop multiplier, `:704`
+     confirm scans, `:1189` correlation cap; `check_exits` → `exit_logic.py:1465` breakeven buffer, `:1776`
+     stop-confirm): use the **last good VIX of the session**, else the prior session's close from the highest tier
+     with its as-of date, labelled `vix_basis=last_good|prior_close`. Never 0 — a missing feed must not narrow a stop.
+   - `regime_state.py` ledger: records the value with its source and as-of, or `unavailable`.
+4. **`index_last` has its own index path (M4, K2):** own shape check on `assetMainType == "INDEX"`, requested symbol
+   must equal the returned key, finite last > 0, integer tradeTime, `realtime` true (else reason `not_realtime`),
+   the existing `clock_ahead` correction applied to tradeTime; its own page kind; reasons returned per call only (never
+   the shared `_last_reasons`); field names pinned from the raw 11-04 response in a test fixture.
+5. **Plausibility (M5):** no fixed 150 cap. The VIX consumer rejects non-finite or ≤ 0 values only; anything else is
+   accepted and the cross-check (item 6) pages an anomaly. No "2× prior close" price-sanity rule on VIX.
+6. **Cross-check (K3):** the regime record logs Schwab VIX − FMP VIX (no extra fetch: the MRI already has FMP's);
+   an anomaly is paged when the difference falls outside its own rolling distribution (anomaly rule, not a gate).
+7. **Deadline and switch (H1, H2):** `index_last` runs through the `nbbo_with_reasons` worker-thread deadline
+   pattern; the deadline is derived as the Schwab client's own connect + read timeouts (4 s + 4 s), so the trading
+   thread waits at most that and then uses the fallback. A 401/403 kills the Schwab module for the day (same token);
+   a 400 / `invalidSymbols` for `$VIX` does not. New flag `SCHWAB_INDEX_ENABLED` (per-feature kill, Rule E).
+8. **Runtime probe (Q22/Q23 dispute):** before go-live, run the real `index_last` read-only on the server, including a
+   forced token refresh, and one pre-open probe (~8:00 ET) to see whether Schwab carries the overnight VIX session.
+9. **Anti-silo follow-ups (separate gated diffs):** MRI VIX + VIX3M term structure (`macro_risk_index.py:624, 692`,
+   today mixing live FMP VIX with yfinance's prior-day VIX3M), composite regime (`volatility_regime.py:244-282`),
+   F6 trigger (`f6_empirical_trigger.py:120`), overnight-capacity VIX scale (`overnight_capacity.py:268`),
+   options/0DTE, scanner and dashboard.
+
+Required-question answers corrected by the board: Q7 (full consumer list above), Q12 (stop width reads VIX —
+handled by item 3, never narrowed by a missing feed), Q13 (every tier now has an as-of time), Q17 (every-cycle
+Schwab read), Q26 (Schwab → FMP T2 → yfinance T4), Q28 (deadline = client timeouts, worker thread), Q5 (no new fixed
+cap), Q22/Q23 (real-function probe incl. token refresh).
+
+## Rev 3.6 — GAI round 3 on Rev 3.5 folded (2026-11-04 night, signed: Claude)
+
+GAI: approve-with-changes. Reviewer #2: Codex at its usage limit until 11:02 PM PT and Gro refuses the prompt size
+(HTTP 413); the Codex pass runs on the code diff at pre-ship. Folded:
+1. **Which value is used:** for the live VIX rules, the single highest-tier value that is fresh (never an average of
+   sources). When no tier is fresh, the stop-width basis is the value with the most recent as-of time across the
+   session's last good reading and every tier, labelled with its source and as-of.
+2. **The sticky VIX > 35 overnight zero is persisted** in the regime state file (atomic write) with its date, so a
+   mid-day restart keeps it.
+3. **`SCHWAB_INDEX_ENABLED` is checked before any Schwab call**; off or killed → straight to the FMP tier with no
+   connection attempt.
+4. Every entry's decision record carries `vix_value`, `vix_source`, `vix_as_of` and `vix_basis`.
+
+## Required questions
+Q1: Data/edge quality: the score gates and the entry record stop being contaminated by a non-VIX number (07-23: SPY rvol 11.5 read as VIX added +2 to the minimum score), and every entry logs which limit set its share count — the input edge evaluation needs. Not conservative: it removes a false brake.
+Q2: On normal days no change. On a VIX-outage day trades scoring between the base minimum and the false VIX-raised minimum now enter (more trades). With Schwab as primary VIX, outage days should become rarer. Deleting the inert 1.25 changes no count (it never changed shares).
+Q3: Yes — the field-mixing is a live correctness bug (1 of 101 days so far) and the sizing logs overstate what happens. Simpler: typed VIX vs SPY-rvol fields and deleting inert settings; nothing new is activated.
+Q4: logs/design_records/regime_state_phase2_design_2026-09-14.md and research/regime_empirical.py assumed the 1.25 acted (superseded on that point); logs/tb_audit_log.md:10201 field-mixing item (open since 09-14, this closes it); SCHWAB-QUOTES-1103 (#837/#838) provides the client; no open PR touches strategy/volatility_regime.py (checked origin/main 11-04).
+Q5: VIX cut-offs 14/25/30/35 and the +2/+3 score steps are inherited and unchanged here (static, flagged); freshness bound is derived from the scan interval; the deleted 1.25 and 12.0 are removed, not replaced. Forward pass (Q6) is to make the cut-offs rolling percentiles.
+Q6: Exposed assumption: one absolute VIX level means the same thing in every regime, and an intermediate multiplier equals real exposure. Next build: rolling-percentile VIX and VIX/VIX3M term-structure state from the live Schwab indexes, with per-factor outcome attribution from the new sizing records.
+Q7: VIX feeds the score gates, the VIX>35 overnight zero, the entry stop multiplier / confirm scans / correlation cap (entry_logic.py:1004, :704, :1189), the exit breakeven buffer and stop-confirm (exit_logic.py:1465, :1776), check_partial_exits and regime_state.py; follow-ups: MRI, composite regime, F6 trigger, overnight capacity, options. Rev 3.5 item 3 gives each its unavailable behaviour. Each consumer reads the typed field with its own freshness; unavailable = rule not applied, logged. Testable per consumer.
+Q8: Measured: 07-23 fallback in logs/mtf_bot.log ("Volatility regime: LOW_VOL (SPY realized vol (VIX fallback): 11.5)"); 1 of 101 days; SOFI 09-22 share count = int(74.83/17.24) = 4; Schwab $VIX 16.61 returned live 11-04. No performance claim is made.
+Q9: Replay of the logged core entries 07-29 → 09-25 (52) recomputing share counts and binding limits; the 101 logged regime days re-evaluated with typed fields (expected: only 07-23 changes — its +2 gate disappears). Wrong if any VIX rule reads a non-VIX or stale value after ship.
+Q10: No validated edge is held back; this is correctness and honest logging.
+Q11: Frequency can rise on outage days (score gate no longer falsely applied) → risk-path by frequency; board seats reviewed (3/3) incl. Thorp + Taleb (masked-loss). Size: no change (inert settings removed; the min-2 rescue untouched).
+Q12: Stop width reads VIX; Rev 3.5 keeps it on the last good / prior-close VIX when the live value is missing, so a feed failure can never narrow a stop. No change to the 7% kill switch, never-mask-a-loss or paper=True. Data tiers: VIX moves to the owner's Schwab feed (owner direction 11-04) with yfinance T4 kept as fallback; SPY rvol stays T1 Alpaca.
+Q13: Schwab missing/stale/killed → yfinance ^VIX; both missing/stale/implausible (non-finite, ≤0, >150) → VIX rules not applied, trading continues, logged; never a substitute series.
+Q14: No shadow: the VIX split acts live; the sizing record logs what live code did. research/regime_empirical.py stays offline research (not in the trading process).
+Q15: Yes — each entry's sizing record carries every modifier, dollar cap step, the value cap, the rescue conditions, Kelly clamp and binding limits; each regime record carries vix_source, value, trade time, age and the rule outcomes.
+Q16: Proof lines: `regime` record with `vix_source` on every cycle; `sizing` record on every core entry. Post-live: replay the first full session's records against raw logs and Schwab/yfinance values.
+Q17: Read-only server probe of index_last before ship; first session: every cycle has vix_source=schwab with age < 10 min during regular hours.
+Q18: Yes, reopened: the "sizing up 1.25x" / "half size" logs were taken as true for months; the design was re-examined against real share counts.
+Q19: Yes (score gate behaviour on outage days, regime source) — owner approves this exact Rev 3.2 design before commit.
+Q20: Prompts neutralised (prior votes stripped; the bias gate refused two drafts until they were); logs checked on the server; board, GAI, Codex reviewed (3 rounds); the Schwab index source was measured, not assumed.
+Q21: No broker calls added; tests mock Schwab and yfinance HTTP; no test reaches the broker.
+Q22: Not a fail-closed control (fails open: rule not applied). The Schwab index read was run read-only on the server 11-04.
+Q23: Full-path test: run_cycle with mocked Schwab fresh / stale / missing and yfinance fresh / missing, through the score gates and an entry's sizing record, before calling it ready.
+Q24: The claim "Schwab returns the CBOE VIX" was checked at source in this turn (HTTP 200, $VIX 16.61, realtime true).
+Q25: The VIX-vs-realized-vol relationship is not asserted (labelled hypothesis in the record); fallback frequency measured from 101 days of logs.
+Q26: VIX: Schwab Market Data `$VIX` (owner's account) → T2 FMP `^VIX` → T4 yfinance `^VIX`, each with its own as-of time → unavailable. SPY rvol: T1 Alpaca bars, separate field.
+Q27: Records append to logs/trade_events.jsonl (one JSON line per record via the existing trade logger); no new state file. Schwab token/budget files keep their existing atomic writes.
+Q28: strategy/volatility_regime.py reads VIX on the run_cycle thread before the score gates (strategy/run_cycle.py ~L1150-1680); index_last is bounded by the Schwab client timeouts (4 s connect / 4 s read) and the caller passes a deadline so check_exits is never delayed beyond it; entry_logic writes the sizing record after the final share count.
+Q29: High for a small diff: it fixes contaminated gate inputs and creates the per-entry sizing data every later sizing decision needs; below diagnosing why core-tier entries stopped after 09-25 (flagged separately).
+Q30: Missing professional pieces: typed, time-stamped market features with provenance; explicit constraint precedence in sizing; per-entry binding-limit attribution. Underweighted risk: interacting multipliers that look active but never bind.
+Q31: No edge claim; no variants tried for performance. Regime-based sizing stays inactive until a factor-by-factor replay with purged CV and deflated Sharpe.
+Q32: Replay uses only values logged at decision time and closed bars; the 52 entries are the bot's own logged decisions (no survivorship of today's universe).
+Q33: No cost claim; the sizing record adds requested / submitted / filled quantities so live cost can be measured.
+Q34: No return claim; not applicable to this correctness diff.
+Q35: HIGH_VOL never fired in 101 days; only one fallback day. No regime-performance claim is made.
+Q36: Not applicable (no new trades sized differently); index reads are one request per cycle.
+Q37: Not applicable to correctness; a 0.1R regime effect would need roughly 1,570 trades per arm (board LdP estimate, unverified derivation) vs 52 core entries now.
+Q38: Not an edge feature; reversal criterion: any VIX rule consuming a non-VIX or stale value.
+Q39: Size is unchanged and still comes from the Kelly path fed by Alpaca fills; inert fixed multipliers are removed.
+Q40: Protects gate-input integrity. Machine check: no regime record with a VIX rule applied where vix_source is none or age > bound; every core entry has a sizing record whose final shares equal the submitted quantity.
+Q41: Use the live index feed (done), add VIX3M term structure and rolling percentiles next, and attribute every entry to its binding limit.
+Q42: Raw: the live CBOE index prints from Schwab with their trade times, Alpaca bars, and the logged decision stacks — not the composite regime label.
+Q43: Point-in-time, provenance-tagged features; no silent substitution between different series; explicit precedence and invariants in sizing; replay against raw logs.
+Q44: Independent: Codex and GAI reviews (3 rounds), the cold second review on the code diff, and the first-session replay comparing each logged VIX value to the Schwab/yfinance raw value.
