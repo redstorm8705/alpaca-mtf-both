@@ -17,6 +17,8 @@ What this module does and does not do:
 Public API:
   nbbo(symbols, max_age_s) -> dict[str, Quote]   keyed by the ALPACA symbol
   last_reasons() -> dict[str, str]                fallback reason per symbol for the last nbbo() call
+  index_last_with_reasons(symbols, max_age_s, deadline_s) -> (dict[str, IndexQuote], dict[str, str])
+                                                  CBOE index values ($VIX, $VIX3M, ...) — REGIME-SIZE-1104 rev 3.6
   status() -> dict                                operator view (no secrets)
 
 Plain `requests`, no OAuth library. HTTP calls use the module attribute `requests.get/post`
@@ -54,6 +56,9 @@ ET = ZoneInfo("America/New_York")
 # ── Kill flag ─────────────────────────────────────────────────────────────────
 # False → nbbo() returns {} with reason "disabled" for every symbol; callers use their current source.
 SCHWAB_QUOTES_ENABLED = True
+# Per-feature kill for index values (REGIME-SIZE-1104 rev 3.5 item 7). False → index_last_with_reasons()
+# returns reason "disabled" for every symbol without any network call; the caller uses its next tier.
+SCHWAB_INDEX_ENABLED = True
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 _API = "https://api.schwabapi.com"
@@ -203,6 +208,19 @@ logger.addFilter(_RedactFilter())
 def _err(e: BaseException) -> str:
     """Error class + redacted message (for logs). Slack gets the class only."""
     return f"{type(e).__name__}: {redact(e)}"
+
+
+@dataclass(frozen=True)
+class IndexQuote:
+    """One validated CBOE index value (e.g. $VIX). Gate / regime input only — never a price of record."""
+    symbol: str            # Schwab index symbol, e.g. "$VIX"
+    last: float
+    trade_time: datetime   # tz-aware UTC (from Schwab tradeTime epoch ms) — the as-of time
+    fetch_time: datetime   # tz-aware UTC, when the response arrived
+    age_s: float           # fetch_time - trade_time, corrected for a lagging local clock
+    max_age_s: float       # caller's freshness bound used
+    latency_s: float
+    source: str = "schwab_index"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -957,9 +975,209 @@ def _nbbo_impl(syms: list, bounds: dict, reasons: dict) -> dict:
     return out
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Index values ($VIX, $VIX3M, $SPX) — REGIME-SIZE-1104 rev 3.3-3.6
+# ══════════════════════════════════════════════════════════════════════════════
+# Index quotes carry no bid/ask/size, so they never go through _shape_ok / _validate / to_schwab (the NBBO path
+# would reject them). Field names pinned from the live response read on the server 2026-11-04:
+# {"$VIX": {"symbol": "$VIX", "assetMainType": "INDEX", "realtime": true,
+#           "quote": {"lastPrice": 16.61, "tradeTime": 1793826901329, ...}}}
+_INDEX_RE = re.compile(r"^\$[A-Z0-9]{1,10}$")   # local to this path; the shared _SYMBOL_RE is unchanged
+
+
+def _num_or_none(v):
+    """float(v) for a finite int/float that is not a bool, else None."""
+    if not _is_num(v):
+        return None
+    f = float(v)
+    return f if math.isfinite(f) else None
+
+
+def index_last_with_reasons(symbols, max_age_s: dict, deadline_s=None):
+    """(values, reasons) for THIS call: {symbol: IndexQuote} for every requested index symbol whose own trade time
+    is within the caller's bound, and a reason for every other one. Reasons are per call (the shared
+    last_reasons() of nbbo() is never touched). With `deadline_s` the call runs in a worker thread and returns
+    ({}, {sym: "deadline"}) when it does not finish in time. Never raises."""
+    holder: dict = {}
+    try:
+        syms = [str(s).strip().upper() for s in list(symbols or [])]
+    except Exception as e:
+        logger.warning(f"SCHWAB index symbols unreadable: {_err(e)}")
+        return {}, {}
+
+    def _run():
+        reasons: dict = {}
+        try:
+            holder["quotes"] = _index_impl(syms, dict(max_age_s or {}), reasons)
+        except Exception as e:
+            logger.warning(f"SCHWAB index internal error: {_err(e)}")
+            holder["quotes"] = {}
+            for s in syms:
+                reasons.setdefault(s, "internal_error")
+        holder["reasons"] = reasons
+    if deadline_s is None:
+        _run()
+        return holder.get("quotes", {}), holder.get("reasons", {})
+    try:
+        limit = float(deadline_s)
+        if not math.isfinite(limit) or limit <= 0:
+            raise ValueError("deadline must be a positive finite number of seconds")
+        t = threading.Thread(target=_run, name="schwab-index", daemon=True)
+        t.start()
+        t.join(timeout=limit)
+    except Exception as e:
+        logger.warning(f"SCHWAB index deadline path failed: {_err(e)} — fallback")
+        return {}, {s: "internal_error" for s in syms}
+    if t.is_alive():
+        logger.warning(f"SCHWAB index exceeded the caller's {limit:.2f}s deadline — fallback")
+        return {}, {s: "deadline" for s in syms}
+    return holder.get("quotes", {}), holder.get("reasons", {})
+
+
+def _index_impl(syms: list, bounds: dict, reasons: dict) -> dict:
+    if not syms:
+        return {}
+    bounds = {str(k).strip().upper(): v for k, v in bounds.items()}
+    if not (SCHWAB_QUOTES_ENABLED and SCHWAB_INDEX_ENABLED):
+        return _all(syms, "disabled", reasons)
+    key, sec = _app_creds()
+    if not key or not sec:
+        return _all(syms, "no_key", reasons)
+    _remember_secret(sec)
+    killed = _kill_reason()
+    if killed:
+        return _all(syms, f"killed:{killed}", reasons)
+    wanted = []
+    for s in syms:
+        if _INDEX_RE.match(s):
+            if s not in wanted:
+                wanted.append(s)
+        else:
+            reasons[s] = "not_index_symbol"
+    if not wanted:
+        return {}
+
+    try:
+        with _FileLock():
+            access, reason = _ensure_token_locked()
+            if reason is None:
+                _allowed, reason = _take_budget_locked()
+    except _LockTimeout:
+        logger.warning("SCHWAB LOCK_TIMEOUT (index) — token/budget lock not acquired in time; fallback")
+        return _all(wanted, "LOCK_TIMEOUT", reasons)
+    if reason is not None:
+        return _all(wanted, reason, reasons)
+
+    connect, read = _timeouts()
+    t0 = time.monotonic()
+    try:
+        resp = requests.get(QUOTES_URL, params={"symbols": ",".join(wanted), "fields": "quote"},
+                            headers={"Authorization": f"Bearer {access}", "Accept": "application/json"},
+                            timeout=(connect, read))
+        code = int(resp.status_code)
+    except Exception as e:
+        latency = time.monotonic() - t0
+        if _is_timeout(e):
+            _on_timeout()
+        logger.warning(f"SCHWAB_INDEX_FETCH n={len(wanted)} latency={latency:.3f}s ok=0 error={_err(e)}")
+        return _all(wanted, "timeout" if _is_timeout(e) else "network_error", reasons)
+    latency = time.monotonic() - t0
+    fetch_time = datetime.now(timezone.utc)
+
+    try:
+        with _FileLock():
+            _update_budget_locked(getattr(resp, "headers", None), code)
+    except _LockTimeout:
+        logger.warning("SCHWAB LOCK_TIMEOUT on budget update (index) — header state not recorded")
+    except Exception as e:
+        logger.warning(f"SCHWAB budget update failed (index): {_err(e)}")
+
+    if code in (401, 403):
+        # same token as the NBBO path: an auth refusal disables the whole module for the day
+        _write_kill(f"index_http_{code}")
+        _page("index_auth", f"⚠️ Schwab index values: call refused (HTTP {code}). Schwab disabled for the rest of "
+                            f"today; the bot uses its next VIX source.")
+        logger.error(f"SCHWAB_INDEX_FETCH n={len(wanted)} latency={latency:.3f}s HTTP {code} — kill state written for today")
+        return _all(wanted, f"auth_{code}", reasons)
+    if code == 429:
+        logger.warning(f"SCHWAB_INDEX_FETCH n={len(wanted)} latency={latency:.3f}s HTTP 429 — fallback, counted")
+        return _all(wanted, "http_429", reasons)
+    if code != 200:   # incl. 400 / invalid symbols: never a kill
+        logger.warning(f"SCHWAB_INDEX_FETCH n={len(wanted)} latency={latency:.3f}s HTTP {code} — fallback")
+        return _all(wanted, f"http_{code}", reasons)
+    _record_latency(_latencies, latency)
+
+    try:
+        body = resp.json()
+    except Exception as e:
+        logger.warning(f"SCHWAB index body not JSON: {_err(e)}")
+        body = None
+    if not isinstance(body, dict):
+        _page("index_shape", "⚠️ Schwab index values: response shape unexpected (API change?). The bot uses its "
+                             "next VIX source.")
+        return _all(wanted, "shape", reasons)
+
+    parsed = []
+    for sym in wanted:
+        entry = body.get(sym)
+        if entry is None:
+            reasons[sym] = "MISSING_IN_RESPONSE"
+            continue
+        q = entry.get("quote") if isinstance(entry, dict) else None
+        if not isinstance(q, dict) or entry.get("symbol") != sym:
+            reasons[sym] = "shape"
+            _page("index_shape", "⚠️ Schwab index values: response shape unexpected (API change?). The bot uses "
+                                 "its next VIX source.")
+            continue
+        if entry.get("assetMainType") != "INDEX":
+            reasons[sym] = "not_index"
+            continue
+        if entry.get("realtime") is not True:
+            reasons[sym] = "not_realtime"
+            continue
+        last = _num_or_none(q.get("lastPrice"))
+        ttime = _num_or_none(q.get("tradeTime"))
+        if last is None or last <= 0:
+            reasons[sym] = "bad_last"
+            continue
+        if ttime is None:
+            reasons[sym] = "bad_timestamp"
+            continue
+        try:
+            trade_time = datetime.fromtimestamp(ttime / 1000.0, tz=timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            reasons[sym] = "bad_timestamp"
+            continue
+        parsed.append((sym, last, trade_time))
+    # Same clock rule as nbbo(): a value stamped after our fetch time means our clock lags Schwab by at least that
+    # much; every age is corrected by the largest such lead, so a lagging clock never makes a value look younger.
+    clock_ahead = max([0.0] + [(tt - fetch_time).total_seconds() for _s, _l, tt in parsed])
+    out: dict = {}
+    for sym, last, trade_time in parsed:
+        bound = _num_or_none(bounds.get(sym))
+        if bound is None or bound <= 0:
+            reasons[sym] = "no_bound"
+            continue
+        if clock_ahead > bound:
+            reasons[sym] = "clock_skew"
+            _page("clock_skew", f"⚠️ Schwab quotes: server clock behind Schwab by {clock_ahead:.1f}s, more than a "
+                                f"quote freshness bound; values unused until the clock is fixed (check chrony).")
+            continue
+        age = (fetch_time - trade_time).total_seconds() + clock_ahead
+        if age > bound:
+            reasons[sym] = "stale"
+            continue
+        out[sym] = IndexQuote(symbol=sym, last=last, trade_time=trade_time, fetch_time=fetch_time, age_s=age,
+                              max_age_s=bound, latency_s=latency)
+    logger.info(f"SCHWAB_INDEX_FETCH n={len(wanted)} latency={latency:.3f}s ok={len(out)} "
+                f"values={ {k: v.last for k, v in out.items()} } clock_ahead_s={clock_ahead:.3f} "
+                f"reasons={ {k: v for k, v in reasons.items() if k in wanted} }")
+    return out
+
+
 def status() -> dict:
     """Operator view. Contains no token, key or secret value."""
-    st: dict = {"enabled": SCHWAB_QUOTES_ENABLED}
+    st: dict = {"enabled": SCHWAB_QUOTES_ENABLED, "index_enabled": SCHWAB_INDEX_ENABLED}
     try:
         key, sec = _app_creds()
         st["has_key"] = bool(key and sec)
