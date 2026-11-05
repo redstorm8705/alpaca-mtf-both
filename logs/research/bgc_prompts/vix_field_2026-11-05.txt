@@ -1,0 +1,97 @@
+Frame: this is a PAPER trading account; goal $2.5K -> $25K; data collection and edge evaluation come first and the bot trades every day; the 7% daily kill switch (new entries only) is the only daily brake; no shadow periods. Safety envelope unchanged: a stop on every position, never-mask-a-loss, paper=True, data-source tiers, full code gate.
+
+Task: design review of the record below (no code exists yet). For each finding and each proposed change, state whether it is correct against the cited code (quote the line), name any concrete failing scenario (input -> wrong output), and give APPROVE / APPROVE-WITH-CHANGES / REJECT with the exact changes. Put theoretical concerns in a separate NITS section. Give your position on the open point in section 3 with reasons.
+
+# VIX-FIELD-1105 — one clean VIX for every VIX rule (rev 2, signed: Claude, 2026-11-05)
+
+Approval-ID: VIX-FIELD-1105
+Covers (planned): data/vix_provider.py (new), strategy/volatility_regime.py, strategy/run_cycle.py,
+execution/entry_logic.py, execution/exit_logic.py, execution/param_engine.py, execution/risk_manager.py,
+execution/tier_capital_allocator.py, events/macro_risk_index.py, strategy/regime_state.py, tests/test_vix_field.py (new)
+Origin: REGIME-SIZE-1104 finding 6; bug logged `logs/tb_audit_log.md:10201` (2026-09-14, open).
+
+
+## 1. Problem (code-traced; frequency unmeasured — server logs not readable from the cloud session)
+`RegimeDetector._refresh` (`strategy/volatility_regime.py:109-142`) puts the VIX level (`:119`) or, when the Yahoo
+fetch fails, SPY 10-day realized vol (`:128`) in one field, `realized_vol`. When both fail it keeps the old value with no
+age limit (`:125-127`). `_fetch_vix` (`:84-92`) takes the last non-null close of a 5-day range and never checks its
+timestamp, so yesterday's close can pass as today's VIX. A second VIX feed runs separately inside the macro risk gauge
+(`events/macro_risk_index.py:623-660`: FMP T2 `^VIX` → 30-min cache → yfinance T4), so one cycle can hold two VIX values.
+The fallback line is logged at INFO, which the midday audits do not sample, so fallback days have never been visible.
+
+Every reader of the mixed number treats it as VIX:
+
+| # | Reader | Rule |
+|---|---|---|
+| R1 | `run_cycle.py:1080`, `:1156` → `_last_vix` → `:1671-1676` | core min-score: VIX > 30 → +3, > 25 → +2, < 14 → +2 |
+| R2 | `exit_logic.py:874`, `:893-906` | stressed T2 partial at 0.85R and T3 at 50% when VIX > 30 |
+| R3 | `exit_logic.py:1465` → `param_engine.py:194-206` | break-even buffer 0.25 / 0.40 (≥ 20) / 0.50 (≥ 30) |
+| R4 | `exit_logic.py:1776` | stop-breach confirmation 1 bar (VIX ≥ 30) vs 3 bars |
+| R5 | `run_cycle.py:1808-1819` | BoD-4: VIX > 35 blocks new sizing while overnight positions are open |
+| R6 | `run_cycle.py:2217` → `execute_entries(vix=…)` → `entry_logic.py:704` → `param_engine.h4_entry_confirm_scans` | extra entry confirmation scans between VIX 22 and 35 |
+| R7 | same → `entry_logic.py:1004` → `param_engine.h2_stop_atr_mult` (`:240-278`) | entry stop widening above VIX 20 |
+| R8 | `risk_manager.py:1690-1709` | fallback stop widening `1 + (vix-20)*0.1`, cap 2.0, when R7 returns None |
+| R9 | `entry_logic.py:1189` | correlation gate 0.70, tightening at VIX ≥ 25 |
+| R10 | `tier_capital_allocator.py:1102-1127` (reads `regime_state.json`) | crash allocation needs `realized_vol >= 35` + SPY ≤ −8% vs 50-day + VIX/VIX3M ≥ 1.10 |
+| R11 | `volatility_regime.py:132-137` | regime label (LOW < 12 / HIGH > 25) |
+| Logs | `regime_state.py:76-92`, `:193`, `:257`; `portfolio_tracker.py:102`; `day_tier_mechanism_context.py:257`; `run_cycle.py:1767`; `main.py:730` | history, trade records, display |
+
+Mechanism example (illustrative numbers, not a logged day): Yahoo fails on a calm day with VIX 17 and SPY RV10 11 → the
+< 14 gate raises the core minimum score from 8 to 10 (fewer entries). On a stress day with VIX 36 and RV10 28 → stops
+wait 3 bars instead of 1 after a breach, the stressed partials and BoD-4 stay off, and the allocator stays "stressed"
+instead of "crash". [hypothesis — unverified: realized vol usually sits below VIX and lags it at a shock's onset.]
+
+## 2. Fix
+1. **One VIX provider** (`data/vix_provider.py`), shared by RegimeDetector and the macro risk gauge. Order:
+   1. FMP `^VIX` (T2);
+   2. Yahoo chart (T4), with the as-of time taken from the response's bar timestamp / `meta.regularMarketTime`, never
+      the fetch time;
+   3. the last VIX reading no more than one session old (age logged);
+   4. a VIX-equivalent from SPY data (item 3);
+   5. none.
+   A reading counts as fresh only if its own timestamp is in the current session (pre-open: the last close).
+2. **Separate fields, no silent redefinition.** `get_regime()` adds `vix`, `vix_asof`, `vol_source`
+   (`fmp` / `yahoo` / `last_close` / `equivalent` / `none`), `spy_rvol_10d`. `regime_state.json` / `regime_history.jsonl`
+   get the same fields plus a schema version; rows before the cut-over are tagged `mixed`. `realized_vol` keeps its old
+   behaviour until every reader has moved, then is retired.
+3. **VIX-equivalent (last resort, must earn its place in the replay).** Closed daily bars only, same feed for calibration
+   and live (`fetch_closed_bars`); calibration window excludes today; computed pre-market, cached atomically with its
+   as-of date and sample count. Candidates, chosen by replay error only: median VIX/RV10 ratio; log VIX on log RV10;
+   log VIX on log RV10 + today's SPY intraday realized vol from closed minute bars + |SPY return| (catches a shock's
+   first day, when RV10 lags). It publishes a point estimate and an error band. Kept only if its cut-off
+   misclassification rate beats a one-session-old VIX.
+4. **Every reader R1-R10 calls `vix_for_rules()`.** The allocator (R10) moves to the new `vix` field, so its 35 stays a
+   VIX cut-off (redefining the field as realized vol would silently change when "crash" allocation fires).
+5. **When there is no value**: readers keep receiving a float (0.0 sentinel plus `vol_source`), so the existing float
+   comparisons cannot raise; each site gets a test. Behaviour with no value: R1, R6, R9 base settings; R2, R3 normal
+   settings; R5 off; R7/R8 no widening; R10 cannot reach "crash"; R11 NORMAL with `fresh=False`. One Slack alert per
+   day and a WARNING log whenever the source is not a live feed.
+6. **Logging.** `VOL vix=… asof=… source=… spy_rvol10=… equiv=… band=… calib_asof=… n=…` at every refresh (WARNING when
+   not `fmp`/`yahoo`), and `vix` + `vol_source` on every gate and exit line R1-R10 and on the entry record.
+7. **No threshold changes.** 12 / 14 / 20 / 22 / 25 / 30 / 35 and the correlation thresholds stay as they are; replacing
+   them with percentiles of the clean series is the REGIME-SIZE / regime phase-2 item this unblocks.
+
+## 3. Open point (for GAI + Codex, then the owner)
+**R4 stop confirmation when the reading is the equivalent or none.** One view: lean protective — 1 bar when there is
+no value or the equivalent's band crosses 30, because waiting 2 extra bars lets a real loss run past the planned stop on
+exactly the day the feed is most likely to fail; it adds no trades and hides nothing. Other view: base setting (3
+bars) is acceptable. Check first whether the broker-side stop already sits at the planned stop (`exit_logic.py:81`,
+`:367`); if it does, R4 is moot either way.
+
+## 4. Risk path
+Changes entry counts (R1, R6, R9), stop width (R7, R8), exit timing (R2-R4), the overnight block (R5) and tier capital
+(R10) on outage days → risk-path: board with the masked-loss seat (done), GAI + Codex, owner approval of this exact
+design before code. It restores rules that silently switch off; it does not widen the envelope.
+
+## 5. Replay before shipping
+1. **Estimator study, every day not just outage days:** simulate an outage on each day of 2018-2026 VIX closes against
+   Alpaca SPY bars; report error overall, on VIX > 25 days, and on the first day of each VIX jump (2020, 2022, Aug 2024,
+   Apr 2025); compare with a one-session-old VIX. Fails if it misses the 30 / 35 cut-offs on most real > 30 days.
+2. **Real outage days:** raw server bot logs (INFO, not the midday audits): every RegimeDetector fallback line and every
+   macro-risk-gauge VIX fallback. For each day: which of R1-R10 flip, entries skipped or taken, and stop breaches with
+   the extra loss under 3 bars vs 1 (Alpaca fills).
+3. **Fault test on paper:** block the VIX hosts and confirm the logged source becomes `last_close` / `equivalent` / `none`.
+
+## 6. Tests
+Each source tier; stale Yahoo bar; both feeds down; first-day-of-shock estimate; every reader R1-R10 gets the expected
+value and never raises; the allocator's crash rule reads `vix`; history rows carry the schema version.

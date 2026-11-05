@@ -7,6 +7,7 @@ top to bottom. All files named below are on that branch.
    stripped, paper frame included):
    - `python3 .claude/preship/bgg_call.py logs/research/bgc_prompts/regime_size_2026-11-04.txt --add-questions`
    - `python3 .claude/preship/bgg_call.py logs/research/bgc_prompts/catalyst_dynamic_2026-11-04.txt --add-questions`
+   - `python3 .claude/preship/bgg_call.py logs/research/bgc_prompts/vix_field_2026-11-05.txt --add-questions` (VIX-FIELD-1105, the live bug: run this one first)
    Verify each load-bearing claim at source; counter-prompt any reject with evidence (no blind re-rolls). Record the
    verdicts in the two design records (`logs/design_records/regime_size_2026-11-04.md`,
    `logs/design_records/catalyst_dynamic_2026-11-04.md`), then bring the owner one-page approvals.
