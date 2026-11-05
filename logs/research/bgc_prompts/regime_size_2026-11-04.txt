@@ -1,0 +1,68 @@
+Frame: this is a PAPER trading account; goal $2.5K -> $25K; data collection and edge evaluation come first and the bot trades every day; the 7% daily kill switch (new entries only) is the only daily brake; no shadow periods. Safety envelope unchanged: a stop on every position, never-mask-a-loss, paper=True, data-source tiers, full code gate.
+
+Task: design review of the record below (no code exists yet). For each finding and each proposed change, state whether it is correct against the cited code (quote the line), name any concrete failing scenario (input -> wrong output), and give APPROVE / APPROVE-WITH-CHANGES / REJECT with the exact changes. Put theoretical concerns in a separate NITS section. Where the record lists open or split points, give your position with reasons.
+
+# REGIME-SIZE-1104 — the core-tier size multipliers change no share counts (signed: Claude, 2026-11-04)
+
+Approval-ID: REGIME-SIZE-1104
+
+Codex review owed (Gro only as fallback). No code written. Owner decides item 4.
+Covers (planned): config.py, strategy/volatility_regime.py, strategy/run_cycle.py, execution/entry_logic.py, CLAUDE.md
+(Rule E text), tests/test_core_sizing_multiplier.py (new).
+
+## Question that started it
+`CLAUDE.md` Rule E (2026-08-02) says the regime layer's up-multiplier `REGIME_LOW_VOL_SIZE_MULT` is "pinned to 1.0 until
+staged". `config.py:468` has 1.25 and has since the initial commit `0d951ce5` (2026-05-25); `git log -G` shows no value
+change. No staging record exists.
+
+## Findings (code-verified this session; how often each fires live is unmeasured — no server logs here)
+1. **No multiplier in the stack changes share counts, except 0.0.** `execution/entry_logic.py`: `raw_shares =
+   int(dollar_cap / stop_distance)` (L1365); `_sized = int(raw_shares * size_multiplier)` (L1371); `shares = max(1,
+   _sized)` (L1380-1381); then `max_shares_by_value = int(dollar_cap / entry_price)` and `shares = min(shares,
+   max_shares_by_value)` (L1397-1398). Because a stop distance is a small fraction of price, the value cap always wins
+   unless the multiplier is below about stop/price (~0.02-0.10). Example (seat LdP): price $100, stop $2.40, cap $1,000 →
+   10 shares at 0.5, 1.0 and 1.25. The trade count is also unchanged: `_can_afford_one` (L1372) ignores the multiplier.
+
+2. **So the 1.25 "size up" is inert — and so is every protective cut in the same product** (`strategy/run_cycle.py:1827`:
+   event × regime × time-of-day × SPY × session P&L × overnight), including HIGH_VOL 0.5. Only the 0.0 blockade
+   (L1374) acts. What really sizes positions acts on `dollar_cap` earlier: Kelly, TSMOM vol-scaling, FVG, VOTE-3,
+   earnings, plus the Kelly share clamp (L1438-1446) and VOTE-5 after.
+3. **The log lines overstate what happens.** "Low-vol grind … sizing up 1.25x" (`strategy/volatility_regime.py:151`)
+   and "HIGH VOL — half size, wider stops" describe changes that never reach the order. `stop_mult` (incl.
+   `REGIME_HIGH_VOL_STOP_MULT = 1.5`) is returned but read nowhere in `run_cycle.py` / `entry_logic.py`.
+4. **Rule E names the wrong layer.** The August mean-reversion layer `execution/mr_regime.py` has no size multiplier;
+   the constant belongs to the older `strategy/volatility_regime.py`.
+5. **The same VIX number drives opposite rules.** `run_cycle.py:1675`: VIX < 14 raises the minimum score by 2 ("low-vol
+   grind produces false breakouts") while the regime layer claims low vol means "size up". The size-up does nothing;
+   the score gate really cuts trades.
+6. **The open field-mixing bug reaches live gates.** `_realized_vol` holds VIX (`volatility_regime.py:119`) or, when the
+   VIX fetch fails, SPY 10-day realized vol (`:128`) (`logs/tb_audit_log.md:10201`, open since 2026-09-14). It feeds
+   `_main._last_vix` (`run_cycle.py:1156`), so on a fallback day the VIX >30 / >25 / <14 score gates (`:1671-1676`) and
+   the VIX > 35 overnight zero (`:1812`) read SPY realized vol against VIX cut-offs. [hypothesis — unverified:
+   realized vol usually sits below VIX, so fallback days trip the <14 cut more and the >30/>35 protections less.]
+7. A previous design pass (`logs/design_records/regime_state_phase2_design_2026-09-14.md`, `research/regime_empirical.py`
+   commit `00774fcf`) assumed the 1.25 had an effect.
+
+## Proposed changes 
+1. **Fix the field-mixing bug first** (separate `vix_level` and `spy_rvol_10d`; each gate reads the series it was set
+   on; a fallback is labelled). The only item here that changes live behaviour today. Risk-path by frequency (score
+   gates) → full gate + owner approval.
+2. **Make the logs honest:** correct the "sizing up" / "half size" notes, and log which term bound the final share count
+   on every entry.
+3. **The 1.25:** LdP sets it to 1.0 (no effect, honesty only); Thorp/Taleb delete the low-vol up-leg and its 12.0
+   threshold; Shaw leaves it until a data-derived regime state replaces it. All agree it changes no shares today and
+   should not be made to work (index-VIX up-sizing double-counts the per-name vol sizing already in TSMOM / VOTE-5).
+4. **Owner decision (risk-path): should the protective cuts (event, high-vol, time of day, session P&L, overnight) start
+   working?** That means applying the multiplier where it bites (to `dollar_cap` or the risk budget). It would cut sizes
+   on stressed days and can cut trades through the 1-share floor. Needs a replay of logged share counts with and without
+   the change first.
+5. **Correct Rule E**: name `strategy/volatility_regime.py`, state that the core-tier stacked multiplier does not change
+   shares, and drop "DOWN-sizing (protective)".
+6. Remove or wire `stop_mult`; retire or ship `research/regime_empirical.py` (log-only, against the no-shadow rule).
+7. Add a unit test that pins the share count as a function of the multiplier, so this cannot silently drift again.
+
+## Replay required before item 4 (or any regime-based size)
+About a year of Alpaca T1 bars and the logged decision stacks: recompute every core-tier entry's shares under (a) current
+code and (b) the multiplier applied before the value cap. Wrong if any logged entry shows the multiplier was the binding
+term today. For a regime-based edge claim (LdP): triple-barrier labels in R, purged CV, every variant counted and the
+Sharpe deflated; detecting a 0.1R difference needs about 1,570 trades per arm, so live data alone cannot settle it.

@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-11-04 (Claude: GAP-EXIT, EARN-GAP-REVIEW, LOSS-PM approved; builds queued) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-11-04 night (Claude: REGIME-SIZE + CATALYST-DYNAMIC BGC-aligned; ledger freeze found) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,7 +8,42 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-04, Claude signed) — 4 owner approvals; builds queued behind GAI/Codex quota
+## ⏩ LATEST (2026-11-04 night, Claude signed) — two designs aligned for owner approval; ledger frozen on GE
+
+Shipped / live today: earnings document reader (#836, inert), Schwab quotes (#837) + login fix (#838) — **Schwab
+verified live on the server 11-04 night: token present, auto-refresh works, SPY/AAPL/BRK.B NBBO returned** (nothing in
+the trading path reads it yet). Dashboard per-tier rows (#839). Rule-doc stale-text fix (CLAUDE.md, rules/*.md) in this
+PR. Master Brain: 26 superseded state/handoff sources deleted; project-state 11-04 + open queue added.
+
+**Owner actions waiting:**
+1. **Ledger frozen since 10:10 AM PT 11-04.** The manual sale of the last GE QHM share needs the owner's confirmation;
+   until then `run_ledger_sync` refuses to save ANY symbol (11 runs refused), so MSFT still shows Day 2 + Swing 1 after
+   the Day tier sold its 2 shares (dashboard: MSFT "UNATTRIBUTED"). Command (the confirmation expires in 2h and the sync
+   cron runs 6:00 AM-2:00 PM PT, so run it after 6 AM PT):
+   `ssh -t mtf-bot "cd mtf-bot && venv/bin/python3 confirm_ledger_heal.py GE qhm 0"`
+   Forward fix to design: one refused symbol should not freeze the whole ledger.
+2. Approvals ready (one page each in chat 11-04 night): **REGIME-SIZE-1104** (rev 3.1; board 3/3, GAI, Codex aligned)
+   and **CATALYST-DYNAMIC-1104** Phase A (rev 3.1; board 5/5, GAI, Codex aligned).
+3. One question: is the 11-02 night "ceo-level approval to ship items once the BGC has full alignment" a standing rule
+   or one night? Verbatim, 2026-11-02 10:45 PM PT: "Heading to bed but start the AWP process. I'm giving ceo-level
+   approval to ship items once the BGC has full alignment and approval on the outstanding items."
+
+**Waiting on reviewer quota (GAI 429, reset expected after midnight PT — unverified):** dashboard fix in worktree
+`scratchpad/dash2` branch `claude/dashboard-held-leg-1104` (held bracket stops read from closed orders — fixes MSFT Day
+false MISSING; Swing target now "no profit target (trend exit)", stop cell shows the trend-exit price) — cold-2nd PASS x2,
+tests 44 pass. Rerun `preship_audit.py` on it, then ship. The every-prompt reminder hook in `.claude/preship/` (text to BGC) is a gate file and needs the owner's approval before it changes; the edit is left unstaged in `scratchpad/notes`.
+
+Server facts gathered today (read-only): catalyst cron passes no symbols → watches 10 fixed names; all 4 CATALYST BLOCKs
+since 07-19 were false (Nebius→MSFT ×3, Gorka/Iran→SPY); VIX fallback fired 1 of 101 days (07-23, SPY rvol 11.5 read as
+VIX → false LOW_VOL and +2 score gate); no core-tier entry since 2026-09-25 (ORB gate blocks most cycles — diagnosis owed).
+Post-live recorded: #825 PASS, #823 PASS, #822 BUGS_OPEN. Next in the post-live queue: #817, #813, #809, #808, #801, then
+`logs/research/post_live_backlog_2026-11-04.md` (#753, #760, #583 ...).
+
+**Exact next action:** (1) after GAI quota resets, preship + ship the dashboard fix; (2) on the owner's
+APPROVE, build REGIME-SIZE-1104 rev 3.1 and CATALYST-DYNAMIC-1104 Phase A through the full gate; (3) post-live audits
+#817 onward; (4) core-tier "no entries since 09-25" diagnosis.
+
+## ⏩ EARLIER 11-04 (Claude signed) — 4 owner approvals; builds queued behind GAI/Codex quota
 
 Owner-approved designs (approvals recorded in the shared store):
 - GAP-EXIT-1029 rev 3.2 (`logs/design_records/gap_exit_2026-10-29.md` §3e-3f): non-earnings gap-downs wait (budget-floor

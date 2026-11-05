@@ -51,7 +51,8 @@ YOUR DECISION: APPROVE / REJECT / DEFER
 1. Never bring a proposal until ALL voices (board, Gro, GAI) are aligned. If there is a split, Claude resolves it via counter-prompting — Rafael never sees unresolved technical disagreements.
 2. Never use technical jargon in the summary. If a concept requires explanation, use a real stock (NVDA, AAPL, SPY) and a dollar amount.
 3. Never bring more than 3 proposals in one session unless Rafael asks for more.
-4. "Let's do it" or "Approved" = proceed immediately to the FINAL pre-ship Gro+GAI audit of the exact diff (see FINAL PRE-SHIP rule) → apply + commit + push + OCI `git pull --ff-only` + restart. No follow-up confirmation needed.
+4. "Let's do it" or "Approved" (recorded by `owner_approval_capture.py` as `APPROVE <ID>`; a reply without an ID counts
+   only when exactly one design is pending) = proceed immediately to the FINAL pre-ship Gro+GAI audit of the exact diff (see FINAL PRE-SHIP rule) → apply + commit + push + OCI `git pull --ff-only` + restart. No follow-up confirmation needed.
 5. Rafael's approval covers the exact proposal presented — not scope beyond it.
 
 ---
@@ -418,7 +419,8 @@ notebooklm use $(cat ~/.claude/master_brain_id)
 notebooklm ask "What are the key decisions, open items, user preferences, and recent fixes for the alpaca-mtf-bot project?"
 ```
 
-**At the end of every session:** Run `/wrap-up` automatically — do not wait for the user to ask. If the session involved any code changes, decisions, or bug fixes, run it before closing.
+**At the end of every session:** do NOT run `/wrap-up` unless Rafael asks (see WRAP-UP — NEVER AUTO-TRIGGER); offering
+it once is fine. The DURABLE SYNC RULE below carries state between sessions.
 
 Master Brain notebook ID: `0203f312-f285-4f20-8b8d-ca6fde65acf7`
 
@@ -487,7 +489,7 @@ Master Brain push. It runs on every trigger, so it must stay cheap.
 | **5b** | **Cold Second-Agent Logic Review** — spawn a cold Explore subagent with the exact diff + original intent. Agent explicitly checks: (1) logic inversion, (2) off-by-one/boundary errors, (3) missing conditions. Returns PASS/FAIL. Applies to ALL files, ALL patches. | No patch proposed until PASS returned |
 | **5c** | **code-review-graph Impact Analysis** — run `detect_changes_tool` + `get_impact_radius_tool` on every changed file. Show user which dependent functions are affected. | No patch proposed until complete |
 | **6** | **Propose Patch with Exact Diff** — show exact before/after for every changed line. Show static analysis results. Show second-agent verdict. Nothing written to disk yet. | No edit until user approves |
-| **7** | **User Approval** — user says "approved." This is the sole required gate. "Approved" implies confirmed — Claude writes immediately without asking a second confirmation question. | No edit without approval |
+| **7** | **User Approval** — user says "approved" (recorded as `APPROVE <ID>`; without an ID it counts only when exactly one design is pending). This is the sole required gate. "Approved" implies confirmed — Claude writes immediately without asking a second confirmation question. | No edit without approval |
 | **8** | **FINAL Gro + GAI pre-ship audit of the EXACT diff (mandatory — see FINAL PRE-SHIP Gro/GAI AUDIT rule below) → then Apply, Commit + Push, OCI `git pull --ff-only`, Restart** — git single-channel deploy; NEVER rsync tracked files (rsync dirties OCI's git tree and aborts the next auto_deploy pull) | No ship until BOTH Gro + GAI APPROVE the final diff |
 | **9** | **Post-Patch Verification** — re-run audit points 1, 2, 4, 5. Run mypy + ruff again on patched file. Confirm no regressions. Update `logs/tb_audit_log.md`. | Item not closed until verified |
 
@@ -785,6 +787,10 @@ Codex AND Gro. `codex exec` sessions are never read as owner approvals. Every ru
 voice now means reviewer #2 (Codex, or Gro on fallback); the marker's `reviewer_b` field records which. The
 same-prompt rule applies to GAI and reviewer #2. CI stays GAI-only (three samples, two APPROVEs).
 
+**How reviewers are called (current):** only through `.claude/preship/bgg_call.py` (design reviews) or
+`.claude/preship/preship_audit.py` (pre-ship). `owner_approval_gate.py` blocks direct calls, because those two scripts
+scan the exact prompt sent. The `curl` blocks below are historical reference, not the procedure.
+
 **Browser automation is CONFIRMED BROKEN** — Groq and AI Studio are React/Angular SPAs. Background tabs don't render DOM content; Chrome extension security blocks `innerHTML`/`TreeWalker` access. Direct API is the ONLY reliable approach.
 
 **Groq (Gro):**
@@ -805,7 +811,8 @@ curl "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:g
   -H "Content-Type: application/json" \
   -d '{"contents":[{"parts":[{"text":"<GAI_PERSONA>\n\n<PROMPT>"}]}],"generationConfig":{"maxOutputTokens":8192}}'
 ```
-- Model: `gemini-2.5-flash` (NOT gemini-1.5-pro-latest → 404; NOT gemini-2.5-pro → MAX_TOKENS at 4096)
+- Model: the ladder in `gai_client.py` (3.x models; it records retired ids). The `gemini-2.5-flash` URL above is
+  historical — do not hardcode a model id.
 - `maxOutputTokens: 8192` is mandatory — flash hits STOP at ~7031 chars (complete response); 4096 truncates mid-answer
 - GAI persona: *"You are Head of Quant Engineering at a systematic hedge fund. Responsible for correctness of all P&L attribution, risk accounting, and counter-state invariants. Your audit is the last gate before code goes live. Find what others missed."*
 
@@ -1218,7 +1225,8 @@ RC bug classes recurred across 8+ sessions because the board could not catch its
 
 **Hotspot files requiring external audit before every patch:**
 - `execution/portfolio_tracker.py` (patched every session since 2026-04-18)
-- `main.py` (866 lines post-decomposition — Read tool in ≤300-line chunks; no Explore subagent needed)
+- `main.py` (1,201 lines as of 2026-11-04 — over the 1,000-line threshold, so the Full Read Gate requires an Explore
+  subagent returning verbatim content)
 - `execution/broker.py`
 
 ### 3-Point AI Summary — Mandatory Format for Gro/GAI Audit Review
@@ -1341,6 +1349,9 @@ table below MUST be updated in the SAME TURN. Updating the JSON file without upd
 a protocol violation. This is the authoritative live view for scheduling debug sessions.
 
 #### Live RC Counts (as of 2026-06-15 S59 autonomous overnight)
+
+> **STALE (noted 2026-11-04):** this table and the hotspot table below have not been refreshed since 2026-06-15.
+> `logs/bug_counter.json` and `logs/tb_audit_log.md` are the current record.
 
 | RC | Class | Count | Status | Top File(s) |
 |----|-------|-------|--------|-------------|
@@ -1515,7 +1526,11 @@ the board output in plain language without losing the directional conclusion.
 - **Bot type:** Alpaca Markets paper trading bot (MTF confluence scoring)
 - **Account:** Paper account (~$2.5K)
 - **Scoring:** 12-point confluence system (live), 16-point system (log only, validation)
-- **Profile active:** paper (INTRADAY_STOP_ATR_MULT=1.25, TARGET=2.5x, MIN_SCORE=9/12)
+- **Profile active:** paper (`--profile paper`; config.py:316-330: INTRADAY_STOP_ATR_MULT=1.20, TARGET=2.5x,
+  MIN_LONG_SCORE / MIN_SHORT_SCORE = 8)
+- **Tiers:** core MTF (intraday), Day (`execution/day_trade_manager.py`), Swing (`execution/swing_breakout_manager.py`,
+  trend_night `execution/swing_overnight.py`), QHM (`execution/quarterly_hold_manager.py`), F6
+  (`execution/forever_hold_manager.py`, OFF until the owner enables it). `handoff.md` holds the current state of each.
 - **MRI active:** MacroRiskIndex — 8-component cross-asset score, 0–100, 5 levels
 - **Macro Regime Detector:** 1–2 year structural signal (RSP/SPY, yield curve, HYG/LQD, IWM/SPY,
   XLY/XLP, SPY/TLT). Background-only. Does not gate entries — provides structural context for MRI.
@@ -1525,6 +1540,10 @@ the board output in plain language without losing the directional conclusion.
 |-----|-------------|-----|-----------|
 | Alpaca Data | `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` | T1 bar and quote data | Unlimited (paper plan) |
 | FMP | `FMP_API_KEY` | T2 fundamentals, earnings, economic calendar | 250 calls/day free |
+| Finnhub | `FINNHUB_API_KEY` | earnings dates (primary; FMP fallback) — #808 | free tier |
+| SEC EDGAR | none (`SEC_USER_AGENT` optional) | earnings press releases (EX-99.1) — EARN-GAP-REVIEW-1104, #836 | free |
+| Alpha Vantage | `ALPHAVANTAGE_API_KEY` | earnings-call transcripts — EARN-GAP-REVIEW-1104, #836 | free tier |
+| Schwab Market Data | `SCHWAB_APP_KEY` / `SCHWAB_APP_SECRET` | read-only NBBO quotes — SCHWAB-QUOTES-1103, #837/#838 | owner's account |
 
 **Approved Reference Data (no API key):**
 - TraderMonty breadth CSV — market breadth, sector uptrend ratios
@@ -1542,13 +1561,16 @@ the board output in plain language without losing the directional conclusion.
 1. **SPY 5-min bar-over-bar is the SOLE entry gate.** MRI and Macro Regime Detector only adjust
    quality bar and size floor.
 2. **Keywords are display-only.** CAUTION/MONITOR = zero size impact. Only HALT = 0.0x.
+   Exception (owner go 2026-07-14): the per-name catalyst gate (`events/catalyst_engine.py`, `CATALYST_GATE_ENABLED`)
+   blocks new entries on its classified negative catalysts. Its redesign is CATALYST-DYNAMIC-1104.
 3. **PDT abolished (SEC permanent rule change).** All PDT enforcement code deleted from codebase (S63 sweep).
    GTC stops submit for ALL overnight positions unconditionally.
 4. **Bar staleness uses CLOSE-based age.** `_bar_ts_et + timedelta(minutes=15)` — do not revert to open-based.
 5. **Entry price = Alpaca Data real-time last trade + bar close fallback.** Replaces yfinance fast_info.
    Source logged with every entry event in `trade_events.jsonl`.
 6. **Kill switch is 7% for paper** (board vote 2026-04-22, 25-1; confirmed S50 board 13-0).
-   config.py paper profile L243 is the single source of truth. Tiered upgrade path:
+   config.py paper profile `MAX_DAILY_LOSS_PCT` (config.py:320) is the single source of truth. Since KILL-ATTR-1023
+   (#753) the 7% counts Day + Swing losses only (QHM / F6 excluded; `execution/risk_manager.py`). Tiered upgrade path:
    $10K→10% | $20K→12% | $25K→15% — each requires a board vote.
    BoD-3 main.py override was dead code (condition never fired) and has been removed (S50).
 7. **Bucket A (TQQQ/SQQQ/TSLL) exemption from safe_close_all:** Applies ONLY on routine news halts
@@ -1582,8 +1604,8 @@ the board output in plain language without losing the directional conclusion.
     (commit `7e5c983`, board 4-0 + Gro + GAI, replacing the prior discrete step function —
     config constants `VIX_STOP_WIDEN_THRESHOLD_1/2`/`MULT_1/2` are retained only as the
     anchor values cited above, not as live thresholds in this function). The after-hours
-    GTC overnight-stop mirror in `strategy/run_cycle.py` uses the identical formula
-    (parity restored 2026-06-28 AWP audit — see Future Roadmap Log "Completed" section).
+    GTC overnight-stop mirror in `strategy/run_cycle.py` was REMOVED by P0-5 (#399, 2026-09-26, one stop for sizing
+    and enforcement); the overnight stop is the position's own stop.
 13. **Trail stop activation at T1 is PERMANENT INFRASTRUCTURE — not forbidden.** (Board + Gro + GAI
     unanimous consensus 2026-06-24.) Enabling trail activation at any tranche threshold (T1, T2, T3)
     is legitimate partial-exit mechanics. Any autonomous board agent classifying trail activation as

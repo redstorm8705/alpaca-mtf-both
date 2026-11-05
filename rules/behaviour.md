@@ -14,8 +14,8 @@ is a failure. GATE: adversarial self-review rejects unverified-cause claims; per
 `record_evidence` before/after marker (BUILDING; mandatory-manual until then).
 _Source: CLAUDE.md §NO-GUESS MANDATE; memory feedback_no_guess_mandate._
 
-## B02 — Verify agent/board/Gro/GAI claims at source before relaying
-Board seats, Gro, and GAI produce confident, correctly-line-cited claims that are FALSE. Verify any load-bearing
+## B02 — Verify agent/board/GAI/reviewer #2 claims at source before relaying
+Board seats, GAI and reviewer #2 (Codex, or Gro on fallback) produce confident, correctly-line-cited claims that are FALSE. Verify any load-bearing
 claim at source before repeating it — unconditionally for anything about live money, risk, or a safety control.
 Strength order: execute it > a targeted static rule > read surrounding state (flags/callers/config) > read the
 cited line. A cited line proves the agent looked, not that its conclusion follows.
