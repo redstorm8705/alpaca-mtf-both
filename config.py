@@ -746,7 +746,7 @@ MIN_POSITION_VALUE_ADVISORY  = 200   # Advisory floor for non-fractionable symbo
 # symbols.json present + NVDA/GOOGL show a qhm floor), AND (2) the QHM manager's own
 # close passes tier="qhm" — else a genuinely-protected symbol reads floor=0 and the
 # guard is a silent no-op. This is the one-line kill switch for the guard itself.
-OWNERSHIP_GUARD_ENFORCE = False
+OWNERSHIP_GUARD_ENFORCE = True   # LIVE paper prerequisite; F6 remains disabled pending separate approval
 
 
 # ─── DAY-TRADE TIER (Track A GEX-core) — Rafael growth engine ─────────────────

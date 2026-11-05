@@ -1,7 +1,7 @@
 {
   "file": "tests/test_stop_protection.py",
   "verdict": "PASS",
-  "sha256": "7248f54f444f498cc860025a544c2be6b65afafbbceb65387a9742b1daaeca56",
-  "ts": 1791846918.041845,
-  "claims": "The regression suite covers verified QHM/F6 co-holds, malformed and negative claims, malformed order quantities, unknown owners, Swing stop-plus-limit overflow, foreign reservation overflow, and legacy behavior while enforcement is disabled."
+  "sha256": "73c1edaa7c57f27a4130efb7d25312f0211337903c652ca208e2cd45bb1d1d95",
+  "ts": 1793906210.15397,
+  "claims": "F6-GUARD-1104 activates exact ownership enforcement while F6 remains disabled; protected or ambiguous QHM/F6 reductions fail closed, proven non-protected limit exits survive transient position reads, kill attribution becomes exact only after explicit reconciliation, and the F6-SIM-1023 compatibility fixture restores the source-bound no-network full-path proof after PR #848."
 }

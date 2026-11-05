@@ -1320,6 +1320,7 @@ def _run_simulation_inner(
             "symbol": "NVDA",
             "side": "buy",
             "qty": "10",
+            "cum_qty": "10",
             "price": "100.0",
             "transaction_time": today,
         }
@@ -1341,7 +1342,8 @@ def _run_simulation_inner(
         risk_manager._intraday_order_tier_cache.update(pt_date="", tiers={})
         with (
             mock.patch(
-                "reporting.pnl_ledger.fetch_all_fills", lambda: [day_fill]
+                "reporting.pnl_ledger.fetch_all_fills",
+                lambda *, strict=False: [day_fill],
             ),
             mock.patch.object(
                 risk_manager.requests, "get", lambda *_args, **_kwargs: response

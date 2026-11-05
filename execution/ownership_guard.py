@@ -240,6 +240,26 @@ def _load_bak_ledger() -> dict:
     return _empty_ledger()
 
 
+def _load_bak_ledger_strict() -> dict:
+    """Return a validated backup ledger or raise ``LedgerError``.
+
+    The ordinary fallback intentionally treats a missing/corrupt backup as empty
+    for the historical fail-open keystone.  A caller that also lacks a live
+    broker quantity cannot make that inference safely: with both current state
+    and broker net unknown, only a readable backup proves that a symbol is
+    non-protected.  This strict variant is therefore used only by that
+    double-unknown boundary.
+    """
+    if not _LEDGER_BAK_PATH.exists():
+        raise LedgerError("backup ledger is absent")
+    try:
+        return convert_ledger(loads_strict(_LEDGER_BAK_PATH.read_bytes()), 1)
+    except LedgerError:
+        raise
+    except Exception as exc:
+        raise LedgerError(f"backup ledger unreadable/corrupt: {exc}") from exc
+
+
 def load_canonical_ledger() -> dict:
     """Load a fresh canonical schema-v2 view without changing durable state."""
     if not _LEDGER_PATH.exists():
@@ -706,7 +726,24 @@ def check_never_sell_floor(
         # the .bak → fail OPEN (blocking a legitimate intraday exit is the worse error —
         # keystone). Protected → continue below, where the live-Alpaca reconciliation
         # (ledger_sum vs alpaca_net + the drift field) fails CLOSED on any stale drift.
-        _bak = _load_bak_ledger()
+        try:
+            _bak = (
+                _load_bak_ledger_strict()
+                if alpaca_net_qty is None
+                else _load_bak_ledger()
+            )
+        except LedgerError as _bak_error:
+            page_floor_blind(
+                symbol,
+                tier,
+                "ledger_unreadable",
+                f"current and backup ledger unresolved while Alpaca net unavailable: {_bak_error}",
+            )
+            return GuardResult(
+                "REJECT",
+                0.0,
+                "current and backup ledger unresolved with Alpaca net unavailable — fail closed",
+            )
         try:
             _bak_floor = protected_floor(_bak, symbol)
         except Exception as _pe:

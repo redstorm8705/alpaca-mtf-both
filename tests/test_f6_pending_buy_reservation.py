@@ -495,6 +495,7 @@ def test_f6_market_submit_accepts_only_parseable_alpaca_reject_envelope(monkeypa
 def test_existing_protection_sentinel_does_not_leak_reducer_admission(monkeypatch):
     import config
     monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
+    monkeypatch.setattr(config, "OWNERSHIP_GUARD_ENFORCE", False)
     monkeypatch.setattr(
         broker,
         "_get_trading_client",
