@@ -96,6 +96,37 @@ and the owner direction rules out static keyword lists. Its phrases become regre
 entries if the outage fallback is kept). `logs/pending_patch_2026-07-14_catalyst_guidance.patch` and its approval doc
 move to `logs/archive/pending_2026/` once the owner closes it.
 
+## 6b. Phase A spec — correctness fixes, no model (added 2026-11-05; ships as its own diff before Phase B)
+Every item is in `events/catalyst_engine.py` unless noted. No new decision thresholds: the 48h / 720h windows and the
+four blocking types stay as they are (grandfathered).
+1. **No more "newest wins".** `get_active_catalysts` keeps, per symbol, every non-neutral item inside its type's window
+   (list, newest first), not just the first one found (`:175-196`). `blocking_catalyst_for` returns the newest item
+   whose type blocks and whose age is inside that type's window, so a later upgrade or downgrade can no longer erase
+   an offering. Entry callers (`execution/entry_logic.py:535`, `execution/forever_hold_manager.py:559-574`) keep the same
+   call; the return value stays one catalyst dict or None.
+2. **Windows that can actually be reached.** Blocking items are persisted in `data/state/catalyst_state.json` keyed by
+   the Alpaca article id and pruned by their own type window, so a solvency or legal item stays active for its 720h even
+   though each run only fetches recent news. (Fetching 30 days every 10 minutes is the alternative; persisting is
+   cheaper and keeps the fetch small.) Atomic write as today (`:269-282`).
+3. **No silent cap.** Fetch per symbol (or in small groups) and follow `next_page_token` until the lookback is covered
+   (the paging pattern already used in `data/option_bars.py:55-80`; confirm the news endpoint returns the token at build
+   time). Log, per run: symbols, articles fetched, pages, oldest `created_at` reached, and any symbol where paging
+   stopped early.
+4. **Watch every name the bot can enter.** Watch set = `config.WATCHLIST` + `config.DAY_TIER_UNIVERSE` +
+   `config.FOREVER6_UNIVERSE` + QHM holds and candidates + the Swing breakout ranked list + every broker position. The
+   cron calls `main()` with that set, or `_default_watch()` builds it (`:285-296`). Log the count and any configured name
+   that got no fetch.
+5. **Decision record.** Every block writes a `catalyst_decision` event to `logs/trade_events.jsonl`: symbol, tier,
+   article id, URL, headline, type, age, window, cache age, action. The `CATALYST BLOCK` log line gains the article id.
+6. **Stale text.** Remove "DARK" / `CATALYST_GATE_ENABLED = False` from the docstring and `main()` output (`:16-19`,
+   `:305`, `:315`); correct `handoff.md:4282` (`data/state/catalyst_state.json`, not `logs/`).
+
+Effect: fixes 1, 2 and 4 can only add blocks (fewer trades), and fix 3 adds recall, so the net trade-count change must
+be measured and the owner approves it (Q2). Replay before shipping: over 2026-07-14 to now, re-run the gate on archived
+news for every logged entry signal and list each entry the new rules would have blocked, with its outcome from Alpaca
+fills; and list today's blocks that the new rules keep or drop. Wiring the block into Swing, QHM and Day entries is a
+separate step A2 (also fewer trades, owner approval).
+
 ## 7. Next steps
 1. GAI + Codex design review of this record (same prompt, Mac session; Gro only if Codex is unavailable), including the two split points in §4.
 2. Read the OCI crontab line for `catalyst_engine.py` and `logs/catalyst_engine.log` to confirm defect 4 and measure the
