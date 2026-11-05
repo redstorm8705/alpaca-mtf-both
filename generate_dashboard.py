@@ -635,6 +635,8 @@ def _swing_trend_level(sym: str, today) -> float | None:
     if level is not None:
         _TREND_LEVEL_CACHE.clear() if len(_TREND_LEVEL_CACHE) > 200 else None
         _TREND_LEVEL_CACHE[key] = level
+        logger.info("swing trend exit level %s %s: price near close < $%.2f (prior 20-session low) "
+                    "[change=dashboard-held-leg-1104]", key[0], key[1], level)
     return level
 
 
