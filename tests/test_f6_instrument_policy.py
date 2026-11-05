@@ -4,7 +4,7 @@ Signed: OpenAI Codex, 2026-10-15.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest import mock
 
 import config
@@ -21,6 +21,26 @@ from strategy import day_tier_leverage
 
 def _entry_clock():
     return datetime(2026, 10, 16, 17, 0, tzinfo=f6.ET)
+
+
+def _admit_crash_evidence(manager: f6.ForeverHoldManager) -> dict:
+    """Keep product-policy tests focused past the independent crash gate."""
+    today = _entry_clock().date()
+    prior_sessions = []
+    candidate = today - timedelta(days=1)
+    while len(prior_sessions) < 5:
+        if candidate.weekday() < 5:
+            prior_sessions.append(candidate.isoformat())
+        candidate -= timedelta(days=1)
+    prior_sessions.reverse()
+    evidence = {
+        "tier": "A", "max_names": 2, "cash_fraction": 0.10,
+        "bypass_monthly_cap": False,
+        "as_of_date": today.isoformat(),
+        "prior_session_dates": prior_sessions,
+    }
+    manager._trigger_evidence_is_current = lambda _evidence: True
+    return evidence
 
 
 def test_current_f6_universe_has_no_leveraged_etf() -> None:
@@ -165,6 +185,7 @@ def test_execute_starter_blocks_leveraged_symbol_before_broker(monkeypatch) -> N
         [{"symbol": "NVDL", "price": 50.0, "why": "invalid external plan"}],
         budget=100.0,
         settled_cash=1_000.0,
+        trigger_evidence=_admit_crash_evidence(manager),
     )
 
     assert result["placed"] == []
@@ -187,6 +208,7 @@ def test_execute_starter_blocks_unleveraged_etf_before_broker(monkeypatch) -> No
         [{"symbol": "DRAM", "price": 40.0, "why": "invalid external plan"}],
         budget=100.0,
         settled_cash=1_000.0,
+        trigger_evidence=_admit_crash_evidence(manager),
     )
 
     assert result["placed"] == []
@@ -212,6 +234,7 @@ def test_execute_starter_blocks_live_asset_contradiction_before_reservation(
         [{"symbol": "NVDA", "price": 50.0, "why": "contradictory live asset"}],
         budget=100.0,
         settled_cash=1_000.0,
+        trigger_evidence=_admit_crash_evidence(manager),
     )
 
     assert result["placed"] == []
@@ -232,6 +255,7 @@ def test_execute_starter_blocks_symbol_removed_after_plan(monkeypatch) -> None:
         [{"symbol": "TSLA", "price": 50.0, "why": "stale plan"}],
         budget=100.0,
         settled_cash=1_000.0,
+        trigger_evidence=_admit_crash_evidence(manager),
     )
 
     assert result["placed"] == []

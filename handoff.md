@@ -117,6 +117,29 @@ trend_night's next night (sizing record must carry `day_lots`).
 - Day search round 2 is running (scratchpad harness `day_search/`). Next action: confirm the ETF RSI-60m candidate on
   2016-2020 data, then write `logs/research/day_deep_search_r2_2026-10-29.md`.
 
+## ⏩ PARALLEL (2026-11-04, OpenAI Codex signed) — F6 crash-only correction revised, F6 OFF
+
+- Rafael approved the earlier `F6-CRASH-1028` design. Exact-diff review then found and the revised bytes close
+  three additional gaps: allocator evidence had to bind the latest fsynced row, the durable proof had to remain
+  locked through broker submission, and decimal rounding at exactly -7.0% had to preserve B/C priority.
+  Rafael renewed exact-design approval on 2026-11-04. The corrected F6 starter requires both completed broad-market
+  SPY damage and heightened VIX evidence, begins only after the 4:15 PM ET VIX calculation is complete, and
+  classifies the existing A/B/C crash ladder. Ordinary stock weakness or a VIX spike by itself cannot arm F6.
+- The allocator and final order boundary independently require the same armed durable crash evidence and cap spend
+  to the tier's fresh-settled-cash fraction. Missing, stale, misaligned, pre-close, malformed, or forged evidence
+  fails closed. F6 remains cash-only and excludes leveraged/inverse products.
+- Refreshed 2020-current replay: 1,715 completed sessions, 25 eligible crash observations, 20 affordable reference
+  plans, A/B/C counts 7/12/6, and zero fires in 2021, 2023 and 2026. Refreshed source-bound full-path simulation is
+  20/20 PASS. After the current-main rebase, the local focused gate is 226 tests plus four subtests; the full suite
+  is 3,235 passed plus 234 subtests, one skip, with the same unrelated Day-promotion fixture failure after the latest dashboard-only rebase.
+- `FOREVER6_ENABLED=False` remains binding. This approval authorizes the corrected prerequisite only; it does not
+  authorize enabling F6 or placing an F6 order.
+
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** Rafael waived Groq for the quota-blocked remainder, Google AI Studio
+approved the exact remaining files, and Rafael renewed `F6-CRASH-1028` approval. Record the approval,
+then commit, run CI, merge and deploy the prerequisite to OCI.
+After that, prepare the separate F6 enablement decision. Do not enable F6.
+
 ## ⏩ PARALLEL (2026-10-28, OpenAI Codex signed) — F6 full-path proof live, F6 OFF
 
 - `F6-SIM-1023` shipped in PR #790 and is live on OCI at `70caa70`. CI passed; all
