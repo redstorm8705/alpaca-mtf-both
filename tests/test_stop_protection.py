@@ -51,6 +51,24 @@ def _order(
 _DEF_ORDER = _order("sell")  # module-level singleton default (ruff B008)
 
 
+class _NonProtectedSnapshot:
+    """Production-state ownership view for ordinary single-tier Swing tests."""
+
+    errors = ()
+
+    def __init__(self, position):
+        qty = float(getattr(position, "qty", 0.0) or 0.0) if position is not None else 0.0
+        self.broker_qty = {"X": qty}
+
+    @staticmethod
+    def claimed_qty(_symbol, tier):
+        return 0.0 if tier in {"qhm", "forever6", "forever_6", "day", "daytrade"} else 0.0
+
+    @staticmethod
+    def residual_qty(_symbol):
+        return 0.0
+
+
 def _position(direction: str, qty: float, price: float, symbol: str = "X"):
     # symbol carried so the account-wide get_open_positions() snapshot keys correctly.
     return types.SimpleNamespace(symbol=symbol, qty=qty, side=direction, current_price=price)
@@ -100,7 +118,8 @@ class StopProtectionInvariant(unittest.TestCase):
 
     def _run(self, *, open_orders, position, trade, session="rth", place=True,
              submit_day=_DEF_ORDER, submit_gtc=_DEF_ORDER, close_ok=True,
-             position_raises=False, cover_fill=89.5, qhm=(), f6=(), tracker=None, day_claim=0.0):
+             position_raises=False, cover_fill=89.5, qhm=(), f6=(), tracker=None,
+             day_claim=0.0, ownership_enforced=True, ownership_snapshot=None):
         tracker = tracker if tracker is not None else _Tracker({"X": dict(trade)})
         risk = _Risk()
         goo = mock.Mock(return_value=open_orders)
@@ -116,8 +135,11 @@ class StopProtectionInvariant(unittest.TestCase):
         qhmm = mock.Mock(return_value=set(qhm))
         f6m = mock.Mock(return_value=set(f6))
         page = mock.Mock()
-        with mock.patch.object(sp, "get_open_orders", goo), \
+        ownership = ownership_snapshot or _NonProtectedSnapshot(position)
+        with mock.patch.object(sp.config, "OWNERSHIP_GUARD_ENFORCE", ownership_enforced), \
+             mock.patch.object(sp, "get_open_orders", goo), \
              mock.patch.object(sp, "get_open_positions", gop), \
+             mock.patch.object(sp, "_build_ownership_snapshot", return_value=ownership), \
              mock.patch.object(sp, "submit_day_stop_order", sday), \
              mock.patch.object(sp, "submit_gtc_stop_order", sgtc), \
              mock.patch.object(sp, "close_position", cpos), \
@@ -256,14 +278,14 @@ class StopProtectionInvariant(unittest.TestCase):
 
     # 14 — QHM/quarterly-hold symbol is EXCLUDED (reconciler manages intraday only)
     def test_qhm_excluded(self):
-        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), qhm=("X",))
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), qhm=("X",), ownership_enforced=False)
         self.assertEqual(s["excluded_qhm"], ["X"])
         m["day"].assert_not_called()
 
     # 14b — forever6 held symbol is EXCLUDED (F6 shares deliberately carry NO stop; placing one
     # would sell into the never-sell floor). Board 3-0 + Gro + GAI, 2026-09-01.
     def test_forever6_excluded(self):
-        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), f6=("X",))
+        s, m = self._run(open_orders=[], position=_position("long", 3, 110.0), trade=_trade(), f6=("X",), ownership_enforced=False)
         self.assertEqual(s["excluded_forever6"], ["X"])
         self.assertEqual(len(s["placed"]), 0)
         m["day"].assert_not_called()
@@ -787,6 +809,8 @@ class StopProtectionProtectedResidual(StopProtectionInvariant):
                 f6=f6,
                 qhm=qhm,
                 submit_day=submit,
+                ownership_enforced=True,
+                ownership_snapshot=snapshot,
             )
 
     def test_f6_cohold_places_only_swing_residual(self):
@@ -883,6 +907,8 @@ class StopProtectionProtectedResidual(StopProtectionInvariant):
                 position=_position("short", -5, 90.0),
                 trade=_trade(direction="short", qty=3),
                 f6=("X",),
+                ownership_enforced=True,
+                ownership_snapshot=snap,
             )
         self.assertIn(("X", "protected residual"), summary["paged"])
         mocks["day"].assert_not_called()
@@ -900,6 +926,7 @@ class StopProtectionProtectedResidual(StopProtectionInvariant):
                 position=_position("long", 5, 110.0),
                 trade=_trade(qty=3),
                 f6=("X",),
+                ownership_enforced=False,
             )
         self.assertEqual(summary["excluded_forever6"], ["X"])
         mocks["day"].assert_not_called()
@@ -913,6 +940,7 @@ class StopProtectionProtectedResidual(StopProtectionInvariant):
                 trade=_trade(qty=3),
                 f6=(),
                 qhm=(),
+                ownership_enforced=True,
             )
         self.assertEqual([row[3] for row in summary["placed"]], [3])
         mocks["day"].assert_called_once()

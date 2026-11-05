@@ -1,7 +1,8 @@
 {
-  "sha256": "d58d0d72eee545dab7664cd7fe8d551d20fe10df2f244a983606f4bf25a29e90",
-  "gro": "APPROVE",
+  "sha256": "a9d783c5b3c1c9a3a497fc6a2b620aaa8b029245c969f63662b4185cc69ff998",
+  "gro": "WAIVED",
   "gai": "APPROVE",
-  "ts": 1791527653,
-  "file": "execution/ownership_guard.py"
+  "ts": 1793906221,
+  "file": "execution/ownership_guard.py",
+  "reviewer_b": "waived"
 }

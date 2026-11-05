@@ -1473,6 +1473,15 @@ class RiskManager:
             result = open_pnl + fill_pnl
             if not math.isfinite(result):
                 return 0.0, False
+            # The enforced path reaches this line only after the ledger, broker
+            # quantities, protected claims, position prices and fill ownership
+            # all reconcile. Publish that measured fact explicitly; merely
+            # enabling the guard is never treated as proof in check_kill_switch.
+            self._kill_attr = {
+                "exact": True,
+                "ledger_unreadable": False,
+                "unproven": {},
+            }
             return round(result, 2), True
         except Exception as e:  # RC-3
             logger.warning("kill-switch intraday P&L fetch failed (%s) — degrading to equity measure "
@@ -1525,10 +1534,12 @@ class RiskManager:
         # dependence, so it is valid 24/7.
         self._kill_attr = {}
         _pos_pnl, _pos_ok = self._intraday_trading_pnl()
-        _enforced = bool(getattr(config, "OWNERSHIP_GUARD_ENFORCE", False))
         # KILL-ATTR-1023 T1: "exact" = Day + Swing measured by proven per-tier shares (enforced path, or the flag-off
-        # tiered path with no unproven symbol). Only an exact measure feeds the dashboard gauge and the typed verdict.
-        _attr_exact = _pos_ok and (_enforced or self._kill_attr.get("exact") is True)
+        # tiered path with no unproven symbol). Guard enforcement is a prerequisite for
+        # the protected-share boundary, but it cannot turn a measurement that reports
+        # unproven symbols into exact evidence. Only an explicitly exact measurement
+        # feeds the dashboard gauge and typed verdict.
+        _attr_exact = _pos_ok and self._kill_attr.get("exact") is True
         if not _pos_ok and self._kill_attr.get("ledger_unreadable"):
             # F3: the ownership ledger itself is unreadable -> entries pause for this check (run_cycle and run_day_tier
             # turn this into an entries-only block; exits keep running; nothing latches).

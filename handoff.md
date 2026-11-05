@@ -1,5 +1,5 @@
 # Handoff — alpaca-mtf-bot
-**Updated:** 2026-11-04 night (Claude: REGIME-SIZE + CATALYST-DYNAMIC BGC-aligned; ledger freeze found) | **CROSS-ACCOUNT HANDOFF** —
+**Updated:** 2026-11-05 (OpenAI Codex: F6-GUARD-1104 approved; ledger exact; shipping ownership prerequisite) | **CROSS-ACCOUNT HANDOFF** —
 always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignment is reached, not at session end.
 
 > **NEW ACCOUNT READS THESE FIRST, IN ORDER:** (1) this file (the ⏩ block below IS your pick-up
@@ -8,7 +8,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-04 night, Claude signed) — two designs aligned for owner approval; ledger frozen on GE
+## ⏩ LATEST (2026-11-05, OpenAI Codex signed) — F6 ownership prerequisite approved; ledger exact
+
+**OpenAI Codex update — 2026-11-05:** F6-GUARD-1104 is owner-approved and ready to ship. The
+ordinary ledger reconcile cleared the stale flat-GE QHM claim; the refreshed read-only OCI proof is
+`PASS / EXACT`, the broker-hermetic probe is 11/11 PASS, and mutation counts are zero. This change
+enables only `OWNERSHIP_GUARD_ENFORCE`; `FOREVER6_ENABLED` remains false until the separate F6 live
+activation package passes its own exact gate and approval. Main PR #848 added strict cumulative-fill
+validation after the prior F6 simulation shipped; the approved F6-SIM-1023 harness now supplies those
+exact cumulative facts and its refreshed full-path artifact is PASS again.
 
 Shipped / live today: earnings document reader (#836, inert), Schwab quotes (#837) + login fix (#838) — **Schwab
 verified live on the server 11-04 night: token present, auto-refresh works, SPY/AAPL/BRK.B NBBO returned** (nothing in
@@ -16,12 +24,9 @@ the trading path reads it yet). Dashboard per-tier rows (#839). Rule-doc stale-t
 PR. Master Brain: 26 superseded state/handoff sources deleted; project-state 11-04 + open queue added.
 
 **Owner actions waiting:**
-1. **Ledger frozen since 10:10 AM PT 11-04.** The manual sale of the last GE QHM share needs the owner's confirmation;
-   until then `run_ledger_sync` refuses to save ANY symbol (11 runs refused), so MSFT still shows Day 2 + Swing 1 after
-   the Day tier sold its 2 shares (dashboard: MSFT "UNATTRIBUTED"). Command (the confirmation expires in 2h and the sync
-   cron runs 6:00 AM-2:00 PM PT, so run it after 6 AM PT):
-   `ssh -t mtf-bot "cd mtf-bot && venv/bin/python3 confirm_ledger_heal.py GE qhm 0"`
-   Forward fix to design: one refused symbol should not freeze the whole ledger.
+1. **Ledger freeze cleared by ordinary reconciliation on 11-05.** Read-only broker/ledger evidence
+   now has no protected mismatch; no manual ledger mutation was used. The broader forward fix remains:
+   one refused symbol should not freeze the whole ledger.
 2. Approvals ready (one page each in chat 11-04 night): **REGIME-SIZE-1104** (rev 3.1; board 3/3, GAI, Codex aligned)
    and **CATALYST-DYNAMIC-1104** Phase A (rev 3.1; board 5/5, GAI, Codex aligned).
 3. One question: is the 11-02 night "ceo-level approval to ship items once the BGC has full alignment" a standing rule
@@ -170,10 +175,14 @@ trend_night's next night (sizing record must carry `day_lots`).
 - `FOREVER6_ENABLED=False` remains binding. This approval authorizes the corrected prerequisite only; it does not
   authorize enabling F6 or placing an F6 order.
 
-**⏩ EXACT NEXT ACTION (OpenAI Codex):** PR #811 merged and OCI returned `DEPLOY_OK:fd2f700` on
-2026-11-04 PT. All three services are active, startup reconciliation completed cleanly, and
-`FOREVER6_ENABLED=False` remains live. Prepare the separate F6 enablement decision; do not enable F6
-without that owner approval.
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** ship and deploy the owner-approved `F6-GUARD-1104`
+prerequisite, verify startup reconciliation plus every current broker stop, and record the first
+post-live guard audit. The ordinary ledger reconcile has already cleared the stale flat-GE claim;
+the current activation artifact is `PASS / EXACT`, its broker-hermetic cases are 11/11 PASS, and
+it made zero live mutations. This deployment turns on ownership enforcement only and keeps
+`FOREVER6_ENABLED=False`. After the guard is verified live, refresh the separate F6 activation
+package against current crash evidence and request/record its exact activation approval before
+turning on the F6 master flag.
 
 ## ⏩ PARALLEL (2026-10-28, OpenAI Codex signed) — F6 full-path proof live, F6 OFF
 

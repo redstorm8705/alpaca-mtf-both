@@ -752,11 +752,28 @@ def submit_limit_order(
         if getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
             try:
                 from execution import ownership_guard as _og
-                _pos = get_open_position(symbol)
-                _net = abs(float(_pos.qty)) if _pos is not None else 0.0
-                _position_side = str(getattr(getattr(_pos, "side", ""), "value",
-                                             getattr(_pos, "side", ""))).lower()
-                _guard_side = "sell" if _position_side == "long" else "short"
+                try:
+                    _pos = get_open_position(symbol)
+                except Exception as _position_exc:
+                    # Guard activation must not strand a non-protected Day/Swing
+                    # exit merely because the broker position endpoint is briefly
+                    # unavailable.  Pass UNKNOWN net to the guard: its ledger/.bak
+                    # keystone approves only a proven non-protected symbol, while a
+                    # protected, cached-protected, corrupt or unresolved symbol
+                    # fails closed.  Never infer a net quantity from the order.
+                    _pos = None
+                    _net = None
+                    _guard_side = "sell"
+                    logger.warning(
+                        f"[{symbol}] SELL limit position read unavailable; "
+                        "delegating UNKNOWN net to ownership guard: "
+                        f"{_position_exc}"
+                    )
+                else:
+                    _net = abs(float(_pos.qty)) if _pos is not None else 0.0
+                    _position_side = str(getattr(getattr(_pos, "side", ""), "value",
+                                                 getattr(_pos, "side", ""))).lower()
+                    _guard_side = "sell" if _position_side == "long" else "short"
                 _res = _og.check_never_sell_floor(
                     symbol, tier, int(qty), _guard_side, alpaca_net_qty=_net,
                 )

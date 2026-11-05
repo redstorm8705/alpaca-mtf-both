@@ -1,0 +1,372 @@
+{
+  "candidate": {
+    "head_commit": "051f66181b5a116fe00b5cf4cbd805137a65fda5",
+    "source_sha256": {
+      "config.py": "07e5dcef5a8ae68d6490cc7666320b751a1eb4fa261cf4a3bc8a96e1872427d3",
+      "execution/broker.py": "f3dbc91543376f193ebff281691cf5fb90226da51bec517021e66213dcf2a62a",
+      "execution/order_admission.py": "e42cd80c3403a3beddb1029de6b0f5c6b61ae6a36feb9a8d5c29374360d1b05a",
+      "execution/ownership_guard.py": "a9d783c5b3c1c9a3a497fc6a2b620aaa8b029245c969f63662b4185cc69ff998",
+      "execution/risk_manager.py": "a649c9c588fa130ee2be9bcb0bac11d9529171fb2cfbf62a5e1375f6cae5274d",
+      "execution/stop_protection.py": "7bfe1a20f7381d0ee64ecff7cd716519ebfae6b1fc7769fd6d9355938422378b",
+      "research/f6_guard_activation_probe.py": "d0863dc7ad6f65bb1826a917604d973827fece1ce7f01ace6d9b3c964fc9e749"
+    },
+    "working_tree_source_digest": "357b4424fdf76951e24738322141a15703ca6045276c2de2c12c3bd04485e15d"
+  },
+  "change_id": "F6-GUARD-1104",
+  "configuration": {
+    "forever6_enabled": false,
+    "ownership_guard_enforce": true,
+    "paper": true
+  },
+  "generated_at_utc": "2026-11-05T19:13:42.786684+00:00",
+  "hermetic_phase": {
+    "cases": [
+      {
+        "actual_result": "SUBMITTED",
+        "allowed_qty": 1,
+        "boundary": "limit",
+        "broker_submit_count": 1,
+        "expected_result": "SUBMITTED",
+        "guard_reason": "no protected floor \u2014 exit allowed",
+        "guard_verdict": "APPROVE",
+        "name": "limit_nonprotected_position_error",
+        "requested_qty": 1,
+        "status": "PASS",
+        "submitted_qty": 1
+      },
+      {
+        "actual_result": "BLOCKED",
+        "allowed_qty": 0.0,
+        "boundary": "limit",
+        "broker_submit_count": 0,
+        "expected_result": "BLOCKED",
+        "guard_reason": "Alpaca net unavailable for PROTECTED symbol \u2014 fail closed",
+        "guard_verdict": "REJECT",
+        "name": "limit_protected_position_error",
+        "requested_qty": 1,
+        "status": "PASS",
+        "submitted_qty": null
+      },
+      {
+        "actual_result": "BLOCKED",
+        "allowed_qty": 0.0,
+        "boundary": "limit",
+        "broker_submit_count": 0,
+        "expected_result": "BLOCKED",
+        "guard_reason": "Alpaca net unavailable for PROTECTED symbol \u2014 fail closed",
+        "guard_verdict": "REJECT",
+        "name": "limit_protected_backup_position_error",
+        "requested_qty": 1,
+        "status": "PASS",
+        "submitted_qty": null
+      },
+      {
+        "actual_result": "SUBMITTED",
+        "allowed_qty": 1,
+        "boundary": "limit",
+        "broker_submit_count": 1,
+        "expected_result": "SUBMITTED",
+        "guard_reason": "current ledger unreadable, symbol not protected in .bak \u2014 exit ok",
+        "guard_verdict": "APPROVE",
+        "name": "limit_valid_nonprotected_backup",
+        "requested_qty": 1,
+        "status": "PASS",
+        "submitted_qty": 1
+      },
+      {
+        "actual_result": "BLOCKED",
+        "allowed_qty": 0.0,
+        "boundary": "limit",
+        "broker_submit_count": 0,
+        "expected_result": "BLOCKED",
+        "guard_reason": "current and backup ledger unresolved with Alpaca net unavailable \u2014 fail closed",
+        "guard_verdict": "REJECT",
+        "name": "limit_both_ledgers_invalid",
+        "requested_qty": 1,
+        "status": "PASS",
+        "submitted_qty": null
+      },
+      {
+        "actual_result": "BLOCKED",
+        "allowed_qty": null,
+        "boundary": "limit",
+        "broker_submit_count": 0,
+        "expected_result": "BLOCKED",
+        "guard_reason": null,
+        "guard_verdict": null,
+        "name": "limit_pending_protected_buy",
+        "requested_qty": 1,
+        "status": "PASS",
+        "submitted_qty": null
+      },
+      {
+        "actual_result": "BLOCKED",
+        "allowed_qty": 1.0,
+        "boundary": "limit",
+        "broker_submit_count": 0,
+        "expected_result": "BLOCKED",
+        "guard_reason": "intraday sell bounded to 1.0",
+        "guard_verdict": "QTY_BOUND",
+        "name": "limit_guard_quantity_smaller",
+        "requested_qty": 2,
+        "status": "PASS",
+        "submitted_qty": null
+      },
+      {
+        "actual_result": "BLOCKED",
+        "allowed_qty": 0.0,
+        "boundary": "limit",
+        "broker_submit_count": 0,
+        "expected_result": "BLOCKED",
+        "guard_reason": "LEDGER_DRIFT AAPL drift=1.0 \u2014 sells frozen",
+        "guard_verdict": "REJECT",
+        "name": "limit_protected_ledger_drift",
+        "requested_qty": 1,
+        "status": "PASS",
+        "submitted_qty": null
+      },
+      {
+        "actual_result": "SUBMITTED_1",
+        "allowed_qty": 1.0,
+        "boundary": "partial",
+        "broker_submit_count": 1,
+        "expected_result": "SUBMITTED_1",
+        "guard_reason": "intraday sell bounded to 1.0",
+        "guard_verdict": "QTY_BOUND",
+        "name": "partial_cohold_bounded",
+        "requested_qty": 2,
+        "status": "PASS",
+        "submitted_qty": 1
+      },
+      {
+        "actual_result": "SUBMITTED_1",
+        "allowed_qty": 1.0,
+        "boundary": "stop",
+        "broker_submit_count": 1,
+        "expected_result": "SUBMITTED_1",
+        "guard_reason": "intraday sell bounded to 1.0",
+        "guard_verdict": "QTY_BOUND",
+        "name": "stop_cohold_bounded",
+        "requested_qty": 2,
+        "status": "PASS",
+        "submitted_qty": 1
+      },
+      {
+        "actual_result": "SUBMITTED_1",
+        "allowed_qty": 1.0,
+        "boundary": "full",
+        "broker_submit_count": 1,
+        "expected_result": "SUBMITTED_1",
+        "guard_reason": "intraday sell bounded to 1.0",
+        "guard_verdict": "QTY_BOUND",
+        "name": "full_close_cohold_bounded",
+        "requested_qty": 3,
+        "status": "PASS",
+        "submitted_qty": 1
+      }
+    ],
+    "live_credentials_loaded": false,
+    "network_capable": false,
+    "reduction_serializer": "hermetic-only while FOREVER6_ENABLED=False"
+  },
+  "live_mutation_counts": {
+    "cancel": 0,
+    "close": 0,
+    "replace": 0,
+    "submit": 0
+  },
+  "oci_read_only": {
+    "cancel_count": 0,
+    "close_count": 0,
+    "deployed_sha": "73313fb5a972c2c5def1309757b59bf21ccf188d",
+    "f6_flag": false,
+    "guard_flag": false,
+    "host_identity": "oci-paper-redacted",
+    "ledger_backup_sha256": "82eab1919c0fd19dd4442037a20d5834bc8064b9a04c9c4c3b46ef3c848018d7",
+    "ledger_sha256": "dd74b69b1874bca73a614a90807afb0ed022cf0b823e4ce505d384321181be72",
+    "open_orders": [
+      {
+        "qty": "4",
+        "side": "OrderSide.BUY",
+        "status": "OrderStatus.NEW",
+        "symbol": "NVDA",
+        "tier_prefix": "DT",
+        "type": "OrderType.STOP"
+      },
+      {
+        "qty": "3",
+        "side": "OrderSide.BUY",
+        "status": "OrderStatus.NEW",
+        "symbol": "NVDA",
+        "tier_prefix": "DT",
+        "type": "OrderType.LIMIT"
+      },
+      {
+        "qty": "2",
+        "side": "OrderSide.BUY",
+        "status": "OrderStatus.NEW",
+        "symbol": "META",
+        "tier_prefix": "DT",
+        "type": "OrderType.LIMIT"
+      },
+      {
+        "qty": "1",
+        "side": "OrderSide.SELL",
+        "status": "OrderStatus.NEW",
+        "symbol": "V",
+        "tier_prefix": "IN",
+        "type": "OrderType.STOP"
+      },
+      {
+        "qty": "1",
+        "side": "OrderSide.SELL",
+        "status": "OrderStatus.NEW",
+        "symbol": "GOOGL",
+        "tier_prefix": "QH",
+        "type": "OrderType.STOP"
+      },
+      {
+        "qty": "5",
+        "side": "OrderSide.SELL",
+        "status": "OrderStatus.NEW",
+        "symbol": "WMT",
+        "tier_prefix": "IN",
+        "type": "OrderType.STOP"
+      },
+      {
+        "qty": "2",
+        "side": "OrderSide.SELL",
+        "status": "OrderStatus.NEW",
+        "symbol": "BRK.B",
+        "tier_prefix": "IN",
+        "type": "OrderType.STOP"
+      },
+      {
+        "qty": "1",
+        "side": "OrderSide.SELL",
+        "status": "OrderStatus.NEW",
+        "symbol": "MSFT",
+        "tier_prefix": "IN",
+        "type": "OrderType.STOP"
+      }
+    ],
+    "ownership": [
+      {
+        "drift": 0.0,
+        "net": 5.0,
+        "symbol": "WMT",
+        "tiers": {
+          "swing": 5.0
+        }
+      },
+      {
+        "drift": 0.0,
+        "net": 1.0,
+        "symbol": "MSFT",
+        "tiers": {
+          "swing": 1.0
+        }
+      },
+      {
+        "drift": 0.0,
+        "net": -7.0,
+        "symbol": "NVDA",
+        "tiers": {
+          "day": -7.0
+        }
+      },
+      {
+        "drift": 0.0,
+        "net": -2.0,
+        "symbol": "META",
+        "tiers": {
+          "day": -2.0
+        }
+      },
+      {
+        "drift": 0.0,
+        "net": 1.0,
+        "symbol": "V",
+        "tiers": {
+          "swing": 1.0
+        }
+      },
+      {
+        "drift": 0.0,
+        "net": 1.0,
+        "symbol": "GOOGL",
+        "tiers": {
+          "qhm": 1.0
+        }
+      },
+      {
+        "drift": 0.0,
+        "net": 0.0,
+        "symbol": "UBER",
+        "tiers": {
+          "day": 72.0,
+          "swing": -72.0
+        }
+      },
+      {
+        "drift": 0.0,
+        "net": 2.0,
+        "symbol": "BRK.B",
+        "tiers": {
+          "swing": 2.0
+        }
+      }
+    ],
+    "pending_buy_journal": "absent",
+    "positions": [
+      {
+        "qty": "2",
+        "side": "PositionSide.LONG",
+        "symbol": "BRK.B"
+      },
+      {
+        "qty": "1",
+        "side": "PositionSide.LONG",
+        "symbol": "GOOGL"
+      },
+      {
+        "qty": "-2",
+        "side": "PositionSide.SHORT",
+        "symbol": "META"
+      },
+      {
+        "qty": "1",
+        "side": "PositionSide.LONG",
+        "symbol": "MSFT"
+      },
+      {
+        "qty": "-7",
+        "side": "PositionSide.SHORT",
+        "symbol": "NVDA"
+      },
+      {
+        "qty": "1",
+        "side": "PositionSide.LONG",
+        "symbol": "V"
+      },
+      {
+        "qty": "5",
+        "side": "PositionSide.LONG",
+        "symbol": "WMT"
+      }
+    ],
+    "profile": "paper",
+    "protected_mismatches": [],
+    "reconciliation_status": "EXACT",
+    "reduction_journal": "absent",
+    "replace_count": 0,
+    "submit_count": 0
+  },
+  "overall": "PASS",
+  "post_deploy": {
+    "required": true,
+    "rollback_precondition": "F6 remains off; do not disable ownership enforcement while any QHM/F6 claim or protected-buy reservation exists",
+    "startup_reconcile": "PENDING_DEPLOY"
+  },
+  "schema_version": 1
+}

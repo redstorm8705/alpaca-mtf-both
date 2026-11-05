@@ -1,7 +1,7 @@
 {
   "file": "execution/ownership_guard.py",
   "verdict": "PASS",
-  "sha256": "d58d0d72eee545dab7664cd7fe8d551d20fe10df2f244a983606f4bf25a29e90",
-  "ts": 1791527439.379461,
-  "claims": "Canonical ownership-ledger v2 preserves all four owner claims, protected floors, compatibility behavior, atomic durability, and compare-and-swap rollback; deployed code remains unexercised until explicit migration."
+  "sha256": "a9d783c5b3c1c9a3a497fc6a2b620aaa8b029245c969f63662b4185cc69ff998",
+  "ts": 1793906207.674059,
+  "claims": "F6-GUARD-1104 activates exact ownership enforcement while F6 remains disabled; protected or ambiguous QHM/F6 reductions fail closed, proven non-protected limit exits survive transient position reads, kill attribution becomes exact only after explicit reconciliation, and the F6-SIM-1023 compatibility fixture restores the source-bound no-network full-path proof after PR #848."
 }

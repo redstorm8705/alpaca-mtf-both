@@ -676,7 +676,8 @@ class PartialCloseCoholdBound(unittest.TestCase):
         client.submit_order.return_value = types.SimpleNamespace(id="o1")
         claim_mock = (mock.Mock(side_effect=claim) if isinstance(claim, list)
                       else mock.Mock(return_value=claim))
-        with mock.patch.object(bk, "_day_tier_claim", claim_mock), \
+        with mock.patch("config.OWNERSHIP_GUARD_ENFORCE", False), \
+                mock.patch.object(bk, "_day_tier_claim", claim_mock), \
                 mock.patch.object(bk, "get_open_position", return_value=pos), \
                 mock.patch.object(bk, "_get_trading_client", return_value=client), \
                 mock.patch.dict(sys.modules, {"alerts": types.SimpleNamespace(send_slack=slack)}):
