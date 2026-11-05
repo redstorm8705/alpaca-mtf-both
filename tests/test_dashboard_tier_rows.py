@@ -9,7 +9,18 @@ from pathlib import Path
 from unittest import mock
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import generate_dashboard as dashboard
+
+_REAL_TREND_LEVEL = dashboard._swing_trend_level
+
+
+@pytest.fixture(autouse=True)
+def _no_bar_fetch():
+    """The Swing trend-exit level reads daily bars; tests never reach the network."""
+    with mock.patch.object(dashboard, "_swing_trend_level", return_value=507.25):
+        yield
 
 ET = ZoneInfo("America/New_York")
 TODAY = date(2026, 11, 4)
@@ -117,7 +128,10 @@ def test_two_tiers_on_one_symbol_render_two_rows_with_their_own_plans(tmp_path: 
     assert "$548.51 (2)" in day_row and "$497.10 (1)" in swing_row
     # targets per tier
     assert "limit $570.00 (2)" in day_row and "flat by 12:58 PM PT" in day_row
-    assert "close &lt; 20-session low" in swing_row and "time exit Nov 13" in swing_row
+    assert "no profit target (trend exit)" in swing_row and "time exit Nov 13" in swing_row
+    # the 20-session-low rule is an exit level, shown under the stop with its price
+    assert "trend exit: price near close &lt; $507.25" in swing_row
+    assert "trend exit" not in day_row
 
 
 def test_rendered_share_counts_drop_the_sh_word(tmp_path: Path):
@@ -185,7 +199,7 @@ def test_swing_time_exit_falls_back_to_rule_text_past_the_holiday_calendar():
                                    "entry_px": 420.0}})
     basis, text = dashboard._tier_slice_plan("swing", "V", 1.0, plans, {}, None, TODAY)
     assert basis == 420.0
-    assert text == "close &lt; 20-session low · time exit on session 30"
+    assert text == "no profit target (trend exit) · time exit on session 30"
 
 
 def test_missing_or_unreadable_state_shows_dash():
@@ -458,3 +472,88 @@ def test_broker_timestamps_with_five_fraction_digits_are_read():
     ]
     rows = dashboard._broker_trade_rows(fills, [], {}, {}, {})
     assert len(rows) == 1 and rows[0]["qty"] == 3.0 and round(rows[0]["price"], 2) == 171.86
+
+
+def _alpaca_with(open_orders, closed_orders, closed_error=None):
+    import io
+
+    def fake_urlopen(req, context=None, timeout=None):
+        url = req.full_url
+        path = url.split("paper-api.alpaca.markets", 1)[1].split("?", 1)[0]
+        if "/v2/account/activities/FILL" in url:
+            return io.BytesIO(b"[]")
+        if path == "/v2/orders" and "status=closed" in url:
+            if closed_error:
+                raise closed_error
+            return io.BytesIO(json.dumps(closed_orders).encode())
+        body = {"/v2/account": {"equity": "2600"}, "/v2/positions": [_msft_position()],
+                "/v2/orders": open_orders}
+        return io.BytesIO(json.dumps(body[path]).encode())
+
+    with (
+        mock.patch.dict("os.environ", {"ALPACA_API_KEY": "k", "ALPACA_SECRET_KEY": "s"}),
+        mock.patch("dotenv.load_dotenv"),
+        mock.patch("urllib.request.urlopen", side_effect=fake_urlopen),
+    ):
+        return dashboard._load_alpaca()
+
+
+def _day_bracket(parent_status="filled"):
+    tp = {"id": "tp-1", "symbol": "MSFT", "side": "sell", "qty": "2", "filled_qty": "0", "type": "limit",
+          "status": "new", "limit_price": "576.92", "stop_price": None, "order_class": "bracket",
+          "client_order_id": "42f86e21-519d"}
+    sl = {"id": "sl-1", "symbol": "MSFT", "side": "sell", "qty": "2", "filled_qty": "0", "type": "stop",
+          "status": "held", "limit_price": None, "stop_price": "548.51", "order_class": "bracket",
+          "client_order_id": "ffc92b00-aaaa"}
+    parent = {"id": "par-1", "symbol": "MSFT", "side": "buy", "qty": "2", "filled_qty": "2", "type": "limit",
+              "status": parent_status, "limit_price": "557.98", "stop_price": None, "order_class": "bracket",
+              "client_order_id": "DT-MSFT-b-1793804813080-4fa943d7", "legs": [tp, sl]}
+    return tp, sl, parent
+
+
+def test_held_stop_of_a_filled_bracket_is_read_from_closed_orders():
+    """2026-11-04 MSFT Day: the filled parent leaves status=open and Alpaca lists only the take-profit
+    leg; the held $548.51 stop must still count as the lot's protection."""
+    tp, _sl, parent = _day_bracket()
+    alpaca = _alpaca_with([tp], [parent])
+    ids = [o["id"] for o in alpaca["orders"]]
+    assert ids.count("tp-1") == 1 and "par-1" not in ids
+    stop = next(o for o in alpaca["orders"] if o["id"] == "sl-1")
+    assert stop["status"] == "held" and stop["owner_status"] == "filled"
+    assert stop["owner_order_class"] == "bracket"
+    assert stop["owner_client_order_id"] == "DT-MSFT-b-1793804813080-4fa943d7"
+
+
+def test_held_stop_of_an_unfilled_bracket_is_not_added():
+    tp, _sl, parent = _day_bracket(parent_status="canceled")
+    alpaca = _alpaca_with([tp], [parent])
+    assert "sl-1" not in [o["id"] for o in alpaca["orders"]]
+
+
+def test_closed_orders_failure_keeps_the_open_list():
+    tp, _sl, _parent = _day_bracket()
+    alpaca = _alpaca_with([tp], [], closed_error=OSError("down"))
+    assert alpaca["error"] is None and [o["id"] for o in alpaca["orders"]] == ["tp-1"]
+    assert alpaca["orders_available"] is True
+
+
+def test_swing_trend_level_failure_returns_none_and_is_not_cached():
+    dashboard._TREND_LEVEL_CACHE.clear()
+    dashboard._TREND_LEVEL_MISS.clear()
+    with mock.patch("data.fetcher.fetch_closed_bars", side_effect=RuntimeError("no bars")):
+        assert _REAL_TREND_LEVEL("V", "2026-11-04") is None
+        assert _REAL_TREND_LEVEL("V", "2026-11-04") is None      # no re-fetch inside the retry window
+    assert dashboard._TREND_LEVEL_CACHE == {}
+
+
+def test_swing_trend_level_uses_the_prior_20_session_low_and_caches():
+    import pandas as pd
+
+    dashboard._TREND_LEVEL_CACHE.clear()
+    dashboard._TREND_LEVEL_MISS.clear()
+    df = pd.DataFrame({"low": [float(500 + i) for i in range(30)]})
+    bars = mock.Mock(df=df)
+    with mock.patch("data.fetcher.fetch_closed_bars", return_value=bars) as fetch:
+        assert _REAL_TREND_LEVEL("V", "2026-11-04") == 510.0     # lowest of the last 20 lows
+        assert _REAL_TREND_LEVEL("V", "2026-11-04") == 510.0
+    assert fetch.call_count == 1
