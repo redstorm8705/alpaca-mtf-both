@@ -482,12 +482,14 @@ def _tier_for_fill_order(
             or order_facts["symbol"] != symbol
             or order_facts["side"] != expected_order_side
             or activity_qty > order_facts["qty"]
-            or activity_qty > order_facts["filled_qty"]
         ):
-            logger.warning(
-                "kill-switch fill/order facts mismatch for %s — degrading the "
-                "intraday measure",
-                oid,
+            # KILL-PARTIAL-1104: only IMMUTABLE order facts (symbol, side, total qty, tier) are compared here.
+            # The cached filled_qty is a snapshot of a possibly partly-filled order and is never used to judge a
+            # later fill (2026-11-04 XOM be404bfa: cached 1 of 3, the 2-share fill then failed all day). Whether
+            # the fills of one order are a consistent sequence is checked per order in _today_fills.
+            _log_fill_mismatch(
+                oid, "order_facts", symbol=symbol, side=side, activity_qty=activity_qty,
+                order_symbol=order_facts["symbol"], order_side=order_facts["side"], order_qty=order_facts["qty"],
             )
             return _UNRESOLVED_FILL_TIER
         return order_facts["tier"]
@@ -589,12 +591,14 @@ def _tier_for_fill_order(
                     oid,
                 )
                 return _UNRESOLVED_FILL_TIER
+        raw_tif = _order_field("time_in_force")
         order_facts = {
             "tier": tier,
             "symbol": order_symbol,
             "side": order_side,
             "qty": order_qty,
             "filled_qty": filled_qty,
+            "tif": str(getattr(raw_tif, "value", raw_tif) or "").strip().lower(),
         }
     except Exception as exc:
         logger.warning(
@@ -611,6 +615,95 @@ def _tier_for_fill_order(
 
 
 _KILL_ATTR_LAST_LOGGED: dict = {"signature": None}
+_FILL_MISMATCH_LAST_LOGGED: dict = {"signature": None}
+# order ids already logged today (multi-piece fill validated / began filling before today), reset on a new PT day
+_FILL_SEQ_LOGGED: dict = {"pt_date": "", "oids": set()}
+
+
+def _once_today(pt_date: str, key: str) -> bool:
+    """True the first time `key` is seen on `pt_date` (then remembered until the PT date changes)."""
+    if _FILL_SEQ_LOGGED.get("pt_date") != pt_date:
+        _FILL_SEQ_LOGGED.update(pt_date=pt_date, oids=set())
+    seen = _FILL_SEQ_LOGGED["oids"]
+    if key in seen:
+        return False
+    seen.add(key)
+    return True
+
+
+def _log_fill_mismatch(order_id: str, reason: str, **details: Any) -> None:
+    """KILL-PARTIAL-1104: one WARNING per distinct mismatch (same order + reason + details is logged once, not on
+    every kill check). Always names the fallback taken. Never raises."""
+    try:
+        signature = json.dumps({"oid": order_id, "reason": reason, **details}, sort_keys=True, default=str)
+        if signature == _FILL_MISMATCH_LAST_LOGGED["signature"]:
+            return
+        _FILL_MISMATCH_LAST_LOGGED["signature"] = signature
+        logger.warning(
+            "kill-switch fill/order facts mismatch for %s (%s) %s — degrading the intraday measure to the "
+            "equity fallback [change=kill-partial-1104]",
+            order_id, reason, json.dumps(details, sort_keys=True, default=str),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("kill-switch fill mismatch log failed: %s", e)
+
+
+def _whole_positive(raw: Any) -> "int | None":
+    """int(raw) for a finite, positive, whole, non-bool number (or numeric string); else None."""
+    try:
+        if isinstance(raw, bool):
+            return None
+        v = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(v) or v <= 0 or not v.is_integer():
+        return None
+    return int(v)
+
+
+def _fill_sequences_consistent(rows: list, pt_date: str = "") -> bool:
+    """KILL-PARTIAL-1104 rev 2.2: every order's fills today form one consistent sequence.
+
+    `rows` = [{"oid", "aid", "ts", "qty", "cum", "order_qty", "tif"}] for today's fills. Per order: activity ids
+    unique; sorted by (cum_qty, activity id) — the running total orders the pieces exactly (time text with trimmed
+    fractions does not sort correctly) and the chain check below is strict; cum_qty[0] - qty[0] >= 0, and a positive
+    starting base (the order began filling on an earlier session) is allowed only for a GTC order; cum_qty[i] ==
+    cum_qty[i-1] + qty[i]; every cum_qty <= the order's total qty. Any break → False (caller degrades)."""
+    groups: dict = {}
+    for row in rows:
+        groups.setdefault(row["oid"], []).append(row)
+    for oid, items in groups.items():
+        ids = [r["aid"] for r in items]
+        if len(set(ids)) != len(ids):
+            _log_fill_mismatch(oid, "duplicate_activity_id", activity_ids=ids)
+            return False
+        items.sort(key=lambda r: (r["cum"], r["aid"]))
+        first = items[0]
+        order_qty = first["order_qty"]
+        base = first["cum"] - first["qty"]
+        if base < 0:
+            _log_fill_mismatch(oid, "cum_below_qty", position=0, activity_id=first["aid"], qty=first["qty"],
+                               cum_qty=first["cum"], order_qty=order_qty)
+            return False
+        if base > 0:
+            if first.get("tif") != "gtc":
+                _log_fill_mismatch(oid, "earlier_fills_on_non_gtc", activity_id=first["aid"], qty=first["qty"],
+                                   cum_qty=first["cum"], order_qty=order_qty, tif=first.get("tif"))
+                return False
+            if _once_today(pt_date, f"base:{oid}"):
+                logger.info("kill-switch fills: order %s began filling before today (starting cum_qty %s of %s) "
+                            "[change=kill-partial-1104]", oid, base, order_qty)
+        prev = base
+        for pos, r in enumerate(items):
+            if r["cum"] != prev + r["qty"] or r["cum"] > r["order_qty"] or r["order_qty"] != order_qty:
+                _log_fill_mismatch(oid, "cum_sequence", position=pos, activity_id=r["aid"], qty=r["qty"],
+                                   cum_qty=r["cum"], expected_cum=prev + r["qty"], order_qty=r["order_qty"])
+                return False
+            prev = r["cum"]
+        if len(items) > 1 and _once_today(pt_date, f"multi:{oid}"):
+            logger.info("kill-switch fills: order %s validated across %d fills today (cum %s of %s) "
+                        "[change=kill-partial-1104]", oid, len(items), prev, order_qty)
+    return True
 
 
 def _log_kill_attr(attr: dict) -> None:
@@ -644,7 +737,10 @@ def _today_fills() -> "tuple[tuple, bool]":
     try:
         from reporting.pnl_ledger import fetch_all_fills, _pt_date
         out = []
-        for f in fetch_all_fills():
+        seq_rows: list = []
+        # strict=True: a page that cannot be confirmed as the last one raises (→ ok=False) instead of silently
+        # returning a truncated history (KILL-PARTIAL-1104 rev 2.2 item 3).
+        for f in fetch_all_fills(strict=True):
             if _pt_date(f.get("transaction_time", "")) != pt_today:
                 continue  # not a TODAY fill → legitimately skip
             # A TODAY fill that cannot be parsed/used must DEGRADE, never be silently dropped
@@ -683,6 +779,16 @@ def _today_fills() -> "tuple[tuple, bool]":
             )
             if fill_tier == _UNRESOLVED_FILL_TIER:
                 return (), False
+            cum = _whole_positive(f.get("cum_qty"))
+            activity_id = str(f.get("id") or "").strip()
+            facts = _intraday_order_tier_cache.get("tiers", {}).get(str(order_id or "").strip())
+            if cum is None or not activity_id or not isinstance(facts, dict):
+                _log_fill_mismatch(str(order_id or ""), "fill_fields", activity_id=activity_id,
+                                   cum_qty=f.get("cum_qty"), qty=q)
+                return (), False
+            seq_rows.append({"oid": str(order_id).strip(), "aid": activity_id,
+                             "ts": str(f.get("transaction_time", "")), "qty": q, "cum": cum,
+                             "order_qty": int(facts["qty"]), "tif": facts.get("tif", "")})
             out.append((
                 str(sym).upper(),
                 side,
@@ -690,6 +796,8 @@ def _today_fills() -> "tuple[tuple, bool]":
                 px,
                 fill_tier,
             ))
+        if not _fill_sequences_consistent(seq_rows, pt_today):
+            return (), False
         fills = tuple(out)
         _intraday_cache.update(ts=now, pt_date=pt_today, fills=fills, ok=True)
         return fills, True

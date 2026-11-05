@@ -137,7 +137,7 @@ def test_nonfinite_fill_price_degrades_before_attribution(monkeypatch) -> None:
     monkeypatch.setattr(
         pnl_ledger,
         "fetch_all_fills",
-        lambda: [{
+        lambda **_kw: [{
             "transaction_time": today,
             "symbol": "NVDA",
             "side": "buy",
@@ -160,7 +160,7 @@ def test_non_whole_positive_fill_quantity_degrades(
     monkeypatch.setattr(
         pnl_ledger,
         "fetch_all_fills",
-        lambda: [{
+        lambda **_kw: [{
             "transaction_time": today,
             "symbol": "NVDA",
             "side": "buy",

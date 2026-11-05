@@ -1,0 +1,27 @@
+{
+  "change": "kill-partial-1104",
+  "tier": 2,
+  "paths": [
+    "execution/risk_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "kill-switch fills: order [0-9a-f-]+ validated across [0-9]+ fills today .*change=kill-partial-1104"
+    }
+  ],
+  "expected_rate": "one line per order that fills in two or more pieces on a trading day (stops and limit orders on thin moves); several sessions have none",
+  "window_sessions": 10,
+  "window_reason": "multi-piece fills are occasional (XOM 11-04, NVDA Day orders 11-05 filled 1+1 and 3+1); ten sessions normally include at least one",
+  "reversal": "a 'kill-switch fill/order facts mismatch' line for an order whose FILL activities are a consistent cum_qty sequence, a kill snapshot with attribution_exact false caused by a multi-piece fill, or any session where the exact measure shows a smaller Day+Swing loss than the fills imply",
+  "metrics": [
+    {
+      "name": "false fill/order mismatch degradations",
+      "source": "logs/mtf_bot.log 'facts mismatch' lines with change=kill-partial-1104, checked against the order's FILL activities",
+      "direction": "down",
+      "bound": "zero for consistent fill sequences"
+    }
+  ],
+  "verification": "tests/test_kill_switch_partial_fill.py",
+  "baseline_exempt_reason": "the 'validated across N fills today [change=kill-partial-1104]' line is new in this change, so a match can only come from the new code"
+}
