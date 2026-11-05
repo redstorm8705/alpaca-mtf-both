@@ -1,7 +1,7 @@
 # F6 crash-only trigger restoration — 2026-10-28
 
 **Author:** OpenAI Codex
-**Status:** revised exact diff owner-approved 2026-11-04; F6 remains disabled
+**Status:** shipped in PR #811 and deployed to OCI at `fd2f700`; F6 remains disabled
 Approval-ID: F6-CRASH-1028
 Owner numbers: execution/f6_empirical_trigger.py F6_HISTORY_FETCH_DAYS=90; execution/f6_empirical_trigger.py F6_HISTORY_SESSION_COUNT=21; execution/f6_empirical_trigger.py F6_PRIOR_CLOSE_OFFSET=2; execution/f6_empirical_trigger.py F6_RETURN_PERCENT_SCALE=100.0; execution/f6_empirical_trigger.py F6_THREE_SESSION_OFFSET=4; execution/f6_empirical_trigger.py F6_CLOSE_FLOOR_PCT=2.0; execution/f6_empirical_trigger.py F6_CLOSE_VIX_SLOPE=0.15; execution/f6_empirical_trigger.py F6_INTRADAY_LOW_PCT=-3.5; execution/f6_empirical_trigger.py F6_THREE_SESSION_PCT=-10.0; execution/f6_empirical_trigger.py F6_VIX_RELATIVE_CONFIRM=1.3; execution/f6_empirical_trigger.py F6_DEEP_CRASH_PCT=-7.0; execution/f6_empirical_trigger.py F6_DEEP_VIX_LEVEL=35.0; execution/f6_empirical_trigger.py F6_TIER_C_CASH_FRACTION=0.30; execution/f6_empirical_trigger.py F6_TIER_B_CASH_FRACTION=0.20; execution/f6_empirical_trigger.py F6_TIER_B_MAX_NAMES=3; execution/f6_empirical_trigger.py F6_TIER_B_DEPTH_PCT=-4.0; execution/f6_empirical_trigger.py F6_TIER_A_CASH_FRACTION=0.10; execution/f6_empirical_trigger.py F6_TIER_A_MAX_NAMES=2; execution/f6_empirical_trigger.py F6_TIER_A_DEPTH_PCT=-2.0; execution/f6_empirical_trigger.py F6_RECENT_PRIOR_SESSION_COUNT=5; execution/f6_empirical_trigger.py F6_EVIDENCE_FLOAT_TOLERANCE=0.000000001
 Covers: execution/f6_empirical_trigger.py, execution/forever_hold_manager.py,
