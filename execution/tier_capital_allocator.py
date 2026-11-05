@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import hmac
 import json
 import math
 import os
@@ -44,6 +45,59 @@ _OPEN_STATUSES = frozenset(
     }
 )
 _TERMINAL_STATUSES = frozenset({"filled", "canceled", "expired", "rejected"})
+_F6_TRIGGER_EVIDENCE = (
+    Path(__file__).resolve().parent.parent
+    / "data"
+    / "state"
+    / "forever6_trigger_evidence.jsonl"
+)
+
+
+def _live_f6_evidence_valid(evidence: dict[str, Any]) -> bool:
+    """Bind allocator admission to the exact latest durable F6 trigger row."""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from execution.f6_empirical_trigger import durable_evidence_locked
+
+        with durable_evidence_locked():
+            latest = None
+            with open(_F6_TRIGGER_EVIDENCE, encoding="utf-8") as handle:
+                for line in handle:
+                    if line.strip():
+                        latest = json.loads(line)
+        if not isinstance(latest, dict):
+            return False
+        payload = dict(latest)
+        payload.pop("recorded_at", None)
+        durable_sha = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        requested_sha = str(evidence.get("trigger_evidence_sha256", "")).lower()
+        source_sha = str(evidence.get("trigger_sha256", "")).lower()
+        et = ZoneInfo("America/New_York")
+        now_et = datetime.now(et)
+        as_of = datetime.fromisoformat(str(latest.get("as_of_date", ""))).date()
+        evaluated = datetime.fromisoformat(str(latest.get("evaluated_at", "")))
+        recorded = datetime.fromisoformat(str(latest.get("recorded_at", "")))
+        if evaluated.tzinfo is None or recorded.tzinfo is None:
+            return False
+        return (
+            hmac.compare_digest(durable_sha, requested_sha)
+            and latest.get("armed") is True
+            and latest.get("tier") == evidence.get("f6_trigger_tier")
+            and as_of == now_et.date()
+            and evaluated.astimezone(et).date() == as_of
+            and recorded.astimezone(et).date() == as_of
+            and evaluated <= recorded
+            and recorded.astimezone(et) <= now_et
+            and hmac.compare_digest(
+                str(latest.get("prior_record_sha256", "")).lower(), source_sha
+            )
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
 
 
 def _enum_text(value: Any) -> str:
@@ -162,6 +216,7 @@ class TierCapitalAllocator:
         policy: CapitalPolicy | None = None,
         clock: Callable[[], float] = time.time,
         ledger_loader: Callable[[], dict[str, Any]] | None = None,
+        f6_evidence_validator: Callable[[dict[str, Any]], bool] | None = None,
     ) -> None:
         root = Path(__file__).resolve().parent.parent
         self.broker = broker
@@ -173,6 +228,7 @@ class TierCapitalAllocator:
         self.policy = policy or CapitalPolicy()
         self.clock = clock
         self.ledger_loader = ledger_loader or self._default_ledger
+        self.f6_evidence_validator = f6_evidence_validator or (lambda _evidence: False)
 
     @staticmethod
     def _default_ledger() -> dict[str, Any]:
@@ -374,6 +430,28 @@ class TierCapitalAllocator:
         self, state: dict, snap: dict, ledger: dict, req: EntryRequest
     ) -> Decision:
         regime = str(req.regime_evidence.get("regime", ""))
+        if req.tier == "forever6" and (
+            regime != "crash"
+            or req.regime_evidence.get("source") != "f6_crash_trigger"
+            or req.regime_evidence.get("f6_trigger_armed") is not True
+            or req.regime_evidence.get("f6_trigger_tier") not in {"A", "B", "C"}
+            or len(str(req.regime_evidence.get("trigger_sha256", "")))
+            != len(hashlib.sha256().hexdigest())
+            or any(
+                char not in "0123456789abcdef"
+                for char in str(req.regime_evidence.get("trigger_sha256", "")).lower()
+            )
+            or len(str(req.regime_evidence.get("trigger_evidence_sha256", "")))
+            != len(hashlib.sha256().hexdigest())
+            or any(
+                char not in "0123456789abcdef"
+                for char in str(
+                    req.regime_evidence.get("trigger_evidence_sha256", "")
+                ).lower()
+            )
+            or not self.f6_evidence_validator(req.regime_evidence)
+        ):
+            return self._decision(False, "F6 crash trigger evidence is invalid", req)
         targets = self.policy.targets.get(regime)
         if (
             not isinstance(targets, dict)
@@ -985,6 +1063,7 @@ def live_admit(
                     ),
                 },
             ),
+            f6_evidence_validator=_live_f6_evidence_valid,
         )
     _evidence = regime_evidence or _load_regime_evidence()
     return _LIVE_ALLOCATOR.admit_entry(
