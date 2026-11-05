@@ -62,8 +62,7 @@ These need OCI logs and Alpaca fills.
 
 ## F. Open GitHub items
 
-- **PRs:** (#839 dashboard per-tier rows merged 11-04 as `8fcd50f`), #834 Swing capacity replay (11-04, active), #811 F6 crash
-  trigger restoration (Codex, 10-31), #804 docs Day search r3-r4 (10-30), #727 docs SLACK-0930 answers (10-20).
+- **PRs:** (#839 dashboard per-tier rows merged 11-04 as `8fcd50f`), #834 Swing capacity replay (11-04, active), #804 docs Day search r3-r4 (10-30), #727 docs SLACK-0930 answers (10-20).
 - **Issues (24 open):** 16 `UNEXERCISED_EXPIRED` post-live expectations (#819, #805, #795, #776, #775, #774, #773,
   #772, #771, #770, #751, #750, #749, #746, #731, #730), 7 `NEW_ERRORS` session reports (#820, #806, #777, #739,
   #736, #672, #636), and #756 (above). Issue #794 (false post-live alarm) is closed.
@@ -82,3 +81,7 @@ These need OCI logs and Alpaca fills.
    rules/behaviour.md 1). The every-prompt reminder ("convene board + Gro + GAI … final Gro+GAI pre-ship audit") is not
    in the repo's `.claude/`, so it lives in the Mac's user-level Claude settings. All are gated / Mac-side edits.
 7. 467 of 534 remote branches untouched for 14+ days — inventory for owner-approved deletion (cleanup item 2).
+
+## Update 2026-11-05
+- #811 (F6 crash-only trigger restored, OpenAI Codex) merged to main (`fd2f700f`, deployment note `152de542`); F6 stays OFF.
+- New design: VIX-FIELD-1105 (`logs/design_records/vix_field_2026-11-05.md`) — VIX rules read SPY realized vol on VIX-outage days; also reaches three exit rules. Board review running.

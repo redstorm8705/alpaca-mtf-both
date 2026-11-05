@@ -6,7 +6,7 @@
 |---|---|---|---|
 | Already merged into main | 426 | `git branch -r --merged origin/main` | Delete — no work is lost |
 | Not merged, but every commit's change is already in main | 39 | `git cherry origin/main <branch>` shows no `+` | Delete — no work is lost |
-| Open PRs | 5 | GitHub open PR list | Keep: #834, #811, #804, #727, and this session's branch |
+| Open PRs | 5 | GitHub open PR list | Keep: #834, #804, #727, and this session's branch (#811 merged 2026-11-05) |
 | Unmerged work, no open PR | 63 | `git cherry` shows commits not in main | Tag as `archive/<branch>` (keeps every commit), then delete the branch |
 
 Within the 63: 6 are F6 feature branches from the Codex lane (`feat/f6-ownership-preflight`, `feat/f6-residual-stop-coverage`,
