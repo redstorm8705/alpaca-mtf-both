@@ -75,8 +75,15 @@ instead of "crash". [hypothesis — unverified: realized vol usually sits below 
 **R4 stop confirmation when the reading is the equivalent or none.** One view: lean protective — 1 bar when there is
 no value or the equivalent's band crosses 30, because waiting 2 extra bars lets a real loss run past the planned stop on
 exactly the day the feed is most likely to fail; it adds no trades and hides nothing. Other view: base setting (3
-bars) is acceptable. Check first whether the broker-side stop already sits at the planned stop (`exit_logic.py:81`,
-`:367`); if it does, R4 is moot either way.
+bars) is acceptable.
+
+**Checked 2026-11-05 — not moot.** `broker_stop_scope` (`execution/stop_protection.py:470-481`) puts only overnight
+positions and positions with a stored broker stop id under a broker stop; "Entry-day core positions protected by the
+software stop are NOT in scope". For those, the only exit is the hard-stop block (`execution/exit_logic.py:1757-1779`),
+which counts one breach per new bar and sells on breach 1 when VIX ≥ 30, else on breach 3. So on a VIX-outage day with
+real VIX ≥ 30, an entry-day core position whose stop is breached waits two more bars before selling. **Recommendation:
+the protective lean** (1 bar when the source is `equivalent` with a band crossing 30, or `none`): it changes exit timing
+only, adds no trades, and keeps the loss at the planned stop; positions already under a broker stop are unaffected.
 
 ## 4. Risk path
 Changes entry counts (R1, R6, R9), stop width (R7, R8), exit timing (R2-R4), the overnight block (R5) and tier capital
