@@ -1,0 +1,326 @@
+{
+  "audit_date": "2026-11-04",
+  "run_ts": "2026-11-04T10:30:01.874952-08:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 4,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AMZN",
+      "AAPL",
+      "MSFT",
+      "XOM"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 22,
+    "levels": {
+      "ELEVATED": 19,
+      "STRESSED": 3
+    },
+    "last_score": 24,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 113,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-04 17:03:55,498 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-04 17:03:55,500 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-04 17:04:53,360 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for QQQM has no prior lot and no tracker record \u2014 fill un",
+      "2026-11-04 17:04:53,360 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for AMZN has no prior lot and no tracker record \u2014 fill un",
+      "2026-11-04 17:05:08,683 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$14.09 tracker=$0.00 drift=$+14.09"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 2,
+    "wins": 1,
+    "losses": 1,
+    "total_pnl": -25.340000000000117,
+    "win_rate": 0.5,
+    "profit_factor": 0.27558604917095125,
+    "avg_win": 9.639999999999873,
+    "avg_loss": -34.97999999999999,
+    "best": {
+      "symbol": "AMZN",
+      "pnl": 9.639999999999873,
+      "entry_price": 268.16,
+      "exit_price": 270.57,
+      "size": 4.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 260.2,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "XOM",
+      "pnl": -34.97999999999999,
+      "entry_price": 183.52,
+      "exit_price": 171.86,
+      "size": 3.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Swing 55-day breakout",
+      "mri_level": "NORMAL",
+      "stop": 173.71,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "XOM",
+        "pnl": -34.97999999999999,
+        "entry_price": 183.52,
+        "exit_price": 171.86,
+        "size": 3.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Swing 55-day breakout",
+        "mri_level": "NORMAL",
+        "stop": 173.71,
+        "target": 0.0
+      },
+      {
+        "symbol": "AMZN",
+        "pnl": 9.639999999999873,
+        "entry_price": 268.16,
+        "exit_price": 270.57,
+        "size": 4.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 260.2,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 203,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:06-10:06"
+        ],
+        "uncovered_windows_pt": [
+          "07:06-07:06"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "AMZN": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 16,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:42-09:42",
+          "09:58-09:58"
+        ],
+        "uncovered_windows_pt": [
+          "06:42-06:42",
+          "06:58-06:58"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 221,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:03-10:03",
+          "13:10-13:10"
+        ],
+        "uncovered_windows_pt": [
+          "07:03-07:03",
+          "10:10-10:10"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core",
+          "day"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "QQQM": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 7,
+        "uncovered_min": 3,
+        "lapsed_min": 2,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:31",
+          "09:33-09:34",
+          "09:36-09:36"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:31",
+          "06:33-06:34",
+          "06:36-06:36"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "XOM": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 4,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-04",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 11,
+    "symbols": [
+      "AAPL",
+      "AMZN",
+      "GE",
+      "MSFT",
+      "QQQM",
+      "XOM"
+    ],
+    "by_symbol": {
+      "GE": {
+        "buy": 0,
+        "sell": 1
+      },
+      "MSFT": {
+        "buy": 2,
+        "sell": 0
+      },
+      "AAPL": {
+        "buy": 1,
+        "sell": 0
+      },
+      "AMZN": {
+        "buy": 1,
+        "sell": 2
+      },
+      "QQQM": {
+        "buy": 0,
+        "sell": 2
+      },
+      "XOM": {
+        "buy": 0,
+        "sell": 2
+      }
+    }
+  }
+}

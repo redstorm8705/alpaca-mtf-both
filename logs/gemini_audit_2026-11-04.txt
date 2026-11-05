@@ -1,0 +1,65 @@
+Nightly Gemini Audit — 2026-11-04
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['generate_dashboard.py', 'scripts/schwab_login.py', 'data/earnings_documents.py', 'data/schwab_quotes.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* `execution.ownership_guard` | `sync_ledger` REFUSED due to protected floor shrink (GE/qhm) | GE (sells frozen)
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **`execution.ownership_guard`**: The `sync_ledger` process is in a critical state (`streak=8` then `streak=9`) due to a "protected floor shrink" for `GE/qhm`. The bot has frozen all sells for this symbol. This is a hard stop on automated management for this position.
+* **`execution.portfolio_tracker`**: `pnl_ledger` invariant failure (`drift=$8.1`) and `pnl_unreconciled=true` (reason: `ledger_down_source_disagreement`) occurred at 20:58:55. This indicates the internal tracker and Alpaca are out of sync beyond the expected EOD drift.
+* **`strategy.run_cycle`**: `[ANOMALY-2]` for `MSFT` persists across multiple cycles (20:38, 20:46, 20:57). The bot reports `risk.open_positions=5` but `tracker=0`. This indicates a state mismatch between the risk manager and the portfolio tracker.
+* **`execution.risk_manager`**: Persistent `kill-switch fill/order facts mismatch` for `be404bfa-d124-4e20-bcba-b460835a7a3a`. This is degrading the intraday risk measure.
+
+### PERFORMANCE AUDIT
+* **P&L Integrity**: The `pnl_unreconciled` flag at EOD is a significant concern. While the `pnl_today` is reported as $49.91, the ledger disagreement suggests the internal accounting is not authoritative.
+* **Stop/Target Analysis**:
+    * `AAPL` (2026-11-04 12:52): Partial exit at $350.33, exit at $350.34. Entry was $352.58. Both exits were at a loss, consistent with the stop $350.20.
+    * `MSFT` (2026-11-04 12:58): Exit at $555.78. Entry was $553.58. Profit of $4.40 (2 shares) is correct.
+* **Score Correlation**: The bot is consistently scanning high-score tickers (e.g., `AAPL`, `AMZN`, `TOST` at 10/12), but the `ANOMALY-2` mismatch is preventing entries, rendering the scoring system ineffective for these symbols.
+
+### TRADE INTEGRITY
+* **FIFO Orphan Warnings**: Multiple `FIFO orphan` warnings for `QQQM` and `AMZN` appear in the logs (20:31, 20:40, 20:50, 20:58). This confirms that the `portfolio_tracker` is failing to match fills to lots, which is the root cause of the `pnl_unreconciled` state.
+
+### MODIFIED FILE FINDINGS
+* **`generate_dashboard.py`**: The added `_today_trade_rows` and `_today_trades_html` functions correctly attempt to parse the `trade_events.jsonl` file. However, the logic relies on `_event_tier` which uses `canonical_tier`. If `canonical_tier` fails to map a tier, it returns "unattributed", which may lead to missing data in the dashboard.
+* **`data/schwab_quotes.py`**: The `scope_proof` function correctly identifies that the accounts endpoint should be refused (401/403). The logic to delete the token and page Slack on HTTP 200 is robust.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED
+* **P5-C2**: UNTOUCHED
+* **P5-H2**: TRIGGERED (Fill price crosstalk/mismatch evidenced by `FIFO orphan` and `kill-switch` logs)
+* **P5-H3**: TRIGGERED (Orphaned records in `portfolio_tracker`)
+* **P5-M1**: UNTOUCHED
+* **P5-M2**: UNTOUCHED
+* **P5-M3**: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | `execution.portfolio_tracker` | FIFO matching failure | The tracker is failing to reconcile fills with lots, leading to `FIFO orphan` warnings and `pnl_unreconciled` status.**
+* **EXECUTION BUG | HIGH | `execution.ownership_guard` | Ledger sync deadlock | The `GE/qhm` protected floor shrink is preventing ledger healing, causing a persistent `CRITICAL` state that blocks all sell operations for that symbol.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **Immediate**: Manually investigate the `GE/qhm` position and run `confirm_ledger_heal.py GE qhm 0` if the position is indeed closed, to clear the `ownership_guard` deadlock.
+2. **Immediate**: Investigate the `FIFO orphan` warnings. The `portfolio_tracker` is failing to associate fills with existing lots; check if the `trade_id` generation or lookup logic in `portfolio_tracker` has drifted.
+3. **High**: Resolve the `ANOMALY-2` mismatch (`risk.open_positions` vs `tracker=0`) for `MSFT`. This is likely a side effect of the `FIFO orphan` issue where the tracker fails to acknowledge the position.
+4. **Medium**: Audit `execution.risk_manager` for the `kill-switch fill/order facts mismatch` on `be404bfa-d124-4e20-bcba-b460835a7a3a`.
+5. **Medium**: Prune `score_comparison` JSON to prevent unbounded growth (P5-M3).
+================================================================================
+BROKER GROUND TRUTH (2026-11-04, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=day exposed=343m no-broker-stop=0m [07:06-07:06] rejected_stop_orders=0
+  AMZN   COVERED                  owners=day exposed=16m no-broker-stop=0m [06:42-06:42, 06:58-06:58] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=221m no-broker-stop=0m [07:03-07:03, 10:10-10:10] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core/day exposed=390m no-broker-stop=0m [12:58-12:58] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  QQQM   COVERED                  owners=core exposed=7m no-broker-stop=3m [06:30-06:31, 06:33-06:34, 06:36-06:36] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  XOM    COVERED                  owners=core exposed=4m no-broker-stop=0m [-] rejected_stop_orders=0
