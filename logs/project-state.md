@@ -1,34 +1,29 @@
-# alpaca-mtf-bot — project state (2026-11-04 PT)
+# Project state — alpaca-mtf-bot (2026-11-05 evening PT)
 
-**Bot:** paper account, OCI services mtf-bot/mtf-writer/mtf-http/nginx; main @ 8fcd50f (GitHub). Account equity and the
-full position list were NOT re-read on 11-04 (cloud session, no Alpaca/OCI access); last confirmed equity ~$2,696 (11-01).
-Position changes since 11-01 known from the handoff: AAPL Swing lot stopped out at the 11-03 open ($327.34); XOM Swing
-stopped out 11-04 (−$34.98); GOOGL QHM tranche 1 filled 11-02 (ACTIVE, 1 sh, GTC stop).
+Shipped and live today: KILL-PARTIAL-1104 (PR 848, verified live: 6 multi-fill orders validated, attribution exact),
+Schwab CBOE index reader (PR 846, inert until wired), dashboard held legs + Swing trend-exit label (PR 845), design
+records (PRs 843, 847, 850). Owner approvals on record: REGIME-SIZE-1104, CATALYST-DYNAMIC-1104, KILL-PARTIAL-1104.
 
-**Shipped 11-02 to 11-04:** QHM saves state the moment a tranche fill lands (#817); trend_night QQQM sizing ignores
-Day-tier lots closed before the close (#822); Swing breakout entry needs a fresh last trade at or above the level (#823);
-news HALT keywords match whole phrases, false halts removed (#825); earnings-document reader, EDGAR + transcripts, inert
-(#836); Schwab NBBO quote client, inert until login (#837, #838); dashboard one row per tier with targets and today's
-trades (#839). All deployed-unexercised unless a post-live audit says otherwise.
+Exact next steps, in order:
+1. **REGIME-SIZE-1104 slice 1 (the real CBOE VIX):** `git apply logs/wip/regime_size_1104_slice1_2026-11-05.patch`
+   on a fresh branch (strategy/volatility_regime.py + tests/test_vix_source.py + post-live expectation). 211 tests pass,
+   statics clean. Cold-2nd FAILED rounds 1-4 (F1 clock lag, F2 yfinance retry storm, F3 freshness gap, F4 clock read
+   before the slow call, F5 allocator low_vol label) — all fixed in the patch; the round-5 review was cut off by the
+   weekly limit, so run a FRESH cold-2nd first, then markers, preship with
+   `--context logs/wip/regime_size_1104_slice1_preship_context.txt`, ship, deploy, verify the
+   `Volatility regime: ... schwab ... [change=regime-size-1104]` line during RTH. Then slice 2 (run_cycle score gates on
+   the fresh-only `vix_value`, stop width on the basis/prior close, sticky VIX>35, sizing records).
+2. **SWING-RATCHET-1105 rev 9** (`logs/design_records/swing_ratchet_2026-11-05.md`): board + masked-loss seat + GAI
+   approve; Codex rejected rev 8 (client-order-id length, fixed in rev 9) — Codex must confirm rev 9 (Gro may not stand
+   in after a Codex reject), then bring the owner the one-page approval, then build.
+3. **Kill switch after the close:** failed closed 3x (4:04/4:36/5:09 PM ET) with "exact tier attribution is
+   unresolved" after "reattributed impossible negative protected replay NVDA/qhm=-2" (NVDA QHM stop-out + Day short).
+   No RTH impact. Root-cause with the NVDA post-mortem (post-live #851).
+4. CATALYST-DYNAMIC-1104 Phase A build (approved).
+5. Owner questions: (a) 11-02 "ship on full BGC alignment" — standing rule or one night? (b) widen REGIME-SIZE-1104
+   Covers to data/fmp_client.py for the FMP VIX tier? (c) fork_reminder.py text change (gate file).
 
-**Approved, build queued:** GAP-EXIT-1029 (non-earnings gap-downs wait); EARN-GAP-REVIEW-1104 (no sale on an earnings
-gap-down until a document review decides QHM promotion or a bounce target; owner to add ALPHAVANTAGE_API_KEY on OCI);
-LOSS-PM-1104 (same-day post-mortem for every losing trade + weekly remedy roll-up).
+Live state: BRK.B 2 sh protected by the OWNER's stop at $561.85 (untagged; the Swing manager logs "re-protecting"
+each cycle and the broker refuses a duplicate — expected until the ratchet ships). No NVDA position. GE sold by the
+owner, ledger healed. F6 off.
 
-**In design:** CATALYST-DYNAMIC-1104 — replace the keyword bad-news entry block with a whole-article reading (two AI
-readers, verbatim quotes, entry-block only). Board 5/5 approve-with-changes; GAI + Codex review owed. Found live defects in
-today's gate: newer news cancels a block, 72h fetch vs a 30-day window, 25-article cap, watch set misses RIVN/MU/SNDK.
-Record: logs/design_records/catalyst_dynamic_2026-11-04.md. ALPHA-ENGINE-1104 design merged (#835).
-
-**Open bugs:** tracker FIFO orphan on trend-night fills; QHM overnight-room check fails closed on the unpriced trend-night
-buy; Swing breakout has no earnings check and sets up QHM-reserved names; drift detector flags QQQM.
-**Overdue post-live audits:** #823, #822, #817, #813, #809, #808, #801.
-**Owner decisions pending:** Day ORB data plan (prior-day SIP proxy vs paid real-time SIP); F6 enablement (F6 OFF).
-Full list: logs/research/open_queue_2026-11-04.md.
-
-**Process:** reviewers are BGC — board, GAI, Codex; Gro is the backup only when Codex is unavailable (REVIEWER-SWAP-1025).
-Master Brain login restored 11-04.
-
-**Owner preferences:** paper account, $2.5K -> $25K, data collection first, trade every day; no shadow periods; problem /
-fix / real stock example in plain English; CEO-level updates only; buy the dip first on QHM names; dynamic rules, never
-static keyword lists or fixed thresholds.
