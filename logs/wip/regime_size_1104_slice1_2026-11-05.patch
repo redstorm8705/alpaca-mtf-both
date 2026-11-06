@@ -1,0 +1,842 @@
+diff --git a/strategy/volatility_regime.py b/strategy/volatility_regime.py
+index 97b0df32..b44e1f01 100644
+--- a/strategy/volatility_regime.py
++++ b/strategy/volatility_regime.py
+@@ -1,48 +1,109 @@
++# ruff: noqa: E501  — dense rationale comments run long (project convention)
+ """
+ strategy/volatility_regime.py
+-Volatility regime detection — no options feed required.
+-
+-Uses SPY 10-day realized volatility (annualized) as a VIX proxy.
+-Classifies market into three regimes and returns size/stop multipliers.
+-
+-Regimes:
+-  LOW_VOL    (<12% annualized) — low-vol grind, trends are clean, size up
+-  NORMAL     (12–25%)          — baseline behavior
+-  HIGH_VOL   (>25%)            — panic/expansion, chop increases, size down
++Volatility regime detection.
++
++VIX (REGIME-SIZE-1104, owner direction 2026-11-04: "the actual box reading, not some composite reading"):
++  the CBOE $VIX index itself, with its own as-of time, from (1) the owner's Schwab market-data feed
++  ($VIX, every call), else (2) the T4 yfinance ^VIX chart (as-of = regularMarketTime). SPY realized
++  volatility is NEVER used as VIX; it is reported separately as `spy_rvol_10d`.
++  [FMP ^VIX (T2) is the planned middle tier; it needs a quote function in the FMP client module.]
++
++Result fields:
++  vix_value / vix_source / vix_as_of / vix_age_s / vix_fresh - the highest-tier VIX whose own as-of
++      time is within 2 scan intervals of now (vix_source "none" when there is none; then VIX rules
++      are not applied).
++  vix_basis_value / vix_basis_source / vix_basis_as_of - the most recent real VIX reading from any
++      tier or earlier in this process, whatever its age (for stop width: a missing feed must not
++      narrow a stop).
++  realized_vol - kept for existing callers: the basis VIX value, 0.0 when no VIX was ever read
++      (callers already treat 0.0 as "no reading").
++  spy_rvol_10d - SPY 10-day realized vol, annualized %, a separate series (T1 Alpaca bars).
++
++Regimes: HIGH_VOL (VIX > REGIME_HIGH_VOL_THRESHOLD; from the fresh VIX, or from the basis when no
++fresh VIX exists — a stale reading may only tighten), LOW_VOL (FRESH VIX < REGIME_LOW_VOL_THRESHOLD; a
++label the capital allocator reads, with NO size-up), else NORMAL.
++The low-vol 1.25x "size up" and the unread stop multiplier were removed: no regime multiplier above
++1.0 exists, and the core-tier share count is set by the value cap in the entry sizing path.
+ 
+ Composite regime (display-only, no effect on sizing):
+-  BULL       — SPY > 50d SMA AND VIX/VIX3M < 1.0 AND 20d rvol < 25%
+-  BEAR       — SPY < 50d SMA AND VIX/VIX3M > 1.0 AND 20d rvol > 30%
+-  HIGH_VOL   — VIX/VIX3M > 1.1 (inverted term structure, regardless of direction)
+-  NEUTRAL    — everything else
++  BULL       - SPY > 50d SMA AND VIX/VIX3M < 1.0 AND 20d rvol < 25%
++  BEAR       - SPY < 50d SMA AND VIX/VIX3M > 1.0 AND 20d rvol > 30%
++  HIGH_VOL   - VIX/VIX3M > 1.1 (inverted term structure, regardless of direction)
++  NEUTRAL    - everything else
+   VIX3M failures: single = debug log + default NORMAL; 3+ consecutive = WARNING log.
+ """
+ 
+ import logging
++import math
+ import requests
+ import numpy as np
+-from datetime import datetime, timedelta
++from datetime import datetime, timezone
+ from zoneinfo import ZoneInfo
+ import config
+ from data.fetcher import fetch_bars
+ 
+ logger = logging.getLogger("vol_regime")
+ ET = ZoneInfo("America/New_York")
++_SCHWAB_VIX = "$VIX"
++_CHANGE_TAG = "[change=regime-size-1104]"
+ 
+ 
+ class VolatilityRegime:
+-    LOW_VOL = "low_vol"
++    LOW_VOL = "low_vol"       # label only (read by the capital allocator's risk_on mode); no size-up
+     NORMAL  = "normal"
+     HIGH_VOL = "high_vol"
+ 
+ 
++def _scan_seconds() -> float:
++    """One intraday scan interval, in seconds (config.SCAN_INTERVAL_INTRADAY is in minutes)."""
++    scan_minutes = float(config.SCAN_INTERVAL_INTRADAY)
++    return scan_minutes * 60
++
++
++def _quote_ttl_seconds() -> float:
++    """Time-to-live of a VIX quote: fresh while its own as-of time is within two scan intervals of
++    now (design REGIME-SIZE-1104 rev 3: this cycle's reading or the previous cycle's)."""
++    scan_seconds = _scan_seconds()
++    quote_ttl_seconds = 2 * scan_seconds
++    return quote_ttl_seconds
++
++
++def _valid_age(value) -> "float | None":
++    try:
++        a = float(value)
++    except (TypeError, ValueError):
++        return None
++    if not math.isfinite(a) or a < 0:
++        return None
++    return a
++
++
++def _valid_vix(value) -> "float | None":
++    try:
++        v = float(value)
++    except (TypeError, ValueError):
++        return None
++    if not math.isfinite(v) or v <= 0:
++        return None
++    return v
++
++
+ class RegimeDetector:
+     def __init__(self):
+-        # ── Existing volatility regime state ──────────────────────────────────
+         self._regime       = VolatilityRegime.NORMAL
+-        self._realized_vol = 0.0
+-        self._last_check   = None
++        self._realized_vol = 0.0          # basis VIX (see module docstring); 0.0 = never read
++        self._last_check   = None         # set only when a real VIX value exists (regime_state relies on it)
+         self._refresh_mins = 15   # MRI audit Apr 6 2026: 30 → 15 min for faster VIX response
++        # (_refresh_mins now caches SPY rvol only; the Schwab VIX is read every call and the yfinance
++        #  VIX is re-read once its cached value is no longer fresh, at most once per scan interval)
++        self._spy_rvol_10d = None
++        self._rvol_last_check = None
++        self._yf_cache     = None         # {"value", "as_of", "fetched_at"} (UTC)
++        self._yf_attempt_at = None        # last yfinance attempt, success or failure (UTC)
++        self._fresh        = None         # {"value", "as_of", "source", "age_s"} or None
++        self._basis        = None         # {"value", "as_of", "source"} or None
++        self._fresh_source = None         # last logged fresh source, for the switch WARNING
+ 
+         # ── Composite regime state (display-only) ─────────────────────────────
+         self._composite_cache      = None
+@@ -51,51 +112,151 @@ class RegimeDetector:
+         self._vix3m_failure_count  = 0   # consecutive VIX3M fetch failures
+ 
+     def get_regime(self, force_refresh: bool = False) -> dict:
+-        """
+-        Returns current volatility regime and associated multipliers.
+-        Refreshes every 30 minutes automatically.
+-
+-        Returns:
+-            {
+-                "regime":     str (LOW_VOL / NORMAL / HIGH_VOL),
+-                "realized_vol": float (annualized %),
+-                "size_mult":  float,
+-                "stop_mult":  float,
+-                "note":       str,
+-            }
+-        """
+-        now = datetime.now(ET)
+-        stale = (
+-            self._last_check is None or
+-            (now - self._last_check).total_seconds() > self._refresh_mins * 60
++        """Current regime. The Schwab VIX is read on every call; with no fresh Schwab value the
++        yfinance VIX is re-read once its cached value is no longer fresh (at most once per scan
++        interval, success or failure); SPY realized vol keeps a _refresh_mins cache. force_refresh
++        bypasses the caches. Never raises."""
++        now = datetime.now(timezone.utc)
++        rvol_stale = (
++            self._rvol_last_check is None or
++            (now - self._rvol_last_check).total_seconds() > self._refresh_mins * 60
+         )
+-
+-        if stale or force_refresh:
+-            self._refresh()
+-
++        if rvol_stale or force_refresh:
++            self._spy_rvol_10d = self._fetch_spy_realized_vol()
++            self._rvol_last_check = now
++        try:
++            source_changed = self._refresh_vix(force_refresh)
++        except Exception as e:
++            logger.warning(f"RegimeDetector: VIX refresh failed: {e} — VIX rules not applied this call")
++            self._fresh = None
++            self._regime = VolatilityRegime.NORMAL
++            source_changed = False
++        if rvol_stale or force_refresh or source_changed:
++            self._log_state()
+         return self._build_result()
+ 
+-    def _fetch_vix(self) -> float:
+-        """
+-        Fetch current VIX from Yahoo Finance (free, no API key).
+-        VIX leads realized vol by days — preferred over SPY proxy.
+-        Returns VIX level as float, or None on failure.
+-        """
++    def _fetch_vix_schwab(self, bound_s: float):
++        """({"value", "as_of", "age_s"}, "ok") for $VIX from the owner's Schwab feed within bound_s,
++        else (None, reason). age_s is the client's own age, already corrected for a lagging local
++        clock. Bounded by the Schwab client's own connect + read timeouts."""
++        try:
++            from data import schwab_quotes as _sq
++        except Exception as e:
++            return None, f"import_failed: {e}"
++        if not (_sq.SCHWAB_QUOTES_ENABLED and _sq.SCHWAB_INDEX_ENABLED):
++            return None, "disabled"
++        deadline_s = sum(_sq._timeouts())
++        vals, reasons = _sq.index_last_with_reasons(
++            [_SCHWAB_VIX], {_SCHWAB_VIX: bound_s}, deadline_s=deadline_s)
++        q = vals.get(_SCHWAB_VIX)
++        if q is None:
++            return None, reasons.get(_SCHWAB_VIX, "missing")
++        v = _valid_vix(q.last)
++        age = _valid_age(q.age_s)
++        if v is None or q.trade_time is None or age is None:
++            return None, "bad_value"
++        return {"value": v, "as_of": q.trade_time, "age_s": age}, "ok"
++
++    def _fetch_vix_yf(self):
++        """(value, as_of_utc) of ^VIX from the T4 yfinance chart (regularMarketPrice at
++        regularMarketTime), or None. A value without an as-of time is unavailable."""
+         try:
+             resp = requests.get(config.VIX_API_URL, timeout=5,
+                                 headers={"User-Agent": "Mozilla/5.0"})
+             if resp.status_code != 200:
++                logger.debug(f"yfinance VIX: HTTP {resp.status_code}")
++                return None
++            meta = resp.json()["chart"]["result"][0].get("meta") or {}
++            v = _valid_vix(meta.get("regularMarketPrice"))
++            ts = meta.get("regularMarketTime")
++            if v is None or isinstance(ts, bool) or not isinstance(ts, (int, float)):
+                 return None
+-            data = resp.json()
+-            closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
+-            vix = next((v for v in reversed(closes) if v is not None), None)
+-            return round(float(vix), 2) if vix else None
++            return v, datetime.fromtimestamp(float(ts), tz=timezone.utc)
+         except Exception as e:
+-            logger.debug(f"VIX fetch failed: {e}")
++            logger.debug(f"yfinance VIX fetch failed: {e}")
+             return None
+ 
+-    def _fetch_spy_realized_vol(self) -> float:
+-        """Fallback: SPY 10-day realized vol annualized."""
++    def _refresh_vix(self, force: bool = False) -> bool:
++        """Read VIX from the tiers; returns True when the fresh source changed (logged once)."""
++        now = datetime.now(timezone.utc)
++        bound = _quote_ttl_seconds()
++        candidates = []                     # {"source", "value", "as_of", "age_s"} in tier order
++        sch, why = self._fetch_vix_schwab(bound)
++        if sch is not None:
++            # as_of is clamped to now for ordering: a trade time slightly ahead of a lagging local
++            # clock is the client's documented case (age already corrected), not a future value.
++            candidates.append({"source": "schwab", "value": sch["value"],
++                               "as_of": min(sch["as_of"], now), "age_s": sch["age_s"]})
++        else:
++            logger.debug(f"Schwab $VIX unavailable: {why}")
++        schwab_fresh = sch is not None and sch["age_s"] <= bound
++        if not schwab_fresh:
++            cache_fresh = (
++                self._yf_cache is not None and
++                0 <= (now - self._yf_cache["as_of"]).total_seconds() <= bound
++            )
++            attempt_due = force or self._yf_attempt_at is None or (
++                not cache_fresh and
++                (now - self._yf_attempt_at).total_seconds() >= _scan_seconds()
++            )
++            if attempt_due:
++                self._yf_attempt_at = now      # success or failure: next attempt one scan interval later
++                yf = self._fetch_vix_yf()
++                if yf is not None:
++                    self._yf_cache = {"value": yf[0], "as_of": yf[1], "fetched_at": now}
++            if self._yf_cache is not None:
++                # A time slightly ahead of a lagging local clock is clamped for basis ordering only;
++                # its negative age keeps it out of `fresh`.
++                candidates.append({"source": "yfinance", "value": self._yf_cache["value"],
++                                   "as_of": min(self._yf_cache["as_of"], now),
++                                   "age_s": (now - self._yf_cache["as_of"]).total_seconds()})
++
++        # Ages of tier values whose time was compared with a clock taken BEFORE the slow calls can come
++        # out negative (the Schwab call may wait up to its deadline); re-read the clock after the fetches.
++        now = datetime.now(timezone.utc)
++        for c in candidates:
++            if c["source"] == "yfinance":
++                c["as_of"] = min(self._yf_cache["as_of"], now)
++                c["age_s"] = (now - self._yf_cache["as_of"]).total_seconds()
++        fresh = None
++        for c in candidates:
++            if 0 <= c["age_s"] <= bound:
++                fresh = {"value": c["value"], "as_of": c["as_of"], "source": c["source"], "age_s": c["age_s"]}
++                break
++        self._fresh = fresh
++
++        latest = list(candidates)
++        if self._basis is not None:
++            latest.append(self._basis)
++        if latest:
++            best = max(latest, key=lambda c: c["as_of"])
++            self._basis = {"value": best["value"], "as_of": best["as_of"], "source": best["source"]}
++            self._realized_vol = best["value"]
++            self._last_check = datetime.now(ET)
++
++        # Labels: a stale reading may only TIGHTEN (HIGH_VOL from the basis when no fresh VIX exists,
++        # as before this change), never loosen (LOW_VOL needs a fresh VIX).
++        label_vix = fresh["value"] if fresh is not None else (self._basis["value"] if self._basis else None)
++        if label_vix is not None and label_vix > config.REGIME_HIGH_VOL_THRESHOLD:
++            self._regime = VolatilityRegime.HIGH_VOL
++        elif fresh is not None and fresh["value"] < config.REGIME_LOW_VOL_THRESHOLD:
++            self._regime = VolatilityRegime.LOW_VOL
++        else:
++            self._regime = VolatilityRegime.NORMAL
++
++        src_now = fresh["source"] if fresh is not None else "none"
++        if src_now == self._fresh_source:
++            return False
++        if self._fresh_source is not None:
++            logger.warning(
++                f"VIX source changed: {self._fresh_source} -> {src_now}"
++                + ("" if fresh is not None else " — VIX rules not applied until a fresh VIX returns")
++                + f" {_CHANGE_TAG}")
++        self._fresh_source = src_now
++        return True
++
++    def _fetch_spy_realized_vol(self) -> "float | None":
++        """SPY 10-day realized vol annualized % (T1 Alpaca bars). A separate series — never VIX."""
+         try:
+             df = fetch_bars("SPY", config.TF_DAILY, num_bars=15)
+             if df.empty or len(df) < 11:
+@@ -103,69 +264,56 @@ class RegimeDetector:
+             closes   = df["close"].tail(11)
+             log_rets = np.log(closes / closes.shift(1)).dropna()
+             return round(log_rets.std() * np.sqrt(252) * 100, 2)
+-        except Exception:
++        except Exception as e:
++            logger.debug(f"SPY realized vol fetch failed: {e}")
+             return None
+ 
+-    def _refresh(self):
+-        """
+-        Refresh volatility regime.
+-        Tries real VIX first (leads realized vol by days).
+-        Falls back to SPY 10-day realized vol if VIX fetch fails.
+-        """
+-        # PRIMARY: real VIX
+-        vix = self._fetch_vix()
+-
+-        if vix is not None:
+-            self._realized_vol = vix
+-            self._last_check   = datetime.now(ET)
+-            source = "VIX"
+-        else:
+-            # FALLBACK: SPY realized vol
+-            spy_vol = self._fetch_spy_realized_vol()
+-            if spy_vol is None:
+-                logger.warning("RegimeDetector: both VIX and SPY vol failed, keeping current regime")
+-                return
+-            self._realized_vol = spy_vol
+-            self._last_check   = datetime.now(ET)
+-            source = "SPY realized vol (VIX fallback)"
+-
+-        if self._realized_vol < config.REGIME_LOW_VOL_THRESHOLD:
+-            self._regime = VolatilityRegime.LOW_VOL
+-        elif self._realized_vol > config.REGIME_HIGH_VOL_THRESHOLD:
+-            self._regime = VolatilityRegime.HIGH_VOL
++    def _log_state(self):
++        f = self._fresh
++        rv = f"{self._spy_rvol_10d:.1f}%" if self._spy_rvol_10d is not None else "n/a"
++        if f is not None:
++            vix_txt = (f"VIX {f['value']:.2f} {f['source']}, as of "
++                       f"{f['as_of'].strftime('%H:%M:%S')} UTC, age {f['age_s']:.0f}s")
++        elif self._basis is not None:
++            vix_txt = (f"no fresh VIX (last {self._basis['value']:.2f} {self._basis['source']} as of "
++                       f"{self._basis['as_of'].strftime('%Y-%m-%d %H:%M')} UTC) — VIX rules not applied")
+         else:
+-            self._regime = VolatilityRegime.NORMAL
+-
+-        logger.info(
+-            f"Volatility regime: {self._regime.upper()} "
+-            f"({source}: {self._realized_vol:.1f})"
+-        )
++            vix_txt = "no VIX reading — VIX rules not applied"
++        logger.info(f"Volatility regime: {self._regime.upper()} ({vix_txt}) | SPY 10d rvol {rv} {_CHANGE_TAG}")
+ 
+     def _build_result(self) -> dict:
+-        if self._regime == VolatilityRegime.LOW_VOL:
+-            return {
+-                "regime":       VolatilityRegime.LOW_VOL,
+-                "realized_vol": self._realized_vol,
+-                "size_mult":    config.REGIME_LOW_VOL_SIZE_MULT,
+-                "stop_mult":    1.0,
+-                "note":         f"Low-vol grind ({self._realized_vol:.1f}%) — sizing up {config.REGIME_LOW_VOL_SIZE_MULT}x",
+-            }
++        f, b = self._fresh, self._basis
++        if f is None and self._regime == VolatilityRegime.HIGH_VOL and b is not None:
++            mult = config.REGIME_HIGH_VOL_SIZE_MULT
++            note = (f"HIGH VOL from the last VIX {b['value']:.1f} {b['source']} (no fresh VIX; a stale "
++                    f"reading only tightens) — VIX rules not applied")
++        elif f is None:
++            mult, note = 1.0, "VIX unavailable — VIX rules not applied"
+         elif self._regime == VolatilityRegime.HIGH_VOL:
+-            return {
+-                "regime":       VolatilityRegime.HIGH_VOL,
+-                "realized_vol": self._realized_vol,
+-                "size_mult":    config.REGIME_HIGH_VOL_SIZE_MULT,
+-                "stop_mult":    config.REGIME_HIGH_VOL_STOP_MULT,
+-                "note":         f"HIGH VOL ({self._realized_vol:.1f}%) — half size, wider stops",
+-            }
++            mult = config.REGIME_HIGH_VOL_SIZE_MULT
++            note = (f"HIGH VOL (VIX {f['value']:.1f} {f['source']}) — regime multiplier {mult}x "
++                    f"(core-tier shares are set by the value cap, not this multiplier)")
++        elif self._regime == VolatilityRegime.LOW_VOL:
++            mult = config.REGIME_NORMAL_SIZE_MULT
++            note = f"Low-vol regime (VIX {f['value']:.1f} {f['source']}) — no size change"
+         else:
+-            return {
+-                "regime":       VolatilityRegime.NORMAL,
+-                "realized_vol": self._realized_vol,
+-                "size_mult":    config.REGIME_NORMAL_SIZE_MULT,
+-                "stop_mult":    1.0,
+-                "note":         f"Normal regime ({self._realized_vol:.1f}%)",
+-            }
++            mult = config.REGIME_NORMAL_SIZE_MULT
++            note = f"Normal regime (VIX {f['value']:.1f} {f['source']})"
++        return {
++            "regime":           self._regime,
++            "realized_vol":     self._realized_vol,
++            "size_mult":        mult,
++            "note":             note,
++            "vix_value":        f["value"] if f else None,
++            "vix_source":       f["source"] if f else "none",
++            "vix_as_of":        f["as_of"].isoformat() if f else None,
++            "vix_age_s":        round(f["age_s"], 1) if f else None,
++            "vix_fresh":        f is not None,
++            "vix_basis_value":  b["value"] if b else None,
++            "vix_basis_source": b["source"] if b else "none",
++            "vix_basis_as_of":  b["as_of"].isoformat() if b else None,
++            "spy_rvol_10d":     self._spy_rvol_10d,
++        }
+ 
+     # ── Composite regime (display-only) ──────────────────────────────────────
+ 
+@@ -229,7 +377,7 @@ class RegimeDetector:
+             "spy_rvol_20d":     rvol_20d,
+         }
+ 
+-    def _fetch_spy_rvol_20d(self) -> float:
++    def _fetch_spy_rvol_20d(self) -> "float | None":
+         """SPY 20-day realized vol (separate from 10-day used by existing regime)."""
+         try:
+             df = fetch_bars("SPY", config.TF_DAILY, num_bars=25)
+@@ -281,7 +429,7 @@ class RegimeDetector:
+                 )
+             return 1.0, "NORMAL"
+ 
+-    def _fetch_spy_vs_50sma(self) -> float:
++    def _fetch_spy_vs_50sma(self) -> "float | None":
+         """Returns SPY close as pct above/below 50d SMA. Positive = above SMA."""
+         try:
+             df = fetch_bars("SPY", config.TF_DAILY, num_bars=55)
+diff --git a/tests/test_vix_source.py b/tests/test_vix_source.py
+new file mode 100644
+index 00000000..ad5657ab
+--- /dev/null
++++ b/tests/test_vix_source.py
+@@ -0,0 +1,354 @@
++# ruff: noqa: E501
++"""REGIME-SIZE-1104 slice 1: the regime layer's VIX is the CBOE index itself (Schwab $VIX, then the T4
++yfinance chart), each with its own as-of time; SPY realized vol is a separate series and never stands in
++for VIX. All network calls are mocked; nothing reaches a broker or a data vendor."""
++import logging
++import math
++import unittest
++from datetime import datetime, timedelta, timezone
++from unittest import mock
++
++import pandas as pd
++
++import config
++import strategy.volatility_regime as vr
++from data import schwab_quotes as sq
++
++UTC = timezone.utc
++NOW = datetime(2026, 11, 5, 18, 0, 0, tzinfo=UTC)
++TTL = 2 * float(config.SCAN_INTERVAL_INTRADAY) * 60
++
++
++class _FixedDT(datetime):
++    @classmethod
++    def now(cls, tz=None):
++        return NOW if tz is None or tz is UTC else NOW.astimezone(tz)
++
++
++def _iq(last, age_s=10.0):
++    t = NOW - timedelta(seconds=age_s)
++    return sq.IndexQuote(symbol="$VIX", last=last, trade_time=t, fetch_time=NOW, age_s=age_s,
++                         max_age_s=TTL, latency_s=0.1)
++
++
++def _yf_resp(price, ts):
++    r = mock.Mock()
++    r.status_code = 200
++    meta = {"regularMarketPrice": price}
++    if ts is not None:
++        meta["regularMarketTime"] = ts
++    r.json.return_value = {"chart": {"result": [{"meta": meta, "indicators": {"quote": [{"close": [price]}]}}]}}
++    return r
++
++
++def _spy_bars():
++    closes = [500 * (1 + 0.01 * ((-1) ** i)) for i in range(15)]
++    return pd.DataFrame({"close": closes})
++
++
++class VixSourceTests(unittest.TestCase):
++    def setUp(self):
++        self.p_dt = mock.patch.object(vr, "datetime", _FixedDT)
++        self.p_dt.start()
++        self.p_bars = mock.patch.object(vr, "fetch_bars", return_value=_spy_bars())
++        self.bars = self.p_bars.start()
++        self.p_en = mock.patch.multiple(sq, SCHWAB_QUOTES_ENABLED=True, SCHWAB_INDEX_ENABLED=True)
++        self.p_en.start()
++        self.p_to = mock.patch.object(sq, "_timeouts", return_value=(4.0, 4.0))
++        self.p_to.start()
++
++    def tearDown(self):
++        mock.patch.stopall()
++
++    def _schwab(self, values=None, reasons=None):
++        return mock.patch.object(sq, "index_last_with_reasons",
++                                 return_value=(values or {}, reasons or {}))
++
++    def _yf(self, resp=None, exc=None):
++        if exc is not None:
++            return mock.patch.object(vr.requests, "get", side_effect=exc)
++        return mock.patch.object(vr.requests, "get", return_value=resp)
++
++    def test_schwab_fresh_is_used_and_yfinance_not_called(self):
++        with self._schwab({"$VIX": _iq(24.62)}) as ix, self._yf(exc=AssertionError("yfinance must not be called")) as yg:
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["vix_source"], "schwab")
++        self.assertEqual(r["vix_value"], 24.62)
++        self.assertTrue(r["vix_fresh"])
++        self.assertEqual(r["realized_vol"], 24.62)
++        self.assertEqual(r["vix_basis_source"], "schwab")
++        yg.assert_not_called()
++        args, kw = ix.call_args
++        self.assertEqual(args[0], ["$VIX"])
++        self.assertEqual(args[1], {"$VIX": TTL})
++        self.assertEqual(kw["deadline_s"], 8.0)
++
++    def test_schwab_missing_falls_to_fresh_yfinance(self):
++        ts = (NOW - timedelta(seconds=60)).timestamp()
++        with self._schwab(reasons={"$VIX": "stale"}), self._yf(_yf_resp(23.1, ts)):
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["vix_source"], "yfinance")
++        self.assertEqual(r["vix_value"], 23.1)
++        self.assertTrue(r["vix_fresh"])
++
++    def test_stale_yfinance_is_basis_only_rules_not_applied(self):
++        ts = (NOW - timedelta(minutes=30)).timestamp()
++        with self._schwab(reasons={"$VIX": "stale"}), self._yf(_yf_resp(31.0, ts)):
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["vix_source"], "none")
++        self.assertFalse(r["vix_fresh"])
++        self.assertIsNone(r["vix_value"])
++        self.assertEqual(r["vix_basis_value"], 31.0)
++        self.assertEqual(r["vix_basis_source"], "yfinance")
++        self.assertEqual(r["realized_vol"], 31.0)        # stop-width basis never drops to 0 on a stale feed
++        self.assertEqual(r["regime"], vr.VolatilityRegime.HIGH_VOL)  # a stale reading may only tighten
++        self.assertEqual(r["size_mult"], config.REGIME_HIGH_VOL_SIZE_MULT)
++        self.assertIn("VIX rules not applied", r["note"])
++
++    def test_no_vix_ever_spy_rvol_never_substituted(self):
++        with self._schwab(reasons={"$VIX": "http_500"}), self._yf(exc=OSError("down")):
++            det = vr.RegimeDetector()
++            r = det.get_regime()
++        self.assertEqual(r["realized_vol"], 0.0)
++        self.assertIsNone(det._last_check)               # regime_state reads this as "no measurement"
++        self.assertEqual(r["vix_source"], "none")
++        self.assertEqual(r["vix_basis_source"], "none")
++        self.assertIsNotNone(r["spy_rvol_10d"])          # the separate series is still reported
++        self.assertNotEqual(r["realized_vol"], r["spy_rvol_10d"])
++        self.assertIn("VIX rules not applied", r["note"])
++
++    def test_high_vol_only_on_fresh_vix_above_threshold(self):
++        with self._schwab({"$VIX": _iq(config.REGIME_HIGH_VOL_THRESHOLD + 1)}), self._yf(exc=AssertionError()):
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["regime"], vr.VolatilityRegime.HIGH_VOL)
++        self.assertEqual(r["size_mult"], config.REGIME_HIGH_VOL_SIZE_MULT)
++        self.assertNotIn("stop_mult", r)
++        self.assertNotIn("half size", r["note"])
++
++    def test_low_vol_is_a_label_without_size_up(self):
++        """The capital allocator's risk_on mode reads the 'low_vol' label; the 1.25x size-up is gone."""
++        with self._schwab({"$VIX": _iq(config.REGIME_LOW_VOL_THRESHOLD - 1)}), self._yf(exc=AssertionError()):
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["regime"], "low_vol")
++        self.assertEqual(r["size_mult"], 1.0)
++        self.assertNotIn("sizing up", r["note"])
++
++    def test_low_vol_needs_a_fresh_vix(self):
++        ts = (NOW - timedelta(minutes=30)).timestamp()
++        with self._schwab(reasons={"$VIX": "stale"}), self._yf(_yf_resp(config.REGIME_LOW_VOL_THRESHOLD - 1, ts)):
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["regime"], vr.VolatilityRegime.NORMAL)
++
++    def test_yfinance_ttl_boundary(self):
++        for age, fresh in ((TTL, True), (TTL + 1, False)):
++            ts = (NOW - timedelta(seconds=age)).timestamp()
++            with self._schwab(reasons={"$VIX": "stale"}), self._yf(_yf_resp(20.0, ts)):
++                r = vr.RegimeDetector().get_regime()
++            self.assertEqual(r["vix_fresh"], fresh, age)
++
++    def test_future_yfinance_as_of_is_basis_but_not_fresh(self):
++        ts = (NOW + timedelta(minutes=5)).timestamp()
++        with self._schwab(reasons={"$VIX": "stale"}), self._yf(_yf_resp(20.0, ts)):
++            r = vr.RegimeDetector().get_regime()
++        self.assertFalse(r["vix_fresh"])
++        self.assertEqual(r["vix_basis_source"], "yfinance")
++        self.assertEqual(r["vix_basis_as_of"], NOW.isoformat())   # clamped for ordering
++        self.assertEqual(r["realized_vol"], 20.0)
++
++    def test_yfinance_without_as_of_is_unavailable(self):
++        with self._schwab(reasons={"$VIX": "stale"}), self._yf(_yf_resp(20.0, None)):
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["vix_basis_source"], "none")
++
++    def test_bad_values_rejected(self):
++        for bad in (0.0, -1.0, float("nan"), float("inf"), None, "x"):
++            ts = (NOW - timedelta(seconds=30)).timestamp()
++            with self._schwab(reasons={"$VIX": "bad"}), self._yf(_yf_resp(bad, ts)):
++                r = vr.RegimeDetector().get_regime()
++            self.assertEqual(r["vix_source"], "none", bad)
++            self.assertFalse(isinstance(r["realized_vol"], float) and math.isnan(r["realized_vol"]))
++
++    def test_basis_keeps_last_good_after_outage(self):
++        det = vr.RegimeDetector()
++        with self._schwab({"$VIX": _iq(26.4)}), self._yf(exc=AssertionError()):
++            det.get_regime()
++        with self._schwab(reasons={"$VIX": "http_500"}), self._yf(exc=OSError("down")):
++            r = det.get_regime()
++        self.assertFalse(r["vix_fresh"])
++        self.assertEqual(r["vix_basis_value"], 26.4)
++        self.assertEqual(r["vix_basis_source"], "schwab")
++        self.assertEqual(r["realized_vol"], 26.4)
++        self.assertEqual(r["regime"], vr.VolatilityRegime.HIGH_VOL)   # tighten-only on the basis
++
++    def test_source_switch_warns_once(self):
++        det = vr.RegimeDetector()
++        with self._schwab({"$VIX": _iq(20.0)}), self._yf(exc=AssertionError()):
++            det.get_regime()
++        with self.assertLogs("vol_regime", level=logging.WARNING) as cm:
++            with self._schwab(reasons={"$VIX": "http_500"}), self._yf(exc=OSError("down")):
++                det.get_regime()
++                det.get_regime()
++        warns = [m for m in cm.output if "VIX source changed" in m]
++        self.assertEqual(len(warns), 1)
++        self.assertIn("schwab -> none", warns[0])
++
++    def test_disabled_flag_skips_schwab_call(self):
++        with mock.patch.object(sq, "SCHWAB_INDEX_ENABLED", False), \
++                mock.patch.object(sq, "index_last_with_reasons", side_effect=AssertionError("no call when disabled")), \
++                self._yf(_yf_resp(19.0, (NOW - timedelta(seconds=20)).timestamp())):
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["vix_source"], "yfinance")
++
++    def test_never_raises(self):
++        with mock.patch.object(sq, "index_last_with_reasons", side_effect=RuntimeError("boom")), \
++                self._yf(exc=OSError("down")):
++            r = vr.RegimeDetector().get_regime()
++        self.assertEqual(r["vix_source"], "none")
++
++    def test_yfinance_cached_between_calls(self):
++        ts = (NOW - timedelta(seconds=30)).timestamp()
++        det = vr.RegimeDetector()
++        with self._schwab(reasons={"$VIX": "stale"}), self._yf(_yf_resp(21.0, ts)) as yg:
++            det.get_regime()
++            det.get_regime()
++        self.assertEqual(yg.call_count, 1)
++
++    def test_prior_regime_state_reader_contract(self):
++        """strategy/regime_state.py reads regime / realized_vol / size_mult and r.get('stop_mult')."""
++        with self._schwab({"$VIX": _iq(18.0)}), self._yf(exc=AssertionError()):
++            det = vr.RegimeDetector()
++            r = det.get_regime()
++        self.assertIsNotNone(det._last_check)
++        for k in ("regime", "realized_vol", "size_mult", "note"):
++            self.assertIn(k, r)
++        self.assertIsNone(r.get("stop_mult"))
++
++    def test_schwab_trade_time_ahead_of_lagging_clock_is_fresh(self):
++        """Cold-2nd FAIL round 1: the client corrects age for a lagging local clock; the regime layer
++        must use that age, not re-measure against local now (which went negative and dropped it)."""
++        q = sq.IndexQuote(symbol="$VIX", last=31.0, trade_time=NOW + timedelta(seconds=3), fetch_time=NOW,
++                          age_s=0.0, max_age_s=TTL, latency_s=0.1)
++        with self._schwab({"$VIX": q}), self._yf(exc=AssertionError("yfinance not needed")):
++            det = vr.RegimeDetector()
++            r = det.get_regime()
++        self.assertEqual(r["vix_source"], "schwab")
++        self.assertTrue(r["vix_fresh"])
++        self.assertEqual(r["realized_vol"], 31.0)
++        self.assertEqual(r["vix_basis_source"], "schwab")
++        self.assertIsNotNone(det._last_check)
++        self.assertEqual(r["regime"], vr.VolatilityRegime.HIGH_VOL)
++
++    def test_failed_yfinance_attempt_is_not_retried_every_call(self):
++        """Cold-2nd FAIL round 1: a failed yfinance fetch must wait _refresh_mins like a success,
++        so a double outage costs one fetch per window on the trading thread, not one per call."""
++        det = vr.RegimeDetector()
++        with self._schwab(reasons={"$VIX": "http_500"}), self._yf(exc=OSError("down")) as yg:
++            det.get_regime()
++            det.get_regime()
++            det.get_regime()
++        self.assertEqual(yg.call_count, 1)
++
++    def test_bad_schwab_age_rejected(self):
++        for bad in (None, float("nan"), -1.0):
++            q = sq.IndexQuote(symbol="$VIX", last=20.0, trade_time=NOW, fetch_time=NOW,
++                              age_s=bad, max_age_s=TTL, latency_s=0.1)
++            with self._schwab({"$VIX": q}), self._yf(exc=OSError("down")):
++                r = vr.RegimeDetector().get_regime()
++            self.assertEqual(r["vix_source"], "none", bad)
++
++    def test_schwab_down_high_vix_stays_high_vol_every_cycle(self):
++        """Cold-2nd FAIL round 2: with Schwab down, the yfinance VIX must be re-read once its cached
++        value is no longer fresh, so a VIX above the threshold keeps HIGH_VOL on every 5-min cycle."""
++        clock = {"now": NOW}
++
++        class _StepDT(datetime):
++            @classmethod
++            def now(cls, tz=None):
++                return clock["now"] if tz is None or tz is UTC else clock["now"].astimezone(tz)
++
++        def _yf_get(*_a, **_k):
++            return _yf_resp(30.0, (clock["now"] - timedelta(seconds=5)).timestamp())
++
++        det = vr.RegimeDetector()
++        seen = []
++        with mock.patch.object(vr, "datetime", _StepDT), \
++                self._schwab(reasons={"$VIX": "deadline"}), \
++                mock.patch.object(vr.requests, "get", side_effect=_yf_get) as yg:
++            for minute in range(0, 61, int(config.SCAN_INTERVAL_INTRADAY)):
++                clock["now"] = NOW + timedelta(minutes=minute)
++                r = det.get_regime()
++                seen.append((minute, r["regime"], r["size_mult"], r["vix_source"]))
++        self.assertTrue(all(x[1] == vr.VolatilityRegime.HIGH_VOL for x in seen), seen)
++        self.assertTrue(all(x[3] == "yfinance" for x in seen), seen)
++        self.assertLessEqual(yg.call_count, len(seen))      # at most one fetch per cycle
++
++    def test_failed_yfinance_retried_after_one_scan_interval(self):
++        clock = {"now": NOW}
++
++        class _StepDT(datetime):
++            @classmethod
++            def now(cls, tz=None):
++                return clock["now"] if tz is None or tz is UTC else clock["now"].astimezone(tz)
++
++        det = vr.RegimeDetector()
++        with mock.patch.object(vr, "datetime", _StepDT), \
++                self._schwab(reasons={"$VIX": "http_500"}), \
++                mock.patch.object(vr.requests, "get", side_effect=OSError("down")) as yg:
++            det.get_regime()
++            clock["now"] = NOW + timedelta(seconds=TTL / 4)
++            det.get_regime()                                  # inside one scan interval: no retry
++            clock["now"] = NOW + timedelta(minutes=int(config.SCAN_INTERVAL_INTRADAY))
++            det.get_regime()                                  # one scan interval later: retry
++        self.assertEqual(yg.call_count, 2)
++
++    def test_yfinance_fresh_after_slow_schwab_call(self):
++        """Cold-2nd FAIL round 3: the clock read before a slow Schwab call made a fresh yfinance print
++        look like it came from the future (negative age) and dropped HIGH_VOL."""
++        clock = {"now": NOW}
++
++        class _StepDT(datetime):
++            @classmethod
++            def now(cls, tz=None):
++                return clock["now"] if tz is None or tz is UTC else clock["now"].astimezone(tz)
++
++        def _slow_schwab(*_a, **_k):
++            clock["now"] = clock["now"] + timedelta(seconds=6)
++            return {}, {"$VIX": "deadline"}
++
++        def _yf_get(*_a, **_k):
++            clock["now"] = clock["now"] + timedelta(seconds=0.5)
++            return _yf_resp(30.0, (clock["now"] - timedelta(seconds=2)).timestamp())
++
++        det = vr.RegimeDetector()
++        seen = []
++        with mock.patch.object(vr, "datetime", _StepDT), \
++                mock.patch.object(sq, "index_last_with_reasons", side_effect=_slow_schwab), \
++                mock.patch.object(vr.requests, "get", side_effect=_yf_get):
++            for _ in range(6):
++                r = det.get_regime()
++                seen.append((r["regime"], r["size_mult"], r["vix_source"]))
++                clock["now"] = clock["now"] + timedelta(seconds=330)
++        self.assertTrue(all(x == (vr.VolatilityRegime.HIGH_VOL, config.REGIME_HIGH_VOL_SIZE_MULT, "yfinance")
++                            for x in seen), seen)
++
++    def test_stale_low_basis_never_loosens(self):
++        det = vr.RegimeDetector()
++        with self._schwab({"$VIX": _iq(config.REGIME_LOW_VOL_THRESHOLD - 1)}), self._yf(exc=AssertionError()):
++            self.assertEqual(det.get_regime()["regime"], "low_vol")
++        with self._schwab(reasons={"$VIX": "http_500"}), self._yf(exc=OSError("down")):
++            r = det.get_regime()
++        self.assertEqual(r["regime"], vr.VolatilityRegime.NORMAL)
++        self.assertEqual(r["size_mult"], 1.0)
++
++    def test_stale_normal_basis_is_normal(self):
++        det = vr.RegimeDetector()
++        with self._schwab({"$VIX": _iq(18.0)}), self._yf(exc=AssertionError()):
++            det.get_regime()
++        with self._schwab(reasons={"$VIX": "http_500"}), self._yf(exc=OSError("down")):
++            r = det.get_regime()
++        self.assertEqual(r["regime"], vr.VolatilityRegime.NORMAL)
++        self.assertEqual(r["size_mult"], 1.0)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/logs/post_live/expect/regime-size-1104-vix.json b/logs/post_live/expect/regime-size-1104-vix.json
+new file mode 100644
+index 00000000..fe9133fc
+--- /dev/null
++++ b/logs/post_live/expect/regime-size-1104-vix.json
+@@ -0,0 +1,27 @@
++{
++  "change": "regime-size-1104",
++  "tier": 1,
++  "paths": [
++    "strategy/volatility_regime.py"
++  ],
++  "proof": [
++    {
++      "log": "logs/mtf_bot.log",
++      "pattern": "Volatility regime: (NORMAL|HIGH_VOL) \\(VIX [0-9.]+ schwab, as of .*change=regime-size-1104"
++    }
++  ],
++  "expected_rate": "at least one line per 15 minutes during regular hours, with source schwab and an age under 10 minutes",
++  "window_sessions": 1,
++  "window_reason": "every regular-hours cycle reads the Schwab $VIX; one full session is enough to exercise it",
++  "reversal": "any regime line during regular hours that shows a VIX value equal to SPY realized vol, a 'SPY realized vol (VIX fallback)' line, or a fresh VIX older than 10 minutes",
++  "metrics": [
++    {
++      "name": "regular-hours cycles with a fresh Schwab VIX",
++      "source": "logs/mtf_bot.log Volatility regime lines with change=regime-size-1104",
++      "direction": "up",
++      "bound": "every regular-hours regime line shows schwab unless a 'VIX source changed' WARNING explains it"
++    }
++  ],
++  "verification": "tests/test_vix_source.py",
++  "baseline_exempt_reason": "the '[change=regime-size-1104]' tag is new in this change, so a match can only come from the new code"
++}
