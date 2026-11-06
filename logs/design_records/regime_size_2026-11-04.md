@@ -1,7 +1,7 @@
 # REGIME-SIZE-1104 — the core-tier size multipliers change no share counts (signed: Claude, 2026-11-04)
 
 Approval-ID: REGIME-SIZE-1104
-Status: rev 3.6 — aligned: board 3/3 (rev 3.1) + data seats 3/3 (rev 3.5), GAI (rev 3.6), Codex (rev 3.1), Gro (rev 3.4). Awaiting the owner's re-approval with the real Covers list.
+Status: rev 3.7 DRAFT — owner direction 2026-11-05 (all VIX sources read and cross-checked; FMP client added to Covers). Approval voided by the Covers change; board + GAI + Codex review, then owner re-approval.
 Covers: data/schwab_quotes.py, config.py, strategy/volatility_regime.py, strategy/run_cycle.py, strategy/regime_state.py, events/macro_risk_index.py, execution/entry_logic.py, execution/exit_logic.py, research/regime_empirical.py, CLAUDE.md, tests/test_core_sizing_multiplier.py (new), tests/test_vix_source.py (new), tests/test_schwab_quotes.py
 
 ## Question that started it
@@ -281,6 +281,34 @@ GAI: approve-with-changes. Reviewer #2: Codex at its usage limit until 11:02 PM 
 3. **`SCHWAB_INDEX_ENABLED` is checked before any Schwab call**; off or killed → straight to the FMP tier with no
    connection attempt.
 4. Every entry's decision record carries `vix_value`, `vix_source`, `vix_as_of` and `vix_basis`.
+
+## Rev 3.7 — owner direction 2026-11-05: read and cross-check every VIX source (DRAFT — review pending, signed: Claude)
+
+Owner, 2026-11-05: Covers widened to the FMP client "yes and should all available sources should be checked and
+cross referenced for accuracy." This replaces the fallback-only order of Rev 3.5 item 2 / Rev 3.6 item 1. Widening
+Covers voids the 11-05 approval of this record; it returns to the owner after board + GAI + Codex review.
+
+1. **Every source is read on every regular-hours cycle**, each with its own as-of time: Schwab `$VIX` (owner's feed),
+   FMP `^VIX` (T2, new read-only quote function with the quote timestamp in the FMP client module, shared with the MRI
+   so the bot makes one FMP VIX request per cycle and holds one VIX number), yfinance `^VIX` (T4, regularMarketTime).
+   Request budgets: Schwab 1 per call (existing budget logic); FMP shared with the MRI's existing per-cycle read
+   (no new daily calls); yfinance about 1 per cycle (rate and failure behaviour for reviewers to judge).
+2. **Cross-reference:** each cycle compares every pair of fresh sources. The tolerance is each pair's own rolling
+   difference distribution (no fixed number; cold start: no agreement verdict, labelled `uncorroborated`).
+   - The value used for the VIX rules is the highest-tier fresh value that at least one other fresh source corroborates.
+   - Only one fresh source → used, labelled `uncorroborated`.
+   - The highest tier contradicted while the other two agree → the agreeing pair's higher tier is used, the anomaly is
+     paged once per source per session, and the event goes to the anomaly rules (CLAUDE.md ANOMALY rule).
+   - No two sources agree and three are fresh → the median of the three is used, paged.
+3. Every regime record logs all three values, their as-of times and ages, each pairwise difference, the agreement verdict
+   and which value was used.
+4. Slice 1 (logs/wip/regime_size_1104_slice1_2026-11-05.patch, Schwab → yfinance fallback) is rebuilt on this design
+   before it ships.
+
+Covers (proposed): data/schwab_quotes.py, data/fmp_client.py, config.py, strategy/volatility_regime.py,
+strategy/run_cycle.py, strategy/regime_state.py, events/macro_risk_index.py, execution/entry_logic.py,
+execution/exit_logic.py, research/regime_empirical.py, CLAUDE.md, tests/test_core_sizing_multiplier.py (new),
+tests/test_vix_source.py (new), tests/test_schwab_quotes.py, tests/test_fmp_client.py
 
 ## Required questions
 Q1: Data/edge quality: the score gates and the entry record stop being contaminated by a non-VIX number (07-23: SPY rvol 11.5 read as VIX added +2 to the minimum score), and every entry logs which limit set its share count — the input edge evaluation needs. Not conservative: it removes a false brake.
