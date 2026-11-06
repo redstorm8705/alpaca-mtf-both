@@ -1,0 +1,64 @@
+Nightly Gemini Audit — 2026-11-05
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['generate_dashboard.py', 'config.py', 'data/schwab_quotes.py', 'execution/tier_capital_allocator.py', 'execution/risk_manager.py', 'execution/broker.py', 'execution/forever_hold_manager.py', 'execution/ownership_guard.py', 'execution/f6_empirical_trigger.py', 'research/f6_full_path_simulation.py', 'research/f6_empirical_starter_replay.py', 'research/f6_guard_activation_probe.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but the `execution/broker.py` modification introduces a potential silent failure path for position reads, and the `execution/tier_capital_allocator.py` logic for F6 evidence validation is complex and prone to runtime errors if the `forever6_trigger_evidence.jsonl` file is malformed.
+
+### LOG ANOMALIES
+*   **`execution.ownership_guard`**: `reattributed impossible negative protected replay NVDA/qhm=-2 to intraday` (2026-11-05 20:40:18, 21:00:19). This indicates a ledger sync mismatch where the bot attempted to reconcile a negative protected quantity. While the ledger heals, this suggests a race condition between the `QuarterlyHoldManager` and the `ownership_guard` during high-frequency updates.
+*   **`strategy.run_cycle`**: `kill-switch evaluation failed (RuntimeError('kill-switch exact tier attribution is unresolved'))` (2026-11-05 21:04:34). This is a critical failure in the risk management path. The bot correctly failed-closed (no new entries), but the error indicates the `RiskManager` could not resolve the tier for an active order, likely due to the `_tier_for_fill_order` degradation logic.
+*   **`execution.quarterly_hold_manager`**: Multiple `QHM overnight room unavailable (working buy without a price on QQQM)` warnings. This is a recurring state where the manager blocks entries because it cannot price a pending order.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The trade `DT-NVDA-s-1793889618139-02320414` (short) entered at 191.9275 and exited at 189.9875 for a profit of 7.76 (4 shares). $191.9275 - 189.9875 = 1.94$ per share. $1.94 \times 4 = 7.76$. The math is correct.
+*   **Stop Rate**: The bot hit stops on `AVS` (2026-11-05 08:14:03) and `TSLA` (2026-11-02 09:28:03). The stop-hit rate is within acceptable parameters for the current MRI CRITICAL regime.
+*   **R:R Analysis**: The bot is successfully taking partials (e.g., `COIN` 2026-11-02 09:52:10), but the realized P&L on stops is frequently offsetting the gains. The profit factor of 0.83 confirms the bot is currently struggling to maintain a positive expectancy in the current market regime.
+
+### TRADE INTEGRITY
+*   **No issues found.** All recorded trades in the provided JSON match the expected P&L calculations.
+
+### MODIFIED FILE FINDINGS
+*   **`execution/broker.py`**: The new `try-except` block around `get_open_position` (lines 750-768) is a "fail-open" design. If `get_open_position` fails (e.g., timeout), it sets `_net = None` and `_guard_side = "sell"`. This delegates the decision to the `ownership_guard`. If the guard also fails to read the ledger, it may default to a state that allows an order that should have been blocked.
+*   **`execution/tier_capital_allocator.py`**: The `_live_f6_evidence_valid` function (lines 40-80) performs extensive `hmac.compare_digest` and `datetime` parsing. If the `forever6_trigger_evidence.jsonl` file is corrupted or contains unexpected types, this function will return `False`, effectively killing the F6 tier. This is a robust "fail-closed" design.
+*   **`execution/ownership_guard.py`**: The addition of `_load_bak_ledger_strict` (lines 240-255) is a necessary hardening for the double-unknown boundary.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: FIXED (Deleted)
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/broker.py | Potential bypass of ownership guard on broker timeout | If `get_open_position` raises an exception, the code defaults to `_net = None` and `_guard_side = "sell"`. If the `ownership_guard` is also unable to resolve the ledger, the order might be submitted without proper floor protection.**
+*   **INFRASTRUCTURE | MEDIUM | execution/f6_cycle.py | F6 trigger evidence file growth | The `forever6_trigger_evidence.jsonl` file is appended to indefinitely. There is no rotation or pruning logic, which will eventually lead to I/O latency or disk space issues.**
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **Hardening `broker.py`**: Modify the `try-except` block in `submit_limit_order` to explicitly reject the order if `get_open_position` fails, rather than defaulting to `_net = None`. Safety (preventing a floor breach) must take precedence over availability.
+2.  **F6 Evidence Rotation**: Implement a log rotation or pruning mechanism for `forever6_trigger_evidence.jsonl` to prevent unbounded file growth.
+3.  **Investigate `ownership_guard` reattribution**: The `reattributed impossible negative protected replay` log suggests the ledger sync is struggling with the transition of shares between tiers. Review the `ledger_sync` logic to ensure that `qhm` and `f6` quantities are strictly non-negative before the guard processes them.
+4.  **Monitor `RiskManager`**: The `RuntimeError` in `run_cycle` indicates that the `RiskManager` is failing to attribute tiers. Ensure that `_tier_for_fill_order` is not being called with stale order IDs that have been purged from the broker cache.
+================================================================================
+BROKER GROUND TRUTH (2026-11-05, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AVS    COVERED                  owners=day exposed=34m no-broker-stop=0m [06:48-06:48, 07:10-07:10, 08:00-08:00] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=core exposed=390m no-broker-stop=0m [11:08-11:09] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  META   COVERED                  owners=day exposed=357m no-broker-stop=0m [07:01-07:01, 12:58-12:58] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MU     COVERED                  owners=day exposed=54m no-broker-stop=0m [06:57-06:57] rejected_stop_orders=0
+  NVD    COVERED                  owners=day exposed=13m no-broker-stop=0m [06:42-06:42, 06:55-06:55] rejected_stop_orders=0
+  NVDA   COVERED                  owners=day/qhm exposed=307m no-broker-stop=1m [06:40-06:40, 06:55-06:55, 07:16-07:16, 07:22-07:23] rejected_stop_orders=0
+  PLTD   COVERED                  owners=day exposed=32m no-broker-stop=0m [06:53-06:53] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=44m no-broker-stop=0m [07:06-07:06] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

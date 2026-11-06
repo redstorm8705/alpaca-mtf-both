@@ -1,0 +1,41 @@
+Midday Gemini Audit — 2026-11-05
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `execution.ownership_guard` sync_ledger REFUSED — protected floor shrink(s) {'GE/qhm': {'was': 1.0, 'would_be': 0.0, 'net': 0.0}} — requires manual operator intervention to resolve ledger/broker mismatch.
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** P&L signs are correct for all closed trades.
+*   **Recording:** The `NVDA` entry at $187.51 with an exit of $0.00 (+$375.02) is a clear recording/data artifact. While the P&L is positive, the exit price of $0.00 indicates a failure in the trade-matching engine to capture the actual exit fill price.
+*   **Correlation:** The win rate (89%) is high, but the sample size is small. The lack of 12-pt scores on all trades makes it impossible to verify the score-to-outcome correlation for this session.
+*   **Stop-hit rate:** 0% stop-hit rate is anomalous given the CRITICAL MRI regime, suggesting the bot may be exiting via manual/software logic before hitting hard stops, or the stop-tracking is not reflecting the actual market volatility.
+
+### ENTRY QUALITY
+*   **Regime Mismatch:** Despite the `CRITICAL` MRI (98/100) and the `⛔ BV-5` block on new entries, the bot continues to evaluate `VOLSHADOW` metrics for potential entries (e.g., `NVDA`, `AMD`, `DDOG` at 18:25:34+). While the log shows entries are blocked, the continuous processing of these symbols during a `CRITICAL` regime consumes cycle time and watchdog headroom.
+
+### EXIT QUALITY
+*   **Logic:** The `GE` ledger mismatch (see CATASTROPHIC ALERT) indicates that the bot believes it has exited a position that the `ownership_guard` is refusing to reconcile. This suggests a potential failure in the `QuarterlyHoldManager` exit logic or a race condition between the `ledger_sync` and the `run_cycle`.
+
+### MRI ALIGNMENT
+*   **Regime:** The bot correctly identified `HIGH_VOL` (VIX 26.8) and `CRITICAL` MRI (98).
+*   **Action:** The bot correctly applied a size floor of 0.40x. However, the `ownership_guard` failure suggests that while the bot is attempting to reduce exposure, the ledger state is becoming desynchronized.
+
+### LOG ANOMALIES
+*   `CRITICAL | ledger_sync | ledger_sync NOT healed (reason=protected-floor shrink — awaiting operator confirmation, streak=28)`: This indicates a persistent failure to reconcile the ledger over 28 cycles.
+*   `WARNING | execution.ownership_guard | reattributed impossible negative protected replay NVDA/qhm=-2 to intraday`: This suggests a logic error in how `qhm` (Quarterly Hold Manager) positions are tracked when they are re-attributed to the intraday bucket.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Ledger/Broker Mismatch |** The `ownership_guard` is blocking the reconciliation of a `GE` position. This prevents the bot from correctly updating its state, potentially leading to "ghost" positions or incorrect risk calculations.
+*   **EXECUTION BUG | HIGH | Trade Matching Failure |** `NVDA` exit price recorded as $0.00. This indicates the `closed_trade_details` parser is failing to pull the correct exit fill price from the Alpaca fill history.
+*   **INFRASTRUCTURE | MEDIUM | Watchdog Headroom |** Cycle duration increased from 123s to 169s within 7 minutes. If this trend continues, the bot will hit the watchdog timeout limit.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Run `confirm_ledger_heal.py GE qhm 0` immediately to resolve the `ownership_guard` block and allow the ledger to sync.
+2.  **EXECUTION:** Investigate `execution.ownership_guard` logic to determine why `qhm` positions are being re-attributed to `intraday` with negative counts (e.g., `NVDA/qhm=-2`).
+3.  **ALPHA:** Review the `closed_trade_details` logging function to ensure it correctly extracts the `exit_price` from the Alpaca fill object rather than defaulting to $0.00.
