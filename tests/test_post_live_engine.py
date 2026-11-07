@@ -246,7 +246,7 @@ class Evaluator(unittest.TestCase):
                                                  "2026-10-12 14:00:00 | INFO | x | start\n"
                                                  "Traceback (most recent call last):\n  File \"x.py\"\n"}
         r = self._with_logs(logs, {}, datetime(2026, 10, 11, tzinfo=ET), date(2026, 10, 12))
-        self.assertIn("Traceback", r["new_error_signatures"])
+        self.assertTrue(any(x.startswith("Traceback") for x in r["new_error_signatures"]), r["new_error_signatures"])
 
     def test_outside_window_is_skipped(self):
         shipped = datetime(2026, 9, 28, 8, 0, tzinfo=ET)                       # far beyond window + grace
@@ -259,11 +259,245 @@ class Evaluator(unittest.TestCase):
                                     "2026-10-12 14:01:00 | CRITICAL | execution.y | brand new failure\n"}
         r = self._with_logs(logs, {}, datetime(2026, 10, 11, tzinfo=ET), date(2026, 10, 12))
         self.assertEqual(r["new_error_signatures"], ["execution.y: brand new failure"])
-        self.assertTrue(r["findings"][0]["finding"].startswith("NEW_ERRORS_"))
+        self.assertEqual(r["findings"][0]["kind"], "NEW_ERROR")
+        self.assertTrue(r["findings"][0]["change"].startswith("error "))
+        self.assertEqual(r["signatures"][r["new_ids"][0]]["count"], 1)
+        self.assertEqual(len(r["signatures"]), 2)                               # every signature stored, not only new
 
     def test_dry_run_issue_never_calls_github(self):
         self.assertTrue(ple._upsert_issue({"change": "c", "finding": "F", "detail": "d"}, date(2026, 10, 12), True)
                         .startswith("DRY"))
+
+
+FIX = json.loads((ROOT / "tests" / "fixtures" / "post_live_signatures" / "cases.json").read_text())
+
+
+class SignatureV2(unittest.TestCase):
+    """POST-LIVE-WEEKLY-1106 Diff A: versioned signature identity, masking by role (frozen fixtures)."""
+    U = frozenset(FIX["universe"])
+
+    def test_fixture_version_matches(self):
+        self.assertEqual(FIX["normaliser_version"], ple.NORMALISER_VERSION)
+
+    def test_merge_cases(self):
+        for a, b in FIX["merge"]:
+            self.assertEqual(ple.canonical(a, self.U), ple.canonical(b, self.U), (a, b))
+
+    def test_split_cases(self):
+        for a, b in FIX["split"]:
+            self.assertNotEqual(ple.canonical(a, self.U), ple.canonical(b, self.U), (a, b))
+
+    def test_words_are_never_masked_as_symbols(self):
+        for msg, kept in FIX["unmasked"]:
+            self.assertIn(kept, ple.canonical(msg, self.U), msg)
+
+    def test_same_message_in_two_modules_is_two_signatures(self):
+        log = ("2026-10-12 14:00:00 | ERROR    | execution.a | invalid state\n"
+               "2026-10-12 14:00:01 | ERROR    | execution.b | invalid state\n")
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(ple, "ROOT", Path(t)):
+            (Path(t) / "logs").mkdir()
+            (Path(t) / "logs" / "mtf_bot.log").write_text(log)
+            ple._DAY_CACHE.clear()
+            sigs = ple.error_signatures(date(2026, 10, 12))
+        self.assertEqual(len(sigs), 2)
+        self.assertEqual(len({s["cluster"] for s in sigs.values()}), 2)
+
+    def test_traceback_signature_uses_final_exception_and_deepest_repo_frame(self):
+        root = "/srv/bot"
+        tb = ["2026-07-24 00:13:57,460 | ERROR    | main | Loop error: boom",
+              "Traceback (most recent call last):",
+              '  File "/srv/bot/venv/lib/python3.10/site-packages/alpaca/common/rest.py", line 198, in _one_request',
+              "    response.raise_for_status()",
+              "requests.exceptions.HTTPError: 500 Server Error: Internal Server Error for url: https://p.a/v2/account",
+              "",
+              "During handling of the above exception, another exception occurred:",
+              "",
+              "Traceback (most recent call last):",
+              '  File "/srv/bot/main.py", line 1041, in main',
+              "    run_cycle(risk)",
+              '  File "/srv/bot/execution/broker.py", line 141, in get_account',
+              "    return client.get_account()",
+              '  File "/srv/bot/venv/lib/python3.10/site-packages/alpaca/common/rest.py", line 207, in _one_request',
+              "    raise APIError(error, http_error)",
+              'alpaca.common.exceptions.APIError: {"code":50010000,"message":"internal server error occurred"}',
+              "2026-07-24 00:14:57,523 | INFO     | strategy.run_cycle | next"]
+        with mock.patch.object(ple, "ROOT", Path(root)):
+            out = ple._tracebacks(tb)
+        self.assertEqual(len(out), 1)
+        kind, msg, frames = out[0]
+        self.assertEqual(kind, "alpaca.common.exceptions.APIError")
+        self.assertEqual(frames, ["main:main", "execution.broker:get_account"])
+        self.assertIn("50010000", ple.canonical(msg))
+
+    def test_timestamp_prefixed_traceback_is_parsed(self):
+        out = ple._tracebacks(["2026-11-07 15:00:00 Traceback (most recent call last):",
+                               '  File "x.py", line 1, in f', "KeyError: 'a'"])
+        self.assertEqual([o[0] for o in out], ["KeyError"])
+
+    def test_quoted_header_never_restarts_or_invents_a_block(self):
+        root = "/srv/bot"
+        with mock.patch.object(ple, "ROOT", Path(root)):
+            out = ple._tracebacks(["Traceback (most recent call last):", '  File "/srv/bot/a.py", line 1, in f',
+                                   '  File "/srv/bot/b.py", line 2, in g',
+                                   '    if "Traceback (most recent call last)" in ln:', "ValueError: x"])
+            self.assertEqual(out, [("ValueError", "x", ["a:f", "b:g"])])
+            out = ple._tracebacks(["2026-11-06 10:00:00 | ERROR    | m | saw Traceback (most recent call last) text",
+                                   "2026-11-06 10:00:01 | INFO     | m | next"])
+            self.assertEqual(out, [])
+
+    def test_two_different_crashes_are_two_signatures(self):
+        log = ("2026-10-12 14:00:00 | INFO | x | start\n"
+               "Traceback (most recent call last):\n  File \"x.py\", line 1, in f\nKeyError: 'a'\n"
+               "2026-10-12 14:00:05 | INFO | x | again\n"
+               "Traceback (most recent call last):\n  File \"x.py\", line 9, in g\nValueError: bad\n")
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(ple, "ROOT", Path(t)):
+            (Path(t) / "logs").mkdir()
+            (Path(t) / "logs" / "day_tier_runner_cron.log").write_text(log)
+            ple._DAY_CACHE.clear()
+            sigs = ple.error_signatures(date(2026, 10, 12))
+        self.assertEqual(sorted(s["kind"] for s in sigs.values()), ["KeyError", "ValueError"])
+
+
+class DiffAState(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+
+    def test_atomic_results_and_corrupt_file_is_backed_up(self):
+        p = self.root / "r.json"
+        ple._atomic_write(p, {"a": 1})
+        self.assertEqual(json.loads(p.read_text()), {"a": 1})
+        p.write_text("{not json")
+        health: list = []
+        self.assertIsNone(ple._read_state(p, health))
+        self.assertTrue(health)
+        self.assertFalse(p.exists())
+        self.assertTrue(list(self.root.glob("r.json.corrupt.*")))
+
+    def test_dry_run_never_moves_a_corrupt_file(self):
+        p = self.root / "r.json"
+        p.write_text("{not json")
+        health: list = []
+        self.assertIsNone(ple._read_state(p, health, backup=False))
+        self.assertTrue(p.exists())
+
+    def test_baseline_uses_stored_signatures(self):
+        res_dir = self.root / "logs" / "post_live" / "results"
+        res_dir.mkdir(parents=True)
+        (self.root / "logs" / "post_live" / "expect").mkdir(parents=True)
+        (self.root / "logs" / "mtf_bot.log").write_text("2026-10-12 14:00:00 | ERROR    | execution.x | seen before\n")
+        sid = ple.sig_id("execution.x", "", "seen before")
+        (res_dir / "2026-10-09.json").write_text(json.dumps({"schema_version": ple.RESULTS_SCHEMA,
+                                                            "normaliser_version": ple.NORMALISER_VERSION,
+                                                            "signatures": {sid: {}}, "symbol_universe": []}))
+        (self.root / "logs" / "mtf_bot.log").write_text("2026-10-12 14:00:00 | ERROR    | execution.x | seen before\n")
+        with mock.patch.object(ple, "ROOT", self.root), mock.patch.object(ple, "RESULTS_DIR", res_dir), \
+                mock.patch.object(ple, "EXPECT_DIR", self.root / "logs" / "post_live" / "expect"), \
+                mock.patch.object(ple, "error_signatures", wraps=ple.error_signatures) as es:
+            r = ple.evaluate(date(2026, 10, 12), Evaluator.CAL)
+        self.assertEqual(r["new_ids"], [])
+        self.assertEqual(r["findings"], [])
+        self.assertNotIn(date(2026, 10, 9), [c.args[0] for c in es.call_args_list])   # 10-09 came from the store
+
+    def test_stored_baseline_with_a_smaller_universe_is_re_derived(self):
+        res_dir = self.root / "logs" / "post_live" / "results"
+        res_dir.mkdir(parents=True)
+        (self.root / "logs" / "post_live" / "expect").mkdir(parents=True)
+        (self.root / "logs" / "trade_events.jsonl").write_text('{"ts": "2026-10-12T10:00:00", "symbol": "AAPL"}\n')
+        (self.root / "logs" / "mtf_bot.log").write_text(
+            "2026-10-09 14:00:00 | ERROR    | execution.x | No bars returned for AAPL\n"
+            "2026-10-12 14:00:00 | ERROR    | execution.x | No bars returned for AAPL\n")
+        old = ple.sig_id("execution.x", "", "No bars returned for AAPL")     # stored before AAPL was in the universe
+        (res_dir / "2026-10-09.json").write_text(json.dumps({"schema_version": ple.RESULTS_SCHEMA,
+                                                            "normaliser_version": ple.NORMALISER_VERSION,
+                                                            "signatures": {old: {}}, "symbol_universe": []}))
+        with mock.patch.object(ple, "ROOT", self.root), mock.patch.object(ple, "RESULTS_DIR", res_dir), \
+                mock.patch.object(ple, "EXPECT_DIR", self.root / "logs" / "post_live" / "expect"):
+            r = ple.evaluate(date(2026, 10, 12), Evaluator.CAL)
+        self.assertEqual(r["new_ids"], [])
+
+    def test_pending_round_trip_and_merge(self):
+        with mock.patch.object(ple, "PENDING_FILE", self.root / "p.json"):
+            pend: list = []
+            item = ple._item({"change": "error abc", "finding": "x", "detail": "d", "sig": "abc"}, date(2026, 10, 12))
+            ple._merge_pending(pend, item, "issue lookup failed")
+            ple._merge_pending(pend, item, "issue lookup failed")
+            self.assertEqual(len(pend), 1)
+            self.assertEqual(pend[0]["attempts"], 2)
+            ple.save_pending(pend)
+            self.assertEqual(ple.load_pending([])[0]["key"], "err-abc")
+
+    def test_retry_finds_existing_issue_by_key_never_duplicates(self):
+        item = ple._item({"change": "error abc", "finding": "x", "detail": "d", "sig": "abc"}, date(2026, 10, 12))
+        index = [{"number": 7, "title": "renamed by hand", "body": "... " + ple._key_tag("err-abc"),
+                  "html_url": "https://github.com/o/r/issues/7"}]
+        calls = []
+
+        def _api(method, path, tok, body=None):
+            calls.append((method, path))
+            return 201, {}
+        fake = type(sys)("scripts.sync_reports")
+        fake._api = _api
+        with mock.patch.dict(sys.modules, {"scripts.sync_reports": fake}):
+            left = ple.retry_pending([item], "tok", index)
+        self.assertEqual(left, [])
+        self.assertEqual(calls, [("POST", f"{ple.REPO}/issues/7/comments")])
+
+    def test_pending_file_in_another_schema_is_kept_not_erased(self):
+        pf = self.root / "p.json"
+        pf.write_text(json.dumps({"schema_version": 99, "items": [{"key": "err-x"}]}))
+        with mock.patch.object(ple, "PENDING_FILE", pf):
+            health: list = []
+            self.assertEqual(ple.load_pending(health), [])
+        self.assertTrue(health)
+        self.assertFalse(pf.exists())
+        kept = list(self.root.glob("p.json.unsupported.*"))
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(json.loads(kept[0].read_text())["schema_version"], 99)
+
+    def test_unsaved_pending_outputs_fail_the_run(self):
+        res = {"session": "2026-10-12", "changes": [], "findings": [], "signatures": {}, "new_ids": [],
+               "partial_data": [], "health": [], "new_error_signatures": []}
+        with mock.patch.object(ple, "sessions", return_value=Evaluator.CAL), \
+                mock.patch.object(ple, "evaluate", return_value=res), \
+                mock.patch.object(ple, "RESULTS_DIR", self.root), \
+                mock.patch.object(ple, "load_pending", return_value=[]), \
+                mock.patch.object(ple, "save_pending", side_effect=OSError("disk full")), \
+                mock.patch.dict(sys.modules, {"scripts.sync_reports": type(sys)("x")}), \
+                mock.patch.dict(sys.modules, {"alerts": type(sys)("alerts")}):
+            sys.modules["scripts.sync_reports"]._github_token = lambda: None
+            sys.modules["alerts"].send_slack_blocks = lambda b, f: True
+            self.assertEqual(ple.main(["--session", "2026-10-12"]), 1)
+        self.assertTrue((self.root / "2026-10-12.json").exists())
+
+    def test_queued_recurrence_never_replaces_a_queued_create(self):
+        create = ple._item({"change": "error abc", "finding": "x", "detail": "d", "sig": "abc"}, date(2026, 10, 12))
+        recur = {"kind": "comment", "key": "err-abc-recur", "find_key": "err-abc", "title": "", "comment_only": True,
+                 "comment": "Recurred", "queued": "t"}
+        pend: list = []
+        ple._merge_pending(pend, create, "issue lookup failed")
+        ple._merge_pending(pend, recur, "issue lookup failed")
+        self.assertEqual(sorted(p["kind"] for p in pend), ["comment", "issue"])
+        self.assertTrue(any(p.get("body") and p["key"] == "err-abc" for p in pend))
+
+    def test_retry_keeps_item_when_github_unreadable(self):
+        item = ple._item({"change": "error abc", "finding": "x", "detail": "d", "sig": "abc"}, date(2026, 10, 12))
+        self.assertEqual(len(ple.retry_pending([item], "tok", None)), 1)
+
+    def test_expired_cause_is_classified(self):
+        logs = self.root / "logs"
+        logs.mkdir()
+        (logs / "a.log").write_text("2026-10-01 10:00:00 | INFO | x | [cohold-lift] CO-HOLD BRACKET ENTRY placed\n")
+        (logs / "u.log").write_text("no date here\n")
+        rec = _rec(proof=[{"log": "logs/a.log", "pattern": r"\[cohold-lift\] CO-HOLD"},
+                          {"log": "logs/missing.log", "pattern": "x"},
+                          {"log": "logs/u.log", "pattern": "x"},
+                          {"log": "logs/a.log", "pattern": "never there"},
+                          {"log": "logs/a.log", "pattern": "(unclosed"}])
+        with mock.patch.object(ple, "ROOT", self.root):
+            causes = [d["cause"] for d in ple.proof_diagnosis(rec, datetime(2026, 10, 11, tzinfo=ET))]
+        self.assertEqual(causes, ["matched_before_ship", "log_missing", "log_undated", "never_matches", "bad_regex"])
 
 
 class TrackerVerdicts(unittest.TestCase):
@@ -294,13 +528,13 @@ class SlackDigest(unittest.TestCase):
     def test_layout_and_links(self):
         url = "https://github.com/o/r/issues/770"
         f = [{"change": "alert-false-wording", "finding": "UNEXERCISED_EXPIRED"},
-             {"change": "session", "finding": "NEW_ERRORS_2026-10-26"}]
+             {"change": "error 0123456789ab", "finding": "strategy.run_cycle: kill-switch failed", "kind": "NEW_ERROR"}]
         blocks, fallback = self._run(f, [f"opened {url}", "updated https://github.com/o/r/issues/777"])
         self.assertEqual(blocks[0]["type"], "header")
         self.assertIn("Tue Oct 27", blocks[0]["text"]["text"])
         texts = "\n".join(b["text"]["text"] for b in blocks if b["type"] == "section")
         self.assertIn(f"<{url}|Issue #770>", texts)
-        self.assertIn("New error types in logs", texts)
+        self.assertIn("New error in run_cycle", texts)
         self.assertIn("⚠️ 2 need a look", fallback)
         for line in texts.split("\n"):
             self.assertNotIn(" | ", line)                       # SLK05: no packed fields
@@ -322,7 +556,7 @@ class SlackDigest(unittest.TestCase):
         self.assertEqual(sum(b["text"]["text"].count("⚠️ change-") for b in blocks if b["type"] == "section"), 40)
 
     def test_many_error_findings_split_under_slack_cap(self):
-        f = [{"change": "session", "finding": f"NEW_ERRORS_2026-10-{n:02d}"} for n in range(60)]
+        f = [{"change": f"error {n:012d}", "finding": "execution.broker: x", "kind": "NEW_ERROR"} for n in range(60)]
         i = [f"opened https://github.com/redstorm8705/alpaca-mtf-both/issues/{700 + n}" for n in range(60)]
         f.append({"change": "x" * 5000, "finding": "UNEXERCISED_EXPIRED"})
         i.append("opened https://github.com/o/r/issues/1")
@@ -330,7 +564,7 @@ class SlackDigest(unittest.TestCase):
         for b in blocks:
             if b["type"] == "section":
                 self.assertLess(len(b["text"]["text"]), 3000)
-        self.assertEqual(sum(b["text"]["text"].count("New error types") for b in blocks if b["type"] == "section"), 60)
+        self.assertEqual(sum(b["text"]["text"].count("New error in") for b in blocks if b["type"] == "section"), 60)
 
     def test_unfiled_issue(self):
         blocks, _ = self._run([{"change": "x", "finding": "UNEXERCISED_EXPIRED"}], ["issue create failed (500)"])
