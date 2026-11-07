@@ -253,10 +253,15 @@ def _store_path(p: str, root: str) -> bool:
     return (bool(store) and (q == store or q.startswith(store + os.sep))) or legacy in q + os.sep
 
 
+_NEW_MARK = re.compile(r"\s*\(new\)$", re.I)   # NEW-MARKER-1106: 'path (new)' marks a file the design creates
+
+
 def covered(rel: str, recs: list) -> bool:
     for r in recs:
         for c in r.get("covers") or []:
-            c = c.strip().rstrip(",")
+            c = _NEW_MARK.sub("", c.strip().rstrip(","), count=1).strip()
+            if c in ("", "*", "/"):                     # an empty prefix never covers
+                continue
             if rel == c or (c.endswith("/") and rel.startswith(c)) or (c.endswith("*") and rel.startswith(c[:-1])):
                 return True
     return False
