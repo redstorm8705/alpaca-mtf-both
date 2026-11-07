@@ -90,6 +90,7 @@ def test_after_close_emits_unique_post_live_proof(caplog) -> None:
 
 
 def test_after_close_routes_plan_and_execution() -> None:
+    flag_before = config.FOREVER6_ENABLED
     now_et = datetime(2026, 10, 23, 17, 0, tzinfo=ZoneInfo("America/New_York"))
     plan = {
         "plan": [{"symbol": "NVDA", "price": 100.0}],
@@ -137,7 +138,7 @@ def test_after_close_routes_plan_and_execution() -> None:
     assert isinstance(manager, ForeverHoldManager)
     assert manager.broker is f6_broker
     assert maybe_start.call_args.args[2] == now_et.date()
-    assert config.FOREVER6_ENABLED is False
+    assert config.FOREVER6_ENABLED is flag_before
     execute_starter.assert_called_once()
     assert result["submitted"] == [{"symbol": "NVDA", "qty": 1}]
     assert result["reserved"] == 100.0

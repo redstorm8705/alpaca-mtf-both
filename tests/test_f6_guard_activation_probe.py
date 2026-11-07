@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+import config
+import pytest
+
 from research.f6_guard_activation_probe import SOURCE_FILES, run_probe
+
+
+@pytest.fixture(autouse=True)
+def _guard_prerequisite_candidate(monkeypatch):
+    """The historical guard proof always evaluates its guard-on/F6-off candidate."""
+    monkeypatch.setattr(config, "OWNERSHIP_GUARD_ENFORCE", True)
+    monkeypatch.setattr(config, "FOREVER6_ENABLED", False)
 
 
 def _exact_facts() -> dict:

@@ -416,8 +416,9 @@ QHM_EARNINGS_STOP_CANCEL_ENABLED = False
 # A never-sell conviction tier ABOVE QHM. The STARTER rule ESTABLISHES 1-3 anchor names on a
 # market-wide dip. CASH-ONLY (no margin — the cold board proved margin makes the never-sell book a
 # hostage to any other strategy's worst day: a maintenance call would force-liquidate the anchors).
-# Ships DARK until the module is wired + live-validated.
-FOREVER6_ENABLED = False                       # master flag — DARK until validated live
+# F6-LIVE-1104: production path, crash gate, allocator, ownership guard and
+# source-bound full-path simulation are validated on the paper account.
+FOREVER6_ENABLED = True
 FOREVER6_UNIVERSE = ["TSLA", "GOOGL", "AMZN", "CRWD", "META", "NVDA",
                      "MU", "SNDK"]  # common stocks only; every ETF is forbidden at startup + order time
 # Preserve the Swing entry exclusions that FOREVER6_UNIVERSE historically supplied. DRAM/EWY are no
@@ -746,7 +747,7 @@ MIN_POSITION_VALUE_ADVISORY  = 200   # Advisory floor for non-fractionable symbo
 # symbols.json present + NVDA/GOOGL show a qhm floor), AND (2) the QHM manager's own
 # close passes tier="qhm" — else a genuinely-protected symbol reads floor=0 and the
 # guard is a silent no-op. This is the one-line kill switch for the guard itself.
-OWNERSHIP_GUARD_ENFORCE = True   # LIVE paper prerequisite; F6 remains disabled pending separate approval
+OWNERSHIP_GUARD_ENFORCE = True   # LIVE paper prerequisite for the enabled F6 ownership boundary
 
 
 # ─── DAY-TRADE TIER (Track A GEX-core) — Rafael growth engine ─────────────────

@@ -14,6 +14,7 @@ class TestProtectedReplayBalances(unittest.TestCase):
         self.paths = {
             "_LEDGER_PATH": root / "ownership_ledger.json",
             "_LEDGER_BAK_PATH": root / "ownership_ledger.bak.json",
+            "_PROTECTED_WATERMARK_PATH": root / "protected-watermark.json",
             "_LEDGER_LOCK_PATH": root / ".ledger.lock",
             "_HEAL_CONFIRM_PATH": root / "ledger_heal_confirmations.json",
         }

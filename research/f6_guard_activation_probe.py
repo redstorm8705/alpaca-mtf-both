@@ -139,6 +139,11 @@ def run_probe(*, oci_facts: dict[str, Any] | None = None) -> dict[str, Any]:
             mock.patch.object(guard, "_LEDGER_BAK_PATH", root / "ledger.bak.json")
         )
         stack.enter_context(
+            mock.patch.object(
+                guard, "_PROTECTED_WATERMARK_PATH", root / "protected-watermark.json"
+            )
+        )
+        stack.enter_context(
             mock.patch.object(guard, "page_floor_blind", return_value=None)
         )
         stack.enter_context(
@@ -159,9 +164,25 @@ def run_probe(*, oci_facts: dict[str, Any] | None = None) -> dict[str, Any]:
 
         def write_current(value: dict) -> None:
             guard._LEDGER_PATH.write_bytes(dumps(value, target=1))
+            symbols = sorted(
+                symbol
+                for symbol in value.get("positions", {})
+                if guard.protected_floor(value, symbol) > 0
+            )
+            guard._PROTECTED_WATERMARK_PATH.write_text(
+                json.dumps({"schema": 1, "symbols": symbols}), encoding="utf-8"
+            )
 
         def write_backup(value: dict) -> None:
             guard._LEDGER_BAK_PATH.write_bytes(dumps(value, target=1))
+            symbols = sorted(
+                symbol
+                for symbol in value.get("positions", {})
+                if guard.protected_floor(value, symbol) > 0
+            )
+            guard._PROTECTED_WATERMARK_PATH.write_text(
+                json.dumps({"schema": 1, "symbols": symbols}), encoding="utf-8"
+            )
 
         def reset_client() -> None:
             client.reset_mock()
@@ -278,8 +299,60 @@ def run_probe(*, oci_facts: dict[str, Any] | None = None) -> dict[str, Any]:
             )
         )
 
+        # A one-generation .bak can predate a 0→protected transition.  The
+        # monotonic watermark must therefore block every reducing wrapper when
+        # current ownership is unreadable, even though the stale backup says
+        # the symbol was ordinary Swing stock.
+        guard._LEDGER_PATH.write_text("{corrupt", encoding="utf-8")
+        write_backup(_ledger(swing=1))
+        guard._PROTECTED_WATERMARK_PATH.write_text(
+            json.dumps({"schema": 1, "symbols": ["AAPL"]}), encoding="utf-8"
+        )
+
+        reset_client()
+        result = broker.submit_day_stop_order(
+            "AAPL", 1, "sell", 90.0, tier="intraday"
+        )
+        cases.append(
+            _case(
+                "stop_stale_backup_cannot_forget_floor",
+                "stop",
+                1,
+                "BLOCKED",
+                "SUBMITTED" if result is not None else "BLOCKED",
+                client,
+            )
+        )
+
+        reset_client()
+        result = broker.partial_close_position("AAPL", 1, tier="intraday")
+        cases.append(
+            _case(
+                "partial_stale_backup_cannot_forget_floor",
+                "partial",
+                1,
+                "BLOCKED",
+                "SUBMITTED" if result else "BLOCKED",
+                client,
+            )
+        )
+
+        reset_client()
+        result = broker.close_position("AAPL", tier="intraday")
+        cases.append(
+            _case(
+                "full_stale_backup_cannot_forget_floor",
+                "full",
+                1,
+                "BLOCKED",
+                "SUBMITTED" if result else "BLOCKED",
+                client,
+            )
+        )
+
         guard._LEDGER_PATH.write_text("{corrupt", encoding="utf-8")
         guard._LEDGER_BAK_PATH.write_text("{also-corrupt", encoding="utf-8")
+        guard._PROTECTED_WATERMARK_PATH.write_text("{also-corrupt", encoding="utf-8")
         reset_client()
         with mock.patch.object(
             broker, "get_open_position", side_effect=RuntimeError("timeout")

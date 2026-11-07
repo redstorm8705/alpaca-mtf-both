@@ -24,6 +24,7 @@ class _TmpState:
         self.p = [mock.patch.object(tt, "_PATH", d / "tier_transfers.json"),
                   mock.patch.object(og, "_LEDGER_PATH", d / "ledger.json"),
                   mock.patch.object(og, "_LEDGER_BAK_PATH", d / "ledger.bak.json"),
+                  mock.patch.object(og, "_PROTECTED_WATERMARK_PATH", d / "protected-watermark.json"),
                   mock.patch.object(og, "_LEDGER_LOCK_PATH", d / ".ledger.lock"),
                   mock.patch.object(og, "_LEDGER_MIGRATION_LOCK_PATH", d / ".ledger.migration.lock"),
                   mock.patch.object(og, "_HEAL_CONFIRM_PATH", d / "heal.json")]

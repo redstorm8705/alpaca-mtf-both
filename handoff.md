@@ -87,15 +87,25 @@ Live state: BRK.B 2 sh protected by the OWNER's stop at $561.85 (untagged; the S
 each cycle and the broker refuses a duplicate — expected until the ratchet ships). No NVDA position. GE sold by the
 owner, ledger healed. F6 off.
 
-## ⏩ EARLIER 11-05 (2026-11-05, OpenAI Codex signed) — F6 ownership prerequisite approved; ledger exact
+## ⏩ EARLIER 11-05 (2026-11-05, OpenAI Codex signed) — F6 guard live; exact F6 activation diff at final gate
 
-**OpenAI Codex update — 2026-11-05:** F6-GUARD-1104 is owner-approved and ready to ship. The
-ordinary ledger reconcile cleared the stale flat-GE QHM claim; the refreshed read-only OCI proof is
-`PASS / EXACT`, the broker-hermetic probe is 11/11 PASS, and mutation counts are zero. This change
-enables only `OWNERSHIP_GUARD_ENFORCE`; `FOREVER6_ENABLED` remains false until the separate F6 live
-activation package passes its own exact gate and approval. Main PR #848 added strict cumulative-fill
-validation after the prior F6 simulation shipped; the approved F6-SIM-1023 harness now supplies those
-exact cumulative facts and its refreshed full-path artifact is PASS again.
+**OpenAI Codex update — 2026-11-05:** F6-GUARD-1104 shipped in PR #849 and is live on OCI at
+`6e9a744`; `OWNERSHIP_GUARD_ENFORCE=True`, `FOREVER6_ENABLED=False`, all three services are active,
+and startup GTC/position/pending/QHM reconciliation completed without a reconcile error. Its first
+full guard-on RTH cycle completed in 172 seconds with no ownership-guard or control-fault error. The exact
+`F6-LIVE-1104` candidate changes the remaining F6 master flag, updates the hermetic simulator to
+prove exact restoration for enabled or disabled production state, and closes four exact-diff ownership
+hazards: malformed tier quantities, a stale writer that could forget a newer protected claim, and a
+fractional limit sell that could be truncated for the guard but submitted at its original size, plus
+an unguarded Movers market-short path that could liquidate protected F6/QHM shares after its in-memory
+position set became stale.
+The corrected boundary validates every tier quantity before summing and makes all ledger writers share
+one strict cross-process commit lock; lock failure now refuses the write instead of proceeding unlocked.
+F6 stays paper-only, cash-only, common-stock-only and crash-only: it cannot act before the completed 4:15 PM
+ET SPY/VIX evidence passes both legs. The exact Nov. 5 replay was Tier B (SPY -4.409%, VIX 28.18,
+1.597x its prior-20-session average), but the live cash-only budget was $0 because account cash was
+-$338.31 below the $200 reserve. The candidate must not be committed or deployed until its exact-byte
+reviews pass and Rafael names `F6-LIVE-1104`.
 
 Shipped / live today: earnings document reader (#836, inert), Schwab quotes (#837) + login fix (#838) — **Schwab
 verified live on the server 11-04 night: token present, auto-refresh works, SPY/AAPL/BRK.B NBBO returned** (nothing in
@@ -254,14 +264,11 @@ trend_night's next night (sizing record must carry `day_lots`).
 - `FOREVER6_ENABLED=False` remains binding. This approval authorizes the corrected prerequisite only; it does not
   authorize enabling F6 or placing an F6 order.
 
-**⏩ EXACT NEXT ACTION (OpenAI Codex):** ship and deploy the owner-approved `F6-GUARD-1104`
-prerequisite, verify startup reconciliation plus every current broker stop, and record the first
-post-live guard audit. The ordinary ledger reconcile has already cleared the stale flat-GE claim;
-the current activation artifact is `PASS / EXACT`, its broker-hermetic cases are 11/11 PASS, and
-it made zero live mutations. This deployment turns on ownership enforcement only and keeps
-`FOREVER6_ENABLED=False`. After the guard is verified live, refresh the separate F6 activation
-package against current crash evidence and request/record its exact activation approval before
-turning on the F6 master flag.
+**⏩ EXACT NEXT ACTION (OpenAI Codex):** refresh the exact-byte cold-second, adversarial,
+execution/masked-loss and GAI review after the market-sell correction (Groq waived by Rafael), then request
+Rafael's exact `APPROVE F6-LIVE-1104`. Only after that named approval may the candidate be committed,
+merged and deployed. After deployment, prove the after-close route invoked and that a non-crash
+session submitted zero F6 orders; audit the first qualifying crash event end to end.
 
 ## ⏩ PARALLEL (2026-10-28, OpenAI Codex signed) — F6 full-path proof live, F6 OFF
 

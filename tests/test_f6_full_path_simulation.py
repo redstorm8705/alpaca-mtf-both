@@ -57,7 +57,8 @@ def test_artifact_runtime_evidence_rejects_network_and_duplicate_ids() -> None:
     ]
     artifact = {
         "network_capable": False,
-        "production_flag_remained_disabled": True,
+        "production_flag_initial": True,
+        "production_flag_restored": True,
         "order_transcript": transcript,
         "final_f6_qty": 3.0,
         "scenarios": [
@@ -186,13 +187,14 @@ def test_committed_check_rejects_staged_source_hidden_by_head_worktree() -> None
     )
 
 
-def test_f6_full_path_simulation_passes_and_remains_hermetic() -> None:
+def test_f6_full_path_simulation_passes_and_remains_hermetic(monkeypatch) -> None:
+    monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
     result = run_simulation()
 
     assert result["overall"] == "PASS"
     assert result["network_capable"] is False
-    assert result["production_flag_remained_disabled"] is True
-    assert config.FOREVER6_ENABLED is False
+    assert result["production_flag_initial"] is config.FOREVER6_ENABLED
+    assert result["production_flag_restored"] is True
     assert set(result["source_sha256"]) == set(SOURCE_FILES)
     assert all(len(value) == 64 for value in result["source_sha256"].values())
     assert result["source_sha256_before"] == result["source_sha256_after"]
@@ -220,7 +222,8 @@ def test_f6_full_path_simulation_passes_and_remains_hermetic() -> None:
     assert result["final_f6_qty"] == 3.0
 
 
-def test_f6_full_path_simulation_restores_globals_after_exception() -> None:
+def test_f6_full_path_simulation_restores_globals_after_exception(monkeypatch) -> None:
+    monkeypatch.setattr(config, "FOREVER6_ENABLED", True)
     original_ready = f6._STARTUP_READY
     original_quotes = dict(f6._F6_QUOTE_OBSERVATIONS)
     original_allocator = allocator._LIVE_ALLOCATOR
@@ -239,7 +242,7 @@ def test_f6_full_path_simulation_restores_globals_after_exception() -> None:
         assert f6._STARTUP_READY is ready_before
         assert f6._F6_QUOTE_OBSERVATIONS == quote_before
         assert allocator._LIVE_ALLOCATOR is allocator_before
-        assert config.FOREVER6_ENABLED is flag_before is False
+        assert config.FOREVER6_ENABLED is flag_before
     finally:
         f6._STARTUP_READY = original_ready
         f6._F6_QUOTE_OBSERVATIONS.clear()

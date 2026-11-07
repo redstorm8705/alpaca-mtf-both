@@ -606,16 +606,74 @@ def submit_market_order(
     is true, a broker-proven pre-accept rejection returns the identity sentinel
     ``ORDER_DEFINITIVELY_REJECTED``; ambiguous outcomes still return None.
     """
-    if qty <= 0:
-        logger.warning(f"[{symbol}] Skipping order: qty={qty}")
+    if isinstance(qty, bool):
+        logger.warning(f"[{symbol}] Market order rejected: boolean qty={qty!r}")
         return None
-    if str(side).lower() in {"sell", "sell_short", "short"}:
+    try:
+        _qty_number = float(qty)
+    except (TypeError, ValueError):
+        logger.warning(f"[{symbol}] Market order rejected: non-numeric qty={qty!r}")
+        return None
+    if (
+        not math.isfinite(_qty_number)
+        or _qty_number <= 0
+        or not _qty_number.is_integer()
+    ):
+        logger.warning(f"[{symbol}] Market order rejected: non-whole qty={qty!r}")
+        return None
+    qty = int(_qty_number)
+    side = str(side).lower()
+    if side not in {"buy", "sell", "sell_short", "short"}:
+        logger.warning(f"[{symbol}] Market order rejected: unsupported side={side!r}")
+        return None
+    if side in {"sell", "sell_short", "short"}:
         try:
             from execution.pending_protected_buys import assert_reduction_clear
             assert_reduction_clear(symbol)
         except Exception as e:
             logger.critical(f"[{symbol}] SELL market order blocked by unresolved F6 ownership: {e}")
             return None
+        import config
+        if getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
+            try:
+                from execution import ownership_guard as _og
+                try:
+                    _pos = get_open_position(symbol)
+                    _net = abs(float(_pos.qty)) if _pos is not None else 0.0
+                    _position_side = str(
+                        getattr(
+                            getattr(_pos, "side", ""),
+                            "value",
+                            getattr(_pos, "side", ""),
+                        )
+                    ).lower()
+                    _guard_side = "sell" if _position_side == "long" else "short"
+                except Exception as _position_exc:
+                    _net = None
+                    _guard_side = "sell"
+                    logger.warning(
+                        f"[{symbol}] SELL market position read unavailable; "
+                        "delegating UNKNOWN net to ownership guard: "
+                        f"{_position_exc}"
+                    )
+                _res = _og.check_never_sell_floor(
+                    symbol,
+                    tier,
+                    qty,
+                    _guard_side,
+                    alpaca_net_qty=_net,
+                )
+                if _res.action == "REJECT" or _res.qty != qty:
+                    logger.critical(
+                        f"[{symbol}] SELL market order refused by ownership guard: "
+                        f"{_res.reason}"
+                    )
+                    return None
+            except Exception as e:
+                logger.critical(
+                    f"[{symbol}] SELL market ownership check failed closed: {e}"
+                )
+                return None
 
     client     = _get_trading_client()
     order_side = OrderSide.BUY if side == "buy" else OrderSide.SELL
@@ -734,6 +792,22 @@ def submit_limit_order(
     returns ``ORDER_DEFINITIVELY_REJECTED`` only for a broker-proven
     pre-accept rejection; ambiguous outcomes keep the historical ``None``.
     """
+    if isinstance(qty, bool):
+        logger.warning(f"[{symbol}] Limit order rejected: boolean qty={qty!r}")
+        return None
+    try:
+        _qty_number = float(qty)
+    except (TypeError, ValueError):
+        logger.warning(f"[{symbol}] Limit order rejected: non-numeric qty={qty!r}")
+        return None
+    if (
+        not math.isfinite(_qty_number)
+        or _qty_number <= 0
+        or not _qty_number.is_integer()
+    ):
+        logger.warning(f"[{symbol}] Limit order rejected: non-whole qty={qty!r}")
+        return None
+    qty = int(_qty_number)
     _tif_s = str(time_in_force or "day").lower()
     if _tif_s not in ("day", "gtc"):
         logger.warning(f"[{symbol}] Limit order rejected: unsupported time_in_force {time_in_force!r}")
@@ -757,9 +831,9 @@ def submit_limit_order(
                 except Exception as _position_exc:
                     # Guard activation must not strand a non-protected Day/Swing
                     # exit merely because the broker position endpoint is briefly
-                    # unavailable.  Pass UNKNOWN net to the guard: its ledger/.bak
+                    # unavailable.  Pass UNKNOWN net to the guard: its ledger/watermark
                     # keystone approves only a proven non-protected symbol, while a
-                    # protected, cached-protected, corrupt or unresolved symbol
+                    # protected, previously-protected, corrupt or unresolved symbol
                     # fails closed.  Never infer a net quantity from the order.
                     _pos = None
                     _net = None
@@ -775,9 +849,9 @@ def submit_limit_order(
                                                  getattr(_pos, "side", ""))).lower()
                     _guard_side = "sell" if _position_side == "long" else "short"
                 _res = _og.check_never_sell_floor(
-                    symbol, tier, int(qty), _guard_side, alpaca_net_qty=_net,
+                    symbol, tier, qty, _guard_side, alpaca_net_qty=_net,
                 )
-                if _res.action == "REJECT" or int(_res.qty) != int(qty):
+                if _res.action == "REJECT" or _res.qty != qty:
                     logger.critical(
                         f"[{symbol}] SELL limit order refused by ownership guard: {_res.reason}"
                     )
@@ -1118,7 +1192,10 @@ def _floor_bound_stop_qty(symbol: str, qty: int, side: str, tier: str) -> int:
             from execution import ownership_guard as _og
             _protected = symbol in _og._cached_protected_symbols()
         except Exception:
-            _protected = False
+            # If both the current ledger path and its monotonic protection proof
+            # are unreadable, protection is UNKNOWN.  A wrapper failure must not
+            # turn that ambiguity into permission to sell.
+            _protected = True
         if _protected:
             try:
                 _og.page_floor_blind(symbol, tier, "ledger_type_corrupt",
@@ -2012,8 +2089,9 @@ def _floor_bound_partial_qty(symbol: str, qty: int, tier: str) -> int:
     the caller gates on that + _bypass_floor). Returns: the qty to submit (>=1); 0 to
     REJECT/skip (caller returns False); or -1 = 'position already gone' (caller returns True,
     preserving the pre-existing not-found→True contract). NEVER-RAISES (Reliability seat
-    2026-07-18): a type-corrupt ledger fails CLOSED (0) for a cached-protected symbol (page it)
-    and OPEN (requested qty) otherwise — never propagates and crashes the exit path. Same
+    2026-07-18): a type-corrupt ledger fails CLOSED (0) for a previously-protected symbol
+    (page it) and OPEN only when the monotonic watermark proves the symbol was never
+    protected — never propagates and crashes the exit path. Same
     proven structure as _floor_bound_stop_qty."""
     try:
         return _floor_bound_partial_qty_impl(symbol, qty, tier)
@@ -2022,7 +2100,7 @@ def _floor_bound_partial_qty(symbol: str, qty: int, tier: str) -> int:
             from execution import ownership_guard as _og
             _protected = symbol in _og._cached_protected_symbols()
         except Exception:
-            _protected = False
+            _protected = True
         if _protected:
             try:
                 _og.page_floor_blind(symbol, tier, "ledger_type_corrupt",
@@ -2782,8 +2860,9 @@ def close_position(symbol: str, *, tier: str = "intraday", own_qty: "int | None"
         return _raw_close_position(symbol, only_tier=tier)   # DORMANT floor; tier-scoped recovery cancel
     # Function-boundary never-raises wrapper (Reliability seat 2026-07-18): any unexpected
     # raise in the floor-aware body (e.g. a type-corrupt ledger qty making protected_floor
-    # raise) fails CLOSED for a cached-protected symbol (page it) and OPEN (raw close) for a
-    # non-protected one (keystone) — never propagates and crashes the exit path.
+    # raise) fails CLOSED for a previously-protected symbol (page it) and OPEN (raw close)
+    # only when the monotonic watermark proves the symbol was never protected (keystone) —
+    # never propagates and crashes the exit path.
     try:
         return _close_position_impl(symbol, tier)
     except Exception as e:
@@ -2791,7 +2870,7 @@ def close_position(symbol: str, *, tier: str = "intraday", own_qty: "int | None"
             from execution import ownership_guard as _og
             _protected = symbol in _og._cached_protected_symbols()
         except Exception:
-            _protected = False
+            _protected = True
         if _protected:
             try:
                 _og.page_floor_blind(symbol, tier, "ledger_type_corrupt",
