@@ -14,7 +14,13 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   REGIME-SIZE-1104 rev 3.14 (VIX: per-consumer selection table, `run_vix_snapshot.py` every 2 min per the owner's
   11-06 direction, shared snapshot + spike/blind alert) and POST-LIVE-WEEKLY-1106 rev 7 (Diff A daily-evaluator
   signature fixes, then Diff B weekly triage with dispositions).
-- **11-06 night (latest):** REGIME-SIZE-1104 (25 paths), POST-LIVE-WEEKLY-1106 (9) and APPROVAL-READY-1106 (5) are
+- **11-06 late night (newest):** SHIPPED NEW-MARKER-1106 (PR 864: approval gate now reads `(new)` Covers entries;
+  empty/`*`/`/` entries cover nothing) and APPROVAL-READY-1106 (PR 865: `.claude/preship/approval_ready.py`, CLI +
+  Stop hook in `.claude/settings.json`; CLAUDE.md rule 6). Deployed, unexercised: the Stop hook loads at the next
+  session start. The managed-gates copy needs the owner to re-run `sudo scripts/install_managed_gates.sh`. Before
+  ANY approval ask: `python3 .claude/preship/approval_ready.py <ID> --ask <file>` must print READY. Next: Mon 11-09
+  read-only VIX latency probe, then REGIME slice 1 rebuild on rev 3.14 (VIX < 14 = maximum), then POST-LIVE Diff A.
+- **11-06 night:** REGIME-SIZE-1104 (25 paths), POST-LIVE-WEEKLY-1106 (9) and APPROVAL-READY-1106 (5) are
   APPROVED and recorded. Owner chose `maximum` for the VIX < 14 row (PR 860). APPROVAL-READY build is written and
   its 19 tests pass, but it is NOT committed (untracked in the vix-slice-1-continue worktree:
   `.claude/preship/approval_ready.py` + `test_approval_ready.py`). Blocker found: the approval gate's `covered()` never
