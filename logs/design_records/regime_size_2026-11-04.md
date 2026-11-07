@@ -1,7 +1,7 @@
 # REGIME-SIZE-1104 — the core-tier size multipliers change no share counts (signed: Claude, 2026-11-04)
 
 Approval-ID: REGIME-SIZE-1104
-Status: rev 3.7 DRAFT — owner direction 2026-11-05 (all VIX sources read and cross-checked; FMP client added to Covers). Approval voided by the Covers change; board + GAI + Codex review, then owner re-approval.
+Status: rev 3.14 FINAL DRAFT for owner approval (2026-11-06: board, GAI, Codex rounds folded; owner decision on the < 14 row pending). Rev 3.7 DRAFT — owner direction 2026-11-05 (all VIX sources read and cross-checked; FMP client added to Covers). Approval voided by the Covers change; board + GAI + Codex review, then owner re-approval.
 Covers: data/schwab_quotes.py, config.py, strategy/volatility_regime.py, strategy/run_cycle.py, strategy/regime_state.py, events/macro_risk_index.py, execution/entry_logic.py, execution/exit_logic.py, research/regime_empirical.py, CLAUDE.md, tests/test_core_sizing_multiplier.py (new), tests/test_vix_source.py (new), tests/test_schwab_quotes.py
 
 ## Question that started it
@@ -310,6 +310,274 @@ strategy/run_cycle.py, strategy/regime_state.py, events/macro_risk_index.py, exe
 execution/exit_logic.py, research/regime_empirical.py, CLAUDE.md, tests/test_core_sizing_multiplier.py (new),
 tests/test_vix_source.py (new), tests/test_schwab_quotes.py, tests/test_fmp_client.py
 
+## Rev 3.8 — board round on Rev 3.7 folded (2026-11-06, signed: Claude)
+
+Board (cold; McKinney, Katsuyama, Taleb masked-loss seat): McKinney and Katsuyama approve-with-changes; Taleb rejects
+Rev 3.7 as written. GAI (Rev 3.7) asked that a lower tier never outvote the top tier. Codex was at its usage limit and
+Gro refused the prompt size (HTTP 413). Facts measured this turn (OCI, read-only, 2026-11-06 after the close):
+- FMP `stable/quote?symbol=^VIX` returns `"timestamp": 1793999701` (21:15:01 UTC, the 4:15 PM ET settlement), the same
+  as yfinance `regularMarketTime` 1793999701; both carry their own as-of time. The legacy `api/v3/quote` path is
+  retired ("Legacy Endpoint"); the MRI already uses `stable/quote` (macro_risk_index.py:571).
+- The MRI's FMP VIX read failed 344 times since 2026-07-20 (`MRI VIX: FMP None` / `FMP returned None` lines; e.g.
+  20/day on 07-20..07-22, 17 on 11-03). Its HTTP status is logged at DEBUG only (macro_risk_index.py:577), so the cause
+  is unknown — an anomaly under the ANOMALY rule, investigated in this diff.
+- The MRI reads VIX every 10 minutes (macro_risk_index.py:108) after the regime read, keeps an FMP value up to 30 min
+  (:638) and otherwise a yfinance close with no as-of time (:516-532); `_fmp_quote` keeps no timestamp (:564-586).
+- Regular-hours as-of delay of FMP and yfinance ^VIX is NOT measured (only the settlement print was readable).
+
+Changes (supersede Rev 3.7 items 1-2 where they differ):
+1. **One VIX provider, three concurrent reads, one deadline (Katsuyama).** Schwab, FMP and yfinance are read at the
+   regime read (the regime layer's `get_regime()` call in the cycle) concurrently in worker threads under one deadline
+   derived from the Schwab client's own `_timeouts()`; a source that misses it is missing for that cycle (reason
+   `deadline`). Worst case added to the trading thread = that one deadline, not the sum. The MRI consumes the
+   provider's cycle value; its own FMP VIX read, 30-min cache and yfinance close for VIX are retired (one VIX number in
+   the bot — Rev 3.5 item 2).
+2. **FMP as-of from its own `timestamp` field** (pinned from the 11-06 raw response in a test fixture; never the fetch
+   time). FMP HTTP status and error logged at WARNING. A per-day FMP call counter in the client module so the extra VIX
+   reads (~78 per day plus the MRI's USDJPY) cannot push the account past its daily limit unseen.
+3. **The value used is the HIGHEST fresh source (Taleb).** Every VIX rule (score gates, VIX > 35 overnight zero, stop
+   width, stop-confirm, breakeven buffer) reads the maximum of the fresh values: a lower tier can raise the VIX used,
+   never lower it. This replaces Rev 3.7's corroboration / outvote / median selection. Failing input it removes:
+   Schwab 37.0 real-time, FMP 29.8 and yfinance 30.1 delayed and agreeing → Rev 3.7 used 29.8 (no VIX > 35 zero, no +3
+   gate, narrower stop); Rev 3.8 uses 37.0. A false-high costs a wider stop bounded by the per-trade Kelly risk clamp;
+   a false-low narrows stops and drops the overnight zero. With the maximum, the value cannot flap between sources.
+   **3b. No source is ever dropped from the maximum; corroboration decides only whether a high is held for the day
+   (Taleb re-check of an earlier 3b/3c draft, which could drop a real Schwab spike or a real lower-tier spike while
+   Schwab was frozen, and so produce a false low).** Every cycle the value used is the plain maximum of the fresh
+   sources, in the cold start as well. Each VIX rule acts on that cycle's value: a value above 35 applies the overnight
+   zero for that cycle whatever its source. The sticky VIX > 35 flag (held for the rest of the day, persisted) is set
+   only when Schwab's own fresh value is above 35, or when two fresh sources are above 35. A lone lower-tier value
+   above 35 is paged and acts for its cycle only. Inputs checked against the record as written:
+   - yfinance bad print 40.0, Schwab 20.0, FMP 20.1 → 40.0 for that cycle (wider stop bounded by the Kelly risk clamp,
+     +3 gate, overnight zero for that cycle), paged, sticky NOT set; next cycle back to 20.x if the print clears.
+   - Schwab 37.0 real-time, FMP 29.8 / yfinance 30.1 delayed → 37.0, sticky set (Schwab above 35).
+   - Schwab 24 at 9:50 and 37 at 9:55 on its tape, FMP 28.0 / yfinance 28.2 as-of 9:52 → 37.0 (nothing dropped).
+   - Schwab frozen 20.0 with a fresh tradeTime, FMP delayed 20.1, yfinance 34.0 → 34.0; Schwab and FMP page as
+     disagreeing with yfinance once their as-of times pass; real VIX 38 seen by yfinance → 38.0 and the cycle's
+     overnight zero applies (sticky only once a second source confirms).
+   - Schwab missing, FMP 37.0, yfinance 30.1 → 37.0, overnight zero for that cycle, sticky not set.
+   The cross-check (item 4) changes no value used; it pages and feeds the anomaly rules.
+   Every disagreement page and record carries each source's as-of time and the as-of gap used in the alignment
+   (network lag vs bad data is then visible).
+4. **Cross-check = accuracy check and anomaly paging, not selection (GAI, McKinney).** Each delayed source is compared
+   with Schwab's own tape around that source's as-of time (Schwab's per-cycle tape for the session, persisted atomically
+   in the regime state file), not with Schwab's latest: the residual is how far the delayed value lies outside the
+   range of the two tape samples that bracket its as-of time. No tape sample before the as-of (session open) → no
+   verdict (`uncorroborated`). FMP and yfinance are compared with each other at their own as-of times the same way when
+   both are delayed. A pair disagrees when its residual is outside the rolling quantile of its own past residuals
+   (seeded from the item-5 probe and persisted; cold start → `uncorroborated`, no verdict). Flagged cycles are
+   excluded from that window for the rest of the session only, so a lasting change in a source's delay re-enters the
+   tolerance the next day. Disagreement is paged once per source per session and goes to the anomaly rules. A Schwab
+   value frozen with a fresh tradeTime shows as a disagreement and, being lower, is overridden by the maximum.
+   Machine check (Q40): no regime record has a value used below any fresh source value of the same cycle.
+5. **Measure before the tolerance code ships (Katsuyama, Q22):** one regular-hours read-only server probe logging
+   fetch time − as-of for each source every cycle (Mon 2026-11-09). A source delayed beyond the 10-min bound is stale
+   for the VIX rules and is still cross-checked at its own as-of time.
+6. Every regime record logs each source's value, as-of, age, reason if missing, each aligned residual, the verdict and
+   the value used, as typed fields.
+
+Required-question answers corrected for Rev 3.8: Q2 — the maximum can only raise VIX, so on disagreement days the
++2/+3 gates fire more (fewer trades for those minutes) and the VIX < 14 +2 gate fires less (more trades); measured in
+the replay and for the owner to approve. Q5 — tolerance derived as above; the 14/25/30/35 cut-offs stay inherited
+static (flagged; rolling percentiles are the Q6 forward pass). Q9 — add replays of a VIX-spike day (value used vs
+Schwab's), a frozen-Schwab day, a spike between tape samples, a lone bad print and a cold start; the replay counts the
+entries whose score gate changes under the maximum (Q2). Q12 — with item 3b no source is dropped, so a feed failure
+or a bad low print can never narrow a stop or remove the overnight zero. Q17/Q22 — the item-5 probe also records each
+source's delay against Schwab's tape during moves. Q13/Q26 — every source has its own as-of; the MRI retires its separate VIX. Q17/Q22 — FMP and
+yfinance regular-hours latency probe (item 5). Q19 — the owner approves this exact Rev 3.8. Q28/Q36 — three concurrent
+reads, one deadline (about the Schwab client timeouts). Q44 — Rev 3.8 review: board above, GAI + Codex next.
+
+## Rev 3.9 — GAI + Codex round on Rev 3.8 folded (2026-11-06, signed: Claude)
+
+Codex (reviewer #2): reject of Rev 3.8; GAI: changes requested. Folded:
+1. **Each VIX consumer uses the value that makes IT more loss-protective (Codex 1).** Direction verified at source:
+   - `exit_logic.py:1776` stop-confirm: VIX ≥ `VIX_STOP_WIDEN_THRESHOLD_2` → 1 breach instead of 3 (a higher VIX
+     exits FASTER) → maximum.
+   - `exit_logic.py:874` stressed T2 partial at VIX > 30 → profit taken earlier → maximum.
+   - `param_engine.py:174` `get_be_buffer_mult` (overnight breakeven early-exit buffer): 0.25 / 0.40 / 0.50 ATR as VIX
+     rises, capped 0.65 ATR — a higher VIX DELAYS this early exit → **minimum** of the fresh values. The hard stop
+     (1.25 ATR) is untouched by VIX refreshes; a broker stop is never widened after entry because of a VIX refresh.
+   - Entry side (score gates, entry stop width and confirm scans `entry_logic.py:1004, :704`, correlation cap `:1189`,
+     VIX > 35 overnight-entry zero) → maximum.
+   Each consumer's direction is pinned in a test so a later change to a consumer cannot silently flip it.
+2. **The trading thread never waits on a VIX feed (Codex 2).** The provider refreshes in its own background worker
+   (all three reads concurrent, each bounded by its client's own timeouts); the cycle reads the latest COMPLETED
+   snapshot under a lock and never blocks on a fetch, so the added wait before `check_exits()` is the snapshot read
+   only. Freshness still comes from each value's own as-of time, so a hung refresher shows up as stale values (VIX
+   rules not applied; stop basis per Rev 3.5 item 3), plus a page when the snapshot itself is older than 2 cycles.
+3. **Slices (Codex 3).** Slice 1 = shared provider, per-consumer policy above, sticky rule, typed records with the
+   raw aligned residuals and the source of the maximum (GAI nit), MRI on the shared provider. The disagreement
+   tolerance and paging ship as a later slice, after the item-5 probe data exists and the estimator is frozen
+   (quantile level, lookback, minimum samples, bracketing rules) and replayed; they change no value used, so slice 1
+   does not depend on them. A daily disagreement count goes in the session summary (not silenced by once-per-session
+   paging).
+4. **Not adopted (GAI):** a "max > 1.5 × median → use the median" cap and a "3 consecutive cycles → sticky" rule.
+   Both are fixed numbers in risk-scope code (project rule: no unpaired static thresholds). The first would let the
+   median outvote a real high — the false-low case the Taleb seat rejected. On oscillation: a lone source above 35
+   applies the overnight-entry zero on every cycle it is above 35, so each cycle acts on that cycle's maximum; nothing
+   toggles that the cycle's value does not.
+5. **Answers corrected (Codex 4).** Q2: the maximum can mean fewer entries in minutes when sources disagree upward —
+   an owner decision, counted by the replay before he decides. Q12: corrected — with ONE fresh source that is wrong
+   low and the others missing, the value is wrong low; no design can see past its only source; this exposure exists
+   today and the design narrows it. Q19: the owner has not yet approved this design (only the 11-05 direction to
+   read and cross-check every source). Q28: no added wait on the trading thread beyond the snapshot read.
+
+## Rev 3.10 — confirmation round on Rev 3.9 folded (2026-11-06, signed: Claude)
+
+Codex, GAI and the Taleb masked-loss seat each asked for changes on Rev 3.9; none rejected it. This section is the
+selection rule of record and supersedes Rev 3.8 items 3 / 3b and Rev 3.9 item 1 wherever they differ.
+
+1. **Per-consumer selection table** (direction verified at source; each pinned in a test):
+   | Consumer | Where | Value used |
+   |---|---|---|
+   | +2 / +3 score gates at VIX > 25 / > 30 | run_cycle score gates | maximum |
+   | +2 score gate at VIX < 14 | run_cycle score gates (:1675) | **owner decision** (below) |
+   | entry stop width (continuous scalar), entry confirm scans, correlation cap | risk_manager.py:1809-1828, entry_logic.py:1004, :704, :1189 | maximum |
+   | VIX > 35 overnight-entry zero, this cycle | run_cycle (:1812) | maximum |
+   | sticky VIX > 35 (rest of day) | regime state | Schwab's own value > 35, or two fresh sources > 35 |
+   | exit stop-confirm (1 breach at VIX ≥ 30, else 3) | exit_logic.py:1776 | maximum |
+   | stressed T2 partial at VIX > 30 | exit_logic.py:874 | maximum |
+   | overnight breakeven early-exit buffer | param_engine.py:174 via exit_logic.py:1465 | minimum |
+   | tier allocator "crash" regime (raises exposure) | tier_capital_allocator.py:1181-1212 | the sticky-qualified value (Schwab, or two sources agreeing) — never a lone maximum |
+   | tier allocator "risk_on" (low_vol → larger gross multiplier) | tier_capital_allocator.py:553/568 | maximum |
+   | volatility_regime HIGH_VOL (size ×0.5, stop ×1.5) / LOW_VOL labels | strategy/volatility_regime.py | maximum |
+   | overnight-K VIX scale (tightener), MRI VIX component | overnight_capacity.py, macro_risk_index.py | maximum |
+   F6's trigger reads its own yfinance daily closes (f6_empirical_trigger.py:114), outside this provider — unchanged
+   here, listed for the anti-silo follow-up.
+   Failing input removed by the allocator row: Schwab missing, yfinance bad print 40.0, FMP 20.1, SPY −8.5%, VIX3M 30 →
+   a lone maximum (term ratio 1.33) would have switched on the crash allocation; with the sticky-qualified value it
+   does not. (Verified at source 2026-11-06: the crash test is tier_capital_allocator.py:1197-1203; the allocator is
+   globally off today, `config.TIER_CAPITAL_ALLOCATOR_ENABLED = False` (config.py:1030), so this row binds when it is
+   re-enabled.)
+2. **Stale snapshot errs to the fast exit (Taleb 3).** "Last good" is kept per consumer direction. Once the snapshot
+   is older than the 2-cycle page, stop-confirm uses 1 breach and the breakeven buffer uses the minimum last-good
+   value; entry consumers use the maximum last-good value (Rev 3.5 item 3 basis). Failing input removed: refresher
+   hangs at 10:00 with VIX 22, real VIX 33 at 10:30, NVDA long breaches its stop → exit on the first breach, not the
+   third.
+3. **Sticky state on restart (GAI):** the sticky flag is reloaded from the regime state file before the first
+   `check_exits()`; if the file is missing or corrupt it is rebuilt from the day's regime records; if both are
+   unavailable the flag is treated as set until the first fresh Schwab reading of the day at or below 35, and paged.
+4. **Records (Codex 2, GAI):** typed fields per cycle: every source's value, as-of, age and missing reason;
+   `fresh_sources`; for each consumer row above the value used and its source; `overnight_zero_cycle`,
+   `overnight_zero_sticky` and the sticky-setting evidence; snapshot age; fallback reason when no source is fresh.
+5. **Machine checks (Q40, replaces the Rev 3.8 single check):** per cycle, every "maximum" consumer's value equals the
+   maximum of the fresh values, the breakeven value equals the minimum, the allocator crash value is sticky-qualified,
+   and the sticky flag is never set by a lone lower-tier value.
+6. Not adopted: GAI's fixed 2-second ceiling — after Rev 3.9 item 2 the trading thread no longer waits on any fetch,
+   so no ceiling applies on that thread; the background refresher keeps each client's own timeouts.
+
+**Owner decision — VIX < 14 +2 gate:** with Schwab 13.2 real-time and FMP 14.3 delayed, the maximum (14.3) turns
+the gate off (more entries, score-9 trades go through); the minimum (13.2) keeps it on (fewer entries). The
+consistent loss-protective rule is the minimum; the data-collection goal favours the maximum. Both are counted in the
+replay before the owner chooses.
+
+Answers corrected: Q2 — two owner decisions: fewer entries in minutes when sources disagree upward (> 25 / > 30
+gates), and the < 14 band choice above. Q11 — the allocator's crash and risk_on paths set gross exposure (risk-path);
+handled by item 1. Q12/Q13 — a stale snapshot now errs to the fast exit (item 2). Q19 — not yet approved by the owner;
+the package carries this table.
+
+## Rev 3.11 — owner direction 2026-11-06: read VIX at the Day tier's 2-minute pace and alert every tier on a spike
+
+Owner, 2026-11-06: "Why not just have the vix reading happen every 2 mins like the day tier? It could alert the
+other tiers if the vix spikes." Measured: the Day tier runs as its own process every 2 minutes (OCI crontab
+`*/2 * * * * … run_day_tier.py`; `config.DAYTRADE_SCAN_INTERVAL_MIN = 2`, config.py:826); the main cycle is 5 minutes.
+
+1. **Cadence from existing settings, no new number:** the background refresher (Rev 3.9 item 2) reads Schwab `$VIX`
+   every `DAYTRADE_SCAN_INTERVAL_MIN`; FMP and yfinance stay at `SCAN_INTERVAL_INTRADAY` (they are delayed feeds, and
+   FMP's free tier is 250 calls/day: a 2-minute FMP read would need ~195 calls a regular-hours day on its own).
+2. **One shared snapshot for every tier:** the refresher writes the snapshot atomically to `data/state/vix_snapshot.json`
+   (values, as-of times, per-consumer values, sticky flag, spike state). The Day tier process, Swing, trend_night and
+   QHM read that file instead of fetching VIX themselves; a missing or stale file → each reader treats VIX as
+   unavailable and uses its own Rev 3.10 last-good direction. Freshness is still each value's own as-of time.
+3. **Spike alert:** a spike is a 2-minute change in Schwab's own `$VIX` outside the rolling quantile of its own past
+   2-minute changes (same estimator slice as the cross-check tolerance: ships after the item-5 probe data, which now
+   also records the 2-minute Schwab tape). On a spike: one page, `spike` set in the snapshot with its time and size,
+   and every tier's next read sees the new maximum within one refresh. The alert itself changes no value used; what a
+   tier does is its consumer row in Rev 3.10's table (e.g. a spike above 30 makes the main cycle's stop-confirm 1
+   breach on its next run; a spike above 35 applies the overnight-entry zero).
+4. **Day tier wiring is a separate gated diff:** which Day-tier rules should read VIX (none today — to verify at
+   build time) is a design question for that diff; slice 1 only publishes the snapshot.
+5. Schwab budget: one `$VIX` request per 2 minutes (~195 per regular-hours day) through the existing request budget,
+   which pages on 429s.
+
+## Rev 3.12 — confirmation round on Rev 3.11 folded (2026-11-06, signed: Claude)
+
+Codex rejected Rev 3.11 (refresher owner process, reader cold start, the < 14 row undecided); GAI asked for changes.
+1. **One writer, named (Codex 2; Katsuyama K1 — own process, not a thread):** the refresher is its own short-lived
+   cron process, `run_vix_snapshot.py`, scheduled every `DAYTRADE_SCAN_INTERVAL_MIN` during regular hours on OCI, under
+   `flock` on `data/state/vix_snapshot.lock` (the Day tier's pattern) — a second copy exits without writing. A fresh
+   process each run means an uncaught error kills only that run, and a main-service restart (e.g. an RTH deploy) does
+   not stop the snapshot. It reads Schwab every run; FMP and yfinance only when that source's own last as-of is older
+   than `SCAN_INTERVAL_INTRADAY`. Writes via the existing `_atomic_write_json` pattern (temp file, fsync, replace) with
+   `written_at` and `schema_version`; readers must run as the same OCI user (file mode 600 — verified at build). A page
+   fires when the snapshot is older than 2 refresh intervals. Runtime test: `written_at` advances every refresh during
+   regular hours, and only the lock holder calls Schwab.
+   **The main cycle keeps its own in-memory per-direction last-good (Taleb T3)** and reads the file once per cycle, so a
+   dead writer never removes protection from the main cycle; it falls to the Rev 3.10 item 2 stale rules.
+2. **Reader cold start (Codex 3):** the snapshot file carries the per-consumer last-good values with their as-of
+   times, and the refresher writes the prior session's close (highest tier, with as-of date) into it after the close,
+   so a newly started reader always has a basis. If the file is missing or unreadable: page; exits use the fast-exit
+   side (stop-confirm 1 breach, breakeven buffer at its smallest VIX band); no new overnight exposure that cycle; entry
+   stop width uses the prior-close basis if any reader-side copy exists, else the continuous scalar's floor is NOT used
+   — the entry is skipped for that cycle (no invented neutral VIX); score gates are not applied.
+3. **Sticky-qualified value defined (GAI):** `max(Schwab fresh value, second-highest fresh value)` — a lone lower-tier
+   high never qualifies; any two sources agreeing on a high do. Used by the sticky VIX > 35 flag and the allocator crash
+   row.
+4. **Spike flag (GAI):** cleared when Schwab's next 2-minute change is back inside its own distribution; never carried
+   into the next session.
+5. **Policy mismatch (GAI Q40):** a cycle whose consumer values do not match the table pages and logs; it never aborts
+   the cycle (aborting would skip `check_exits()`).
+6. **Not adopted (GAI):** maximum last-good for the breakeven buffer when the snapshot is stale. A larger buffer delays
+   the early exit (param_engine.py:174); the Taleb seat and Codex both require the fast-exit side; 2-1 with the board
+   seat — the minimum stays.
+7. Replay cases added (Codex Q9): the 13.2 / 14.3 case under both owner choices, and a second-writer start.
+8. **The < 14 row is the owner's decision in the approval package**; no code before he chooses (Q19).
+9. **Board (Katsuyama + Taleb) on Rev 3.11, both changes requested:** verified at source that no tier outside the main
+   cycle reads VIX today (no "vix" in run_day_tier.py, day_trade_manager.py, swing_breakout_manager.py,
+   swing_overnight.py, quarterly_hold_manager.py), so the shared file removes no protection today; reader fallbacks are
+   fixed now so it cannot when readers are wired.
+10. **A bad read is a missing read (K2):** a reader treats a parse failure, a missing field or an unknown
+   `schema_version` as "file missing" (item 2 rules), never crashes and never uses part of the file.
+11. **Rev 3.11 item 5 corrected (K3):** the Schwab request budget does NOT page on 429s today (data/schwab_quotes.py
+   counts and backs off only, :657-671, :1102-1104); this diff adds one page per session on a `$VIX` 429.
+12. **Spike field has three states — none / spike / blind (Taleb T1):** `blind` when there is no fresh Schwab reading
+   (e.g. the index call refused and disabled for the day, schwab_quotes.py:1098) or two consecutive Schwab readings
+   carry the same as-of time (frozen tape); one page naming the affected tiers when it turns blind. Pinned in a test.
+13. **One owner for the sticky flag:** the snapshot file owns it; the regime state file copies it.
+14. Q26 corrected: Schwab `$VIX` is the owner's approved read-only Schwab Market Data API (outside the T1-T4 table);
+   FMP `^VIX` is T2; yfinance `^VIX` is the permitted T4 VIX source.
+
+## Rev 3.13 — confirmation round on Rev 3.12 folded (2026-11-06, signed: Claude)
+
+Codex and GAI each asked for changes on Rev 3.12; neither rejected it. Board seats were folded in Rev 3.12.
+1. **No VIX basis at all → no new entry that cycle (Codex):** supersedes the "score gates are not applied" clause of
+   Rev 3.12 item 2. When a reader has no snapshot, no readable file and no prior-close basis, every new entry whose
+   VIX-dependent gate cannot be evaluated is skipped for that cycle and paged; exits still run on the fast-exit side.
+   Input removed: file missing, real VIX 33, a candidate that passes the base score but fails the +3 gate → previously
+   entered, now skipped until a basis exists. The main cycle keeps its in-memory last-good, so this applies to a cold
+   reader process only.
+2. **Write failure (GAI):** an `OSError` at write or fsync pages and leaves the previous file untouched (`written_at`
+   does not advance); a partial file is never visible because the replace is atomic.
+3. **Reads need no lock (GAI 2, answered):** the writer replaces the file with `os.replace`, so a reader opens either
+   the old or the new complete file, never a partial one; the read is a plain non-blocking open.
+4. **The < 14 row is a config setting (GAI 3):** `VIX_LOW_GATE_POLICY` in config.py holds the owner's choice
+   (`minimum` or `maximum`); its value is the owner's decision in the approval package, and a test pins that the code
+   reads it.
+
+## Rev 3.14 — final changes from the Rev 3.13 confirmation (2026-11-06, signed: Claude)
+
+Codex and GAI both returned approve-with-changes on Rev 3.13 (no reject from any voice in that round). Folded:
+1. **Outside regular hours (Codex 2):** a post-close run of the writer records the day's settlement value of each
+   source with its as-of date. A reader outside regular hours uses that same-date settlement as its basis (a defined
+   value, not "stale"); with no same-date settlement it follows the no-basis rule (no new overnight exposure). Note:
+   trend_night enters at ~12:40 PT (15:40 ET, inside regular hours, handoff 11-01), so it reads a live snapshot today.
+2. **Main cycle reads the file twice (GAI 1):** at cycle start and again just before the entry block; exit consumers
+   update their in-memory per-direction value at each read, so a sticky flag set mid-cycle reaches the entry gate.
+3. **`VIX_LOW_GATE_POLICY` validation (GAI 2):** a value other than `minimum` / `maximum` → `minimum` and a page. Its
+   configured value is the owner's choice in the approval package (Codex 1), set before any commit.
+4. **Write durability and audit (GAI nits):** the writer also fsyncs the directory after the replace, and the snapshot
+   carries a `sequence` number that every regime and entry record logs.
+
 ## Required questions
 Q1: Data/edge quality: the score gates and the entry record stop being contaminated by a non-VIX number (07-23: SPY rvol 11.5 read as VIX added +2 to the minimum score), and every entry logs which limit set its share count — the input edge evaluation needs. Not conservative: it removes a false brake.
 Q2: On normal days no change. On a VIX-outage day trades scoring between the base minimum and the false VIX-raised minimum now enter (more trades). With Schwab as primary VIX, outage days should become rarer. Deleting the inert 1.25 changes no count (it never changed shares).
@@ -323,7 +591,7 @@ Q9: Replay of the logged core entries 07-29 → 09-25 (52) recomputing share cou
 Q10: No validated edge is held back; this is correctness and honest logging.
 Q11: Frequency can rise on outage days (score gate no longer falsely applied) → risk-path by frequency; board seats reviewed (3/3) incl. Thorp + Taleb (masked-loss). Size: no change (inert settings removed; the min-2 rescue untouched).
 Q12: Stop width reads VIX; Rev 3.5 keeps it on the last good / prior-close VIX when the live value is missing, so a feed failure can never narrow a stop. No change to the 7% kill switch, never-mask-a-loss or paper=True. Data tiers: VIX moves to the owner's Schwab feed (owner direction 11-04) with yfinance T4 kept as fallback; SPY rvol stays T1 Alpaca.
-Q13: Schwab missing/stale/killed → yfinance ^VIX; both missing/stale/implausible (non-finite, ≤0, >150) → VIX rules not applied, trading continues, logged; never a substitute series.
+Q13: (Rev 3.7) Each of Schwab, FMP and yfinance is read every cycle; a source that is missing, stale, non-finite or ≤ 0 drops out of the cross-check. No fresh source → VIX rules not applied, trading continues, logged; stop width uses the last good / prior-close basis (Rev 3.5 item 3). Never a substitute series.
 Q14: No shadow: the VIX split acts live; the sizing record logs what live code did. research/regime_empirical.py stays offline research (not in the trading process).
 Q15: Yes — each entry's sizing record carries every modifier, dollar cap step, the value cap, the rescue conditions, Kelly clamp and binding limits; each regime record carries vix_source, value, trade time, age and the rule outcomes.
 Q16: Proof lines: `regime` record with `vix_source` on every cycle; `sizing` record on every core entry. Post-live: replay the first full session's records against raw logs and Schwab/yfinance values.
@@ -336,7 +604,7 @@ Q22: Not a fail-closed control (fails open: rule not applied). The Schwab index 
 Q23: Full-path test: run_cycle with mocked Schwab fresh / stale / missing and yfinance fresh / missing, through the score gates and an entry's sizing record, before calling it ready.
 Q24: The claim "Schwab returns the CBOE VIX" was checked at source in this turn (HTTP 200, $VIX 16.61, realtime true).
 Q25: The VIX-vs-realized-vol relationship is not asserted (labelled hypothesis in the record); fallback frequency measured from 101 days of logs.
-Q26: VIX: Schwab Market Data `$VIX` (owner's account) → T2 FMP `^VIX` → T4 yfinance `^VIX`, each with its own as-of time → unavailable. SPY rvol: T1 Alpaca bars, separate field.
+Q26: (Rev 3.7) VIX: Schwab Market Data `$VIX` (owner's account), T2 FMP `^VIX`, T4 yfinance `^VIX` — all read each cycle with their own as-of times and cross-checked (Rev 3.7 item 2); none fresh → unavailable. SPY rvol: T1 Alpaca bars, separate field.
 Q27: Records append to logs/trade_events.jsonl (one JSON line per record via the existing trade logger); no new state file. Schwab token/budget files keep their existing atomic writes.
 Q28: strategy/volatility_regime.py reads VIX on the run_cycle thread before the score gates (strategy/run_cycle.py ~L1150-1680); index_last is bounded by the Schwab client timeouts (4 s connect / 4 s read) and the caller passes a deadline so check_exits is never delayed beyond it; entry_logic writes the sizing record after the final share count.
 Q29: High for a small diff: it fixes contaminated gate inputs and creates the per-entry sizing data every later sizing decision needs; below diagnosing why core-tier entries stopped after 09-25 (flagged separately).
