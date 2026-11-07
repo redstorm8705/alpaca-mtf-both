@@ -1,6 +1,8 @@
 # POST-LIVE-WEEKLY-1106 — weekly review of the post-live evaluator (design record)
 
 Approval-ID: POST-LIVE-WEEKLY-1106
+Covers: scripts/post_live_eval.py, scripts/post_live_weekly.py (new), scripts/post_live_oracle.py (new), scripts/install_post_live_weekly_cron.sh (new), .claude/preship/post_live_due.py, tests/test_post_live_engine.py, tests/test_post_live_weekly.py (new), tests/fixtures/post_live_signatures/ (new), logs/post_live/expect/post-live-weekly-1106.json (new)
+
 Status: rev 7 FINAL DRAFT for owner approval (board, GAI, Codex rounds folded 2026-11-06); rev 1 DRAFT (signed: Claude, 2026-11-06). Owner request 2026-11-06: "We also need a weekly review of the post
 live evaluator." Not yet reviewed by board + GAI + Codex.
 
