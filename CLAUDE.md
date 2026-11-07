@@ -54,6 +54,11 @@ YOUR DECISION: APPROVE / REJECT / DEFER
 4. "Let's do it" or "Approved" (recorded by `owner_approval_capture.py` as `APPROVE <ID>`; a reply without an ID counts
    only when exactly one design is pending) = proceed immediately to the FINAL pre-ship Gro+GAI audit of the exact diff (see FINAL PRE-SHIP rule) → apply + commit + push + OCI `git pull --ff-only` + restart. No follow-up confirmation needed.
 5. Rafael's approval covers the exact proposal presented — not scope beyond it.
+6. **Approval must record on his first reply (APPROVAL-READY-1106, owner 2026-11-06: "I'm tired of having to double
+   approve").** Before any ask, `python3 .claude/preship/approval_ready.py <ID> --ask <message file>` must print READY:
+   every worktree copy agrees, required questions answered, Covers names every gated file the record names (or a
+   verified `Not changed:` line), any owner choice is in the ask, and the instructed reply records through the capture
+   hook's own parser. The Stop hook `approval_ready.py --hook` blocks a turn-ending ask that is not READY.
 
 ---
 

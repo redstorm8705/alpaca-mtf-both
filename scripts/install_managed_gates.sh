@@ -39,7 +39,8 @@ settings = {
         ],
         "PostToolUse": [{"matcher": ".*", "hooks": h("behaviour_integrity.py")}],
         "UserPromptSubmit": [{"hooks": h("owner_approval_capture.py", "fork_reminder.py", "post_live_due.py --hook")}],
-        "Stop": [{"hooks": h("execute_dont_ask_gate.py", "no_guess_gate.py", "no_assume_gate.py")}],
+        "Stop": [{"hooks": h("execute_dont_ask_gate.py", "no_guess_gate.py", "no_assume_gate.py",
+                            "approval_ready.py --hook")}],
     },
 }
 json.dump(settings, open(os.path.join(dest, "managed-settings.json"), "w"), indent=2)
