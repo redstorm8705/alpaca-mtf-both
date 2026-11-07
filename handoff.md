@@ -8,7 +8,19 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-06 evening, Claude signed) — VIX design rev 3.8 + weekly post-live review rev 2; pick up here
+## ⏩ LATEST (2026-11-06 night, Claude signed) — two designs aligned and with the owner; pick up here
+
+- **Both designs aligned (no reject from board, GAI or Codex in the last round) and brought to the owner:**
+  REGIME-SIZE-1104 rev 3.14 (VIX: per-consumer selection table, `run_vix_snapshot.py` every 2 min per the owner's
+  11-06 direction, shared snapshot + spike/blind alert) and POST-LIVE-WEEKLY-1106 rev 7 (Diff A daily-evaluator
+  signature fixes, then Diff B weekly triage with dispositions).
+- **Owner decisions pending:** `APPROVE REGIME-SIZE-1104` + the VIX < 14 choice (`minimum` or `maximum`), and
+  `APPROVE POST-LIVE-WEEKLY-1106`.
+- **Exact next action after approval:** Mon 11-09 RTH read-only latency probe (rev 3.8 item 5) → build REGIME slice 1
+  on rev 3.14 through the full gate (old patch logs/wip/regime_size_1104_slice1_2026-11-05.patch is superseded:
+  rebuild, don't apply). POST-LIVE-WEEKLY: build Diff A first.
+
+## ⏩ EARLIER (2026-11-06 evening) — VIX design rev 3.8 + weekly post-live review rev 2
 
 - **REGIME-SIZE-1104 rev 3.8** (`logs/design_records/regime_size_2026-11-04.md`): board (McKinney, Katsuyama, Taleb)
   folded; value used = plain maximum of the fresh VIX sources (Schwab, FMP, yfinance; none ever dropped); sticky
