@@ -46,7 +46,7 @@ the top (root cause → fix through the gate → close the issue).
 Expectation record: `logs/post_live/expect/post-live-weekly-1106.json` with `window_days` (a weekend job) and a proof
 pattern on the script's own dated, tagged summary line.
 
-## Required questions
+## Rev 1 answers (superseded by the rev 4 answers below)
 Q1: Moves edge evaluation: errors and dead code in live paths distort what the bot's trades say about its edges; this
 turns 27 stalled findings into a ranked work list. Not conservative.
 Q2: No change to trade count.
@@ -242,7 +242,8 @@ Q20: Prompts carried counts and code facts only; "logs fully reviewed" is not cl
 Q21: The Alpaca calendar read IS a broker API call; tests mock it and the broker refuses under test.
 Q22: Not a fail-closed control.
 Q23: Replay on 4 past weeks before calling it ready.
-Q24-Q25: No market claims.
+Q24: No market claim is made; the job only counts the bot's own log lines.
+Q25: No market claim is made, so there is no market statistic to measure from bars.
 Q26: T1 Alpaca calendar (cached with as-of); everything else is the bot's own logs and GitHub.
 Q27: logs/post_live/weekly/<ISO week>.json, pending and disposition files: atomic, schema-versioned, untracked.
 Q28: Separate Saturday cron on OCI; never on the trading thread.
@@ -251,12 +252,13 @@ Q30: Blind spots covered: state corruption, idempotent delivery, the evaluator's
 alert fatigue (one weekly card, per-signature issues).
 Q31: Not an alpha claim; the replay includes holiday, rotation and partial-week cases.
 Q32: Symbol normalisation uses the union of historical universes, not today's alone.
-Q33-Q34: Not applicable (no trading).
+Q33: Not applicable because the job places no trades and changes no trading parameter.
+Q34: Not applicable because the job sizes nothing and touches no exposure limit.
 Q35: Operational regimes tested: holidays, outages, rotation, partial weeks.
 Q36: Bounded: issues per signature, not per day; weekly json size grows with signatures, not lines.
 Q37: Detection measured deterministically by the replay recount.
 Q38: Evaluator-quality decay shows as replay mismatches and health failures.
-Q39: Not applicable.
+Q39: Not applicable because the job sizes no position and reads no P&L; Kelly sizing is untouched.
 Q40: Findings resolved with verified fixes, audits completed with evidence, new findings, overdue aging — separate.
 Q41: An SRE team would also set an owner and a service-level time per item; offered to the owner as the finish-before-
 starting decision.
