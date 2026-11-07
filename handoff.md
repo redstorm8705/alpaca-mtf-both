@@ -8,7 +8,23 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-05 evening, Claude signed) — weekly usage limit until Nov 8 1 AM PT; pick up here
+## ⏩ LATEST (2026-11-06 evening, Claude signed) — VIX design rev 3.8 + weekly post-live review rev 2; pick up here
+
+- **REGIME-SIZE-1104 rev 3.8** (`logs/design_records/regime_size_2026-11-04.md`): board (McKinney, Katsuyama, Taleb)
+  folded; value used = plain maximum of the fresh VIX sources (Schwab, FMP, yfinance; none ever dropped); sticky
+  VIX>35 only from Schwab or two sources; cross-check = paging only, aligned to Schwab's tape; three concurrent reads,
+  one deadline; MRI uses the shared provider. GAI rejected rev 3.8 (outlier risk), then approve-with-changes after the
+  counter-prompt; the 3b rule GAI saw was then replaced after the Taleb re-check found it could produce a false low.
+  Final GAI + Codex round on the current text runs after Codex's 5:06 PM PT reset (scratchpad run_final.sh outputs).
+  Then: RTH latency probe Mon 11-09 (item 5, read-only) → owner one-page approval → rebuild slice 1.
+- **New anomaly:** MRI's FMP VIX read failed 344× since 07-20 (status logged at DEBUG only) — folded into rev 3.8.
+- **POST-LIVE-WEEKLY-1106 rev 2** (`logs/design_records/post_live_weekly_2026-11-06.md`, owner request 11-06): Diff A
+  daily-evaluator fixes (traceback signature, ticker masking, per-signature issues, atomic results, expired-item
+  classification) then Diff B Saturday weekly review that pre-assembles evidence for the 79 overdue audits. Board Kim
+  + Majors folded; GAI + Codex round pending; then owner approval.
+- Live 11-06: QHM bought NVDA 1 and GE 1; Day tier SNDK +$24.34, AVGO; 7 positions; equity $2,699.34.
+
+## ⏩ EARLIER (2026-11-05 evening, Claude signed) — weekly usage limit until Nov 8 1 AM PT
 
 Shipped and live today: KILL-PARTIAL-1104 (PR 848, verified live: 6 multi-fill orders validated, attribution exact),
 Schwab CBOE index reader (PR 846, inert until wired), dashboard held legs + Swing trend-exit label (PR 845), design
