@@ -1131,5 +1131,38 @@ class Round2Tests(IntegrityTests):
         self.assertEqual(r.returncode, 0)
 
 
+class NewMarkerTests(unittest.TestCase):
+    """NEW-MARKER-1106: a Covers entry marked '(new)' covers its own file and nothing else."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, HERE)
+        import owner_approval_gate
+        cls.cov = staticmethod(owner_approval_gate.covered)
+
+    def recs(self, *covers):
+        return [{"covers": list(covers)}]
+
+    def test_marked_entry_covers_its_file(self):
+        self.assertTrue(self.cov("run_vix_snapshot.py", self.recs("run_vix_snapshot.py (new)")))
+        self.assertTrue(self.cov("run_vix_snapshot.py", self.recs("run_vix_snapshot.py (NEW),")))
+
+    def test_marked_entry_does_not_cover_another_file(self):
+        self.assertFalse(self.cov("run_other.py", self.recs("run_vix_snapshot.py (new)")))
+
+    def test_marker_alone_and_star_marker_cover_nothing(self):
+        for c in ("(new)", "* (new)", "*", "/", ""):
+            self.assertFalse(self.cov("execution/broker.py", self.recs(c)), c)
+
+    def test_marker_removed_once_only(self):
+        self.assertFalse(self.cov("foo.py", self.recs("foo.py (new) (new)")))
+
+    def test_directory_and_prefix_entries_unchanged(self):
+        self.assertTrue(self.cov("tests/fixtures/a.json", self.recs("tests/fixtures/ (new)")))
+        self.assertTrue(self.cov("execution/x.py", self.recs("execution/")))
+        self.assertTrue(self.cov("execution/x.py", self.recs("execution/x*")))
+        self.assertFalse(self.cov("strategy/x.py", self.recs("execution/")))
+
+
 if __name__ == "__main__":
     unittest.main()
