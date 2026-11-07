@@ -14,6 +14,10 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   REGIME-SIZE-1104 rev 3.14 (VIX: per-consumer selection table, `run_vix_snapshot.py` every 2 min per the owner's
   11-06 direction, shared snapshot + spike/blind alert) and POST-LIVE-WEEKLY-1106 rev 7 (Diff A daily-evaluator
   signature fixes, then Diff B weekly triage with dispositions).
+- **11-06 late:** owner sent APPROVE for both. The records' Covers lists were incomplete (REGIME named 13 of the 25
+  files its rev 3.10-3.14 sections touch; POST-LIVE had none), so PR 857 completed them — which voids the recorded
+  approvals by design. Every worktree copy synced so the gate resolves both IDs. **Owner must re-send both APPROVEs
+  plus the VIX < 14 choice**; then the Monday probe and builds proceed.
 - **Owner decisions pending:** `APPROVE REGIME-SIZE-1104` + the VIX < 14 choice (`minimum` or `maximum`), and
   `APPROVE POST-LIVE-WEEKLY-1106`.
 - **Exact next action after approval:** Mon 11-09 RTH read-only latency probe (rev 3.8 item 5) → build REGIME slice 1
