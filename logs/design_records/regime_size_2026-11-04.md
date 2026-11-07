@@ -1,7 +1,7 @@
 # REGIME-SIZE-1104 — the core-tier size multipliers change no share counts (signed: Claude, 2026-11-04)
 
 Approval-ID: REGIME-SIZE-1104
-Status: rev 3.14 FINAL DRAFT (Covers completed 2026-11-06 to every file the rev 3.10-3.14 sections name: consumer table, snapshot writer and cron, pages) for owner approval (2026-11-06: board, GAI, Codex rounds folded; owner decision on the < 14 row pending). Rev 3.7 DRAFT — owner direction 2026-11-05 (all VIX sources read and cross-checked; FMP client added to Covers). Approval voided by the Covers change; board + GAI + Codex review, then owner re-approval.
+Status: rev 3.14 FINAL DRAFT (Covers completed 2026-11-06 to every file the rev 3.10-3.14 sections name: consumer table, snapshot writer and cron, pages) for owner approval (2026-11-06: board, GAI, Codex rounds folded; owner chose maximum for the < 14 row 2026-11-06). Rev 3.7 DRAFT — owner direction 2026-11-05 (all VIX sources read and cross-checked; FMP client added to Covers). Approval voided by the Covers change; board + GAI + Codex review, then owner re-approval.
 Covers: data/schwab_quotes.py, data/fmp_client.py, config.py, alerts.py, strategy/volatility_regime.py, strategy/run_cycle.py, strategy/regime_state.py, events/macro_risk_index.py, execution/entry_logic.py, execution/exit_logic.py, execution/param_engine.py, execution/risk_manager.py, execution/tier_capital_allocator.py, execution/overnight_capacity.py, research/regime_empirical.py, run_vix_snapshot.py (new), scripts/install_vix_snapshot_cron.sh (new), CLAUDE.md, tests/test_core_sizing_multiplier.py (new), tests/test_vix_source.py (new), tests/test_vix_snapshot.py (new), tests/test_schwab_quotes.py, tests/test_fmp_client.py (new), tests/test_overnight_capacity.py, tests/tests_tier_capital_allocator.py
 
 ## Question that started it
@@ -470,6 +470,9 @@ selection rule of record and supersedes Rev 3.8 items 3 / 3b and Rev 3.9 item 1 
 the gate off (more entries, score-9 trades go through); the minimum (13.2) keeps it on (fewer entries). The
 consistent loss-protective rule is the minimum; the data-collection goal favours the maximum. Both are counted in the
 replay before the owner chooses.
+**Owner choice, 2026-11-06: `maximum`** ("More trades for a vix under 14 until the vix moves above then more
+conservative"). `VIX_LOW_GATE_POLICY = "maximum"`: the < 14 gate uses the highest fresh reading; above 14 the
+existing maximum-based > 25 / > 30 gates apply unchanged.
 
 Answers corrected: Q2 — two owner decisions: fewer entries in minutes when sources disagree upward (> 25 / > 30
 gates), and the < 14 band choice above. Q11 — the allocator's crash and risk_on paths set gross exposure (risk-path);
