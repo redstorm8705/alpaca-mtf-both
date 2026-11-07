@@ -1,0 +1,17 @@
+{
+  "change": "post-live-sig-v2",
+  "tier": 1,
+  "paths": [
+    "scripts/post_live_eval.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/post_live_eval_cron.log",
+      "pattern": "post-live signatures \\[post-live-sig-v2\\]: normaliser=2"
+    }
+  ],
+  "expected_rate": "once per trading-day close (OCI cron, weekdays 22:15 UTC)",
+  "window_sessions": 2,
+  "reversal": "on a trading-day close the evaluator raises, never writes its signature line, or opens a second issue for a signature that already has an open issue",
+  "window_reason": "the evaluator runs on every trading-day close; two closes without its signature line means it is broken"
+}

@@ -1,0 +1,25 @@
+{
+ "normaliser_version": 2,
+ "universe": ["AAPL", "MSFT", "NVDA", "GE", "BRK.B"],
+ "merge": [
+  ["No bars returned for AAPL", "No bars returned for MSFT"],
+  ["[NVDA] stop 12.5 order 3f2a9c1e-1111-2222-3333-444455556666", "[GE] stop 7 order aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"],
+  ["fetch took 12.4s at 2026-11-05T15:38:46-05:00", "fetch took 3s at 2026-11-06T09:31:02-05:00"],
+  ["write failed: /home/ubuntu/mtf-bot/logs/live.yaml", "write failed: /Users/x/repo/logs/live.yaml"],
+  ["GET https://api.x.com/v2/bars?symbols=AAPL&start=2026-11-05 failed", "GET https://api.x.com/v2/bars?symbols=MSFT&start=2026-11-06 failed"],
+  ["outstanding on GE since 09:35 ET", "outstanding on NVDA since 10:05 ET"],
+  ["['MSFT', 'PLTU'] skipped", "['AAPL'] skipped"],
+  ["batch failed (123)", "batch failed (124)"]
+ ],
+ "split": [
+  ["HTTP 429 Too Many Requests", "HTTP 500 Internal"],
+  ["{\"code\":40310000,\"message\":\"held\"}", "{\"code\":50010000,\"message\":\"held\"}"],
+  ["write failed: /a/live.yaml", "write failed: /a/replay.csv"],
+  ["quantity 0 requested, available -1", "quantity 500 requested, available 100"],
+  ["quantity 1, available 100", "quantity 100, available 1"],
+  ["ALL orders rejected", "SOME orders rejected"],
+  ["BUY rejected", "SELL rejected"],
+  ["order GTC refused", "order IOC refused"]
+ ],
+ "unmasked": [["ALL orders rejected", "ALL"], ["rejected on ON", "on ON"], ["requested GTC on IT", "on IT"]]
+}
