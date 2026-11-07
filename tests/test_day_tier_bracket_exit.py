@@ -13,8 +13,21 @@ import unittest
 from unittest import mock
 from types import SimpleNamespace
 
+import config
 from execution import broker
 from execution import day_trade_manager as dtm
+
+
+_F6_FLAG_PATCH = mock.patch.object(config, "FOREVER6_ENABLED", False)
+
+
+def setUpModule():
+    """This Day-only unit does not construct F6 ownership journals."""
+    _F6_FLAG_PATCH.start()
+
+
+def tearDownModule():
+    _F6_FLAG_PATCH.stop()
 
 
 class _Leg:

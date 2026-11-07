@@ -7,7 +7,20 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+import config
 from execution import broker
+
+
+_F6_FLAG_PATCH = mock.patch.object(config, "FOREVER6_ENABLED", False)
+
+
+def setUpModule():
+    """This legacy stop-replace unit does not construct F6 ownership journals."""
+    _F6_FLAG_PATCH.start()
+
+
+def tearDownModule():
+    _F6_FLAG_PATCH.stop()
 
 
 class FakeClient:

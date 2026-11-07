@@ -22,6 +22,19 @@ for _mod in ("alpaca", "alpaca.trading", "alpaca.trading.client",
     sys.modules.setdefault(_mod, mock.MagicMock())
 
 from execution import broker as bk  # noqa: E402
+import config  # noqa: E402
+
+
+_F6_FLAG_PATCH = mock.patch.object(config, "FOREVER6_ENABLED", False)
+
+
+def setUpModule():
+    """These tier-recovery units predate F6 and omit its ownership journals."""
+    _F6_FLAG_PATCH.start()
+
+
+def tearDownModule():
+    _F6_FLAG_PATCH.stop()
 
 DT_ID = "11111111-1111-1111-1111-111111111111"
 IN_ID = "22222222-2222-2222-2222-222222222222"

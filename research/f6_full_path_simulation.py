@@ -248,7 +248,8 @@ def _artifact_runtime_evidence_valid(artifact: dict[str, Any]) -> bool:
     refusals = refusals_raw if isinstance(refusals_raw, dict) else {}
     return bool(
         artifact.get("network_capable") is False
-        and artifact.get("production_flag_remained_disabled") is True
+        and type(artifact.get("production_flag_initial")) is bool
+        and artifact.get("production_flag_restored") is True
         and _order_transcript_valid(artifact.get("order_transcript"))
         and type(artifact.get("final_f6_qty")) in (int, float)
         and artifact.get("final_f6_qty") == 3.0
@@ -876,8 +877,9 @@ def _run_simulation_inner(
     source_commit: str,
     inject_failure: bool = False,
 ) -> dict[str, Any]:
-    if config.FOREVER6_ENABLED is not False:
-        raise RuntimeError("production FOREVER6_ENABLED must be false before simulation")
+    production_flag = config.FOREVER6_ENABLED
+    if type(production_flag) is not bool:
+        raise RuntimeError("production FOREVER6_ENABLED must be a bool before simulation")
 
     broker = OfflineBroker()
     scenarios: list[dict[str, Any]] = []
@@ -943,6 +945,11 @@ def _run_simulation_inner(
             mock.patch.object(ownership_guard, "_LEDGER_PATH", state / "ledger.json"),
             mock.patch.object(
                 ownership_guard, "_LEDGER_BAK_PATH", state / "ledger.bak.json"
+            ),
+            mock.patch.object(
+                ownership_guard,
+                "_PROTECTED_WATERMARK_PATH",
+                state / "protected-watermark.json",
             ),
             mock.patch.object(
                 ownership_guard, "_LEDGER_LOCK_PATH", state / ".ledger.lock"
@@ -1502,7 +1509,7 @@ def _run_simulation_inner(
         ownership_guard.save_ledger(final_before_kill)
         broker.position_qty = 3.0
 
-    if config.FOREVER6_ENABLED is not False:
+    if config.FOREVER6_ENABLED is not production_flag:
         raise RuntimeError("simulation mutated production FOREVER6_ENABLED")
     sources = _source_hashes()
     passed = all(row["status"] == "PASS" for row in scenarios) and (
@@ -1755,9 +1762,8 @@ def run_simulation(*, inject_failure: bool = False) -> dict[str, Any]:
             ),
         ]
     )
-    result["production_flag_remained_disabled"] = bool(
-        before_flag is False and config.FOREVER6_ENABLED is False
-    )
+    result["production_flag_initial"] = before_flag
+    result["production_flag_restored"] = config.FOREVER6_ENABLED is before_flag
     inner_passed = result.get("overall") == "PASS"
     result["overall"] = (
         "PASS"
@@ -1823,7 +1829,8 @@ def check_committed_artifact() -> dict[str, Any]:
             index_sources=index_sources,
             working_sources=current,
         )
-        and config.FOREVER6_ENABLED is False
+        and artifact.get("production_flag_initial") is config.FOREVER6_ENABLED
+        and artifact.get("production_flag_restored") is True
     )
     return {
         "overall": "PASS" if valid else "FAIL",

@@ -1,7 +1,7 @@
 {
   "final_f6_qty": 3.0,
-  "generated_at": "2026-11-05T19:16:02.617531+00:00",
-  "git_head": "051f66181b5a116fe00b5cf4cbd805137a65fda5",
+  "generated_at": "2026-11-07T12:54:01.061165+00:00",
+  "git_head": "5be5c128efc2469c749ba84e4e0a08c64903778c",
   "kind": "f6_hermetic_full_path_simulation",
   "network_capable": false,
   "order_transcript": [
@@ -37,7 +37,8 @@
     }
   ],
   "overall": "PASS",
-  "production_flag_remained_disabled": true,
+  "production_flag_initial": true,
+  "production_flag_restored": true,
   "scenarios": [
     {
       "evidence": {
@@ -92,14 +93,14 @@
       "evidence": {
         "allocator_state": {
           "reservations": {
-            "6d325f97-9d14-467e-9428-0c89df4a8b94": {
+            "894e3270-f922-4342-bc16-5ee913feee01": {
               "baseline_tier_qty": 3.0,
               "broker_order_id": "sim-entry-1",
               "cash_reserve": 100.0,
               "client_order_id": "F6-NVDA-b-1-sim",
-              "created_at": 1793906162.5277052,
-              "expires_at": 1793906342.5277052,
-              "id": "6d325f97-9d14-467e-9428-0c89df4a8b94",
+              "created_at": 1794056040.65696,
+              "expires_at": 1794056220.65696,
+              "id": "894e3270-f922-4342-bc16-5ee913feee01",
               "maintenance_reserve": 100.0,
               "notional": 100.0,
               "owner_tier": "forever6",
@@ -113,10 +114,10 @@
             }
           },
           "schema": 1,
-          "updated_at": 1793906162.5325189
+          "updated_at": 1794056040.675488
         },
-        "event_date": "2026-11-05",
-        "event_ts": "2026-11-05T14:05:00-08:00",
+        "event_date": "2026-11-06",
+        "event_ts": "2026-11-06T14:05:00-08:00",
         "reason": "ok",
         "reservation_status": "submitted",
         "submitted": [
@@ -130,7 +131,7 @@
             "symbol": "NVDA"
           }
         ],
-        "trigger_as_of_date": "2026-11-05"
+        "trigger_as_of_date": "2026-11-06"
       },
       "name": "bounded_entry_reserved",
       "status": "PASS"
@@ -148,7 +149,7 @@
         "reservation_status": "released_accounted",
         "sync": {
           "drift_syms": [],
-          "elapsed_s": 0.0,
+          "elapsed_s": 0.02,
           "fills": 2,
           "healed": true,
           "ok": true,
@@ -197,7 +198,7 @@
         "status": "done",
         "sync": {
           "drift_syms": [],
-          "elapsed_s": 0.0,
+          "elapsed_s": 0.02,
           "fills": 3,
           "healed": true,
           "ok": true,
@@ -216,7 +217,7 @@
         "completed_f6_qty": 6.0,
         "completed_sync": {
           "drift_syms": [],
-          "elapsed_s": 0.0,
+          "elapsed_s": 0.02,
           "fills": 6,
           "healed": true,
           "ok": true,
@@ -229,7 +230,7 @@
         "new_orders_after_restart": 0,
         "partial_f6_qty": 8.0,
         "partial_sync": {
-          "elapsed_s": 0.0,
+          "elapsed_s": 0.01,
           "fills": 5,
           "healed": false,
           "ok": false,
@@ -275,7 +276,7 @@
               "client_order_id": "F6-NVDA-s-3-sim",
               "order_id": null,
               "qty": 1,
-              "reserved_at": "2026-11-05T11:16:02.605965-08:00"
+              "reserved_at": "2026-11-07T04:54:01.033742-08:00"
             }
           }
         }
@@ -356,7 +357,7 @@
           "autonomous_review.py": "670ac94c1d52a4b98be6393c477b2cf808b2f89189bb564686ca346b088469db",
           "backtest_12pt.py": "17841846905bdbc4f46c57b63c06dba58fe85eef2303b5171bc85aa4ddb5e5f3",
           "compare_logs.py": "10e0aeedcd01611078fd414ec96c2bea52f33dee91f9a59a33b5d0cd2dcfe99f",
-          "config.py": "07e5dcef5a8ae68d6490cc7666320b751a1eb4fa261cf4a3bc8a96e1872427d3",
+          "config.py": "4910bcb75749af1f660c4f682222d00ec79d051ab9cb97e10d41109c18720439",
           "confirm_ledger_heal.py": "d948fa9519b3665c1dc297cc5ead679bf84417bd077496815db17b7e1de342d3",
           "data/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "data/alpaca_data.py": "fba5d80c49ad0f7dc37c823cbe0fcb123f75a3249a7e184e10af36ccaff7a402",
@@ -380,7 +381,7 @@
           "events/macro_risk_index.py": "c17bd88dc6955aef9f6cfe7791dc6dd5618f45d84faeb348dfcfd48b6649c1bc",
           "events/news_monitor.py": "c86abb455f95356f1a101e7a214f1263ea560552c4ce77fd31c1856b34310360",
           "execution/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "execution/broker.py": "f3dbc91543376f193ebff281691cf5fb90226da51bec517021e66213dcf2a62a",
+          "execution/broker.py": "aefe444425f8c3de200f706fe04cf82209a778078a099acc7e45c226ae0a60be",
           "execution/counter_trend.py": "f3916219c50acaaeb1cb3111d9644e4eb0621e513608681cbca34f0ab420c1ff",
           "execution/day_promotion.py": "949f1b7907a1b2eea568914896a1eaf2b675945366520c815cb76db6a3f229a5",
           "execution/day_trade_manager.py": "b940e83ecba1de63bc847ee69683b1e7c61f2cfb0890e9f299532d35fa07bf85",
@@ -407,7 +408,7 @@
           "execution/order_admission.py": "e42cd80c3403a3beddb1029de6b0f5c6b61ae6a36feb9a8d5c29374360d1b05a",
           "execution/orphan_manager.py": "d9c512f9e9ca31c6f134050660b5538ef267f690e3d151c34b29073a5c6a4d91",
           "execution/overnight_capacity.py": "a51b40615f33f750b5ef6d49ee1daccf3f700ceabae7265aaaad1e308aac8f90",
-          "execution/ownership_guard.py": "a9d783c5b3c1c9a3a497fc6a2b620aaa8b029245c969f63662b4185cc69ff998",
+          "execution/ownership_guard.py": "9438a10aca4ba0c9ecfb4e2a571d56a4e738b02a66c6fb801260252dc403f3f8",
           "execution/ownership_ledger_codec.py": "698cc308a102be9e0f0c2cafe841a36d97a5273d2ec9f63b223b80abcb423300",
           "execution/ownership_snapshot.py": "11e4a32a2ea112a02a4571acdf8d6d24d1414fab5f14e6780f521c6dd51f4a8d",
           "execution/param_engine.py": "dd8013cbaf410f4c86143a8c6646e5162725b66635e348e5a3c0cef819097382",
@@ -441,7 +442,7 @@
           "reporting/metrics.py": "0276dc31d75e78ac23e1fd654c3c5151512e7e79a3901ec5fa461b1a35c27352",
           "reporting/pnl_ledger.py": "a4e886a35cbd7e223bab87e67e85e3203436c3d596162362a54d240bdc8ea5d1",
           "reporting/report_figures.py": "4309667a59aba6ac3830e104e7fad230c6a9b57dc428ec5580da1fa01adaa850",
-          "research/f6_full_path_simulation.py": "1f3d05d95ffd6fb722e65895c144a17f90cc851f06b899109f487daec58bb461",
+          "research/f6_full_path_simulation.py": "4c5a6a4ce181f3ff6083b43c6d29ca4ae3ef78bf9067f99c84764434cef4ed05",
           "run_day_tier.py": "8bafcdebf7e14af6143a4f204e3e60e0e9e9b3fdb229033c00844f140eb61f27",
           "run_day_tier_shadow.py": "aeb2a7cd7c2db7e427e6b7d9c42b7fbbcd8408ac46ff16d10830d22c70269fbd",
           "run_dip_zones.py": "89900fd170ee3c4200efaf53fd3f177bfdc569ee01a06307efe64188fe34b5b0",
@@ -486,8 +487,8 @@
           "strategy/trend_filter.py": "56b6cc97402cbb0a78f672ebd05ad5a1c8527d46e3bac9fe3a8882c669ad8e50",
           "strategy/volatility_regime.py": "5c546a4b74f105d823fe2b8740bb61d1b1732f971f9336b5fbf0e6713319e7ba",
           "test_ui_tokens.py": "0e080cf6665af4da950b12f6e01aae091d9656cac278c4167c0631fd52c55394",
-          "tests/test_f6_cycle.py": "c6bd2d11c128511f1254a3dd99db851e807f7f674ad3a7619e4f7671b7f82247",
-          "tests/test_f6_full_path_simulation.py": "e6ed9f9659daed1e8843552e55b000338b9f29d985e3ce8249363c84c3d9be52",
+          "tests/test_f6_cycle.py": "540f88827a59c8df19429dffd7750cef7eed414a024fb5ed6ec700044e863059",
+          "tests/test_f6_full_path_simulation.py": "ddbe15f049fc6bbfe47d22c953d3a70603839a5041cfba06347775ea4b3db592",
           "tests/test_run_cycle_kill_switch_exits.py": "c89a936bb6a7aa284e83d6e7347973d54ab759561118f157549295726b76d40f",
           "tier_names.py": "1d84dbbe7985df2bae01731ad9eb4f00005ab93f4758dbfdc44dd02273c71bbd",
           "trade_logger.py": "d2475e4421eab9f7a935ae724fc7f5c032a9ce5c750869acd3fcfecbba6d10a3",
@@ -506,7 +507,7 @@
           "autonomous_review.py": "670ac94c1d52a4b98be6393c477b2cf808b2f89189bb564686ca346b088469db",
           "backtest_12pt.py": "17841846905bdbc4f46c57b63c06dba58fe85eef2303b5171bc85aa4ddb5e5f3",
           "compare_logs.py": "10e0aeedcd01611078fd414ec96c2bea52f33dee91f9a59a33b5d0cd2dcfe99f",
-          "config.py": "07e5dcef5a8ae68d6490cc7666320b751a1eb4fa261cf4a3bc8a96e1872427d3",
+          "config.py": "4910bcb75749af1f660c4f682222d00ec79d051ab9cb97e10d41109c18720439",
           "confirm_ledger_heal.py": "d948fa9519b3665c1dc297cc5ead679bf84417bd077496815db17b7e1de342d3",
           "data/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "data/alpaca_data.py": "fba5d80c49ad0f7dc37c823cbe0fcb123f75a3249a7e184e10af36ccaff7a402",
@@ -530,7 +531,7 @@
           "events/macro_risk_index.py": "c17bd88dc6955aef9f6cfe7791dc6dd5618f45d84faeb348dfcfd48b6649c1bc",
           "events/news_monitor.py": "c86abb455f95356f1a101e7a214f1263ea560552c4ce77fd31c1856b34310360",
           "execution/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "execution/broker.py": "f3dbc91543376f193ebff281691cf5fb90226da51bec517021e66213dcf2a62a",
+          "execution/broker.py": "aefe444425f8c3de200f706fe04cf82209a778078a099acc7e45c226ae0a60be",
           "execution/counter_trend.py": "f3916219c50acaaeb1cb3111d9644e4eb0621e513608681cbca34f0ab420c1ff",
           "execution/day_promotion.py": "949f1b7907a1b2eea568914896a1eaf2b675945366520c815cb76db6a3f229a5",
           "execution/day_trade_manager.py": "b940e83ecba1de63bc847ee69683b1e7c61f2cfb0890e9f299532d35fa07bf85",
@@ -557,7 +558,7 @@
           "execution/order_admission.py": "e42cd80c3403a3beddb1029de6b0f5c6b61ae6a36feb9a8d5c29374360d1b05a",
           "execution/orphan_manager.py": "d9c512f9e9ca31c6f134050660b5538ef267f690e3d151c34b29073a5c6a4d91",
           "execution/overnight_capacity.py": "a51b40615f33f750b5ef6d49ee1daccf3f700ceabae7265aaaad1e308aac8f90",
-          "execution/ownership_guard.py": "a9d783c5b3c1c9a3a497fc6a2b620aaa8b029245c969f63662b4185cc69ff998",
+          "execution/ownership_guard.py": "9438a10aca4ba0c9ecfb4e2a571d56a4e738b02a66c6fb801260252dc403f3f8",
           "execution/ownership_ledger_codec.py": "698cc308a102be9e0f0c2cafe841a36d97a5273d2ec9f63b223b80abcb423300",
           "execution/ownership_snapshot.py": "11e4a32a2ea112a02a4571acdf8d6d24d1414fab5f14e6780f521c6dd51f4a8d",
           "execution/param_engine.py": "dd8013cbaf410f4c86143a8c6646e5162725b66635e348e5a3c0cef819097382",
@@ -591,7 +592,7 @@
           "reporting/metrics.py": "0276dc31d75e78ac23e1fd654c3c5151512e7e79a3901ec5fa461b1a35c27352",
           "reporting/pnl_ledger.py": "a4e886a35cbd7e223bab87e67e85e3203436c3d596162362a54d240bdc8ea5d1",
           "reporting/report_figures.py": "4309667a59aba6ac3830e104e7fad230c6a9b57dc428ec5580da1fa01adaa850",
-          "research/f6_full_path_simulation.py": "1f3d05d95ffd6fb722e65895c144a17f90cc851f06b899109f487daec58bb461",
+          "research/f6_full_path_simulation.py": "4c5a6a4ce181f3ff6083b43c6d29ca4ae3ef78bf9067f99c84764434cef4ed05",
           "run_day_tier.py": "8bafcdebf7e14af6143a4f204e3e60e0e9e9b3fdb229033c00844f140eb61f27",
           "run_day_tier_shadow.py": "aeb2a7cd7c2db7e427e6b7d9c42b7fbbcd8408ac46ff16d10830d22c70269fbd",
           "run_dip_zones.py": "89900fd170ee3c4200efaf53fd3f177bfdc569ee01a06307efe64188fe34b5b0",
@@ -636,8 +637,8 @@
           "strategy/trend_filter.py": "56b6cc97402cbb0a78f672ebd05ad5a1c8527d46e3bac9fe3a8882c669ad8e50",
           "strategy/volatility_regime.py": "5c546a4b74f105d823fe2b8740bb61d1b1732f971f9336b5fbf0e6713319e7ba",
           "test_ui_tokens.py": "0e080cf6665af4da950b12f6e01aae091d9656cac278c4167c0631fd52c55394",
-          "tests/test_f6_cycle.py": "c6bd2d11c128511f1254a3dd99db851e807f7f674ad3a7619e4f7671b7f82247",
-          "tests/test_f6_full_path_simulation.py": "e6ed9f9659daed1e8843552e55b000338b9f29d985e3ce8249363c84c3d9be52",
+          "tests/test_f6_cycle.py": "540f88827a59c8df19429dffd7750cef7eed414a024fb5ed6ec700044e863059",
+          "tests/test_f6_full_path_simulation.py": "ddbe15f049fc6bbfe47d22c953d3a70603839a5041cfba06347775ea4b3db592",
           "tests/test_run_cycle_kill_switch_exits.py": "c89a936bb6a7aa284e83d6e7347973d54ab759561118f157549295726b76d40f",
           "tier_names.py": "1d84dbbe7985df2bae01731ad9eb4f00005ab93f4758dbfdc44dd02273c71bbd",
           "trade_logger.py": "d2475e4421eab9f7a935ae724fc7f5c032a9ce5c750869acd3fcfecbba6d10a3",
@@ -653,7 +654,7 @@
     }
   ],
   "schema_version": 1,
-  "source_commit": "051f66181b5a116fe00b5cf4cbd805137a65fda5",
+  "source_commit": "5be5c128efc2469c749ba84e4e0a08c64903778c",
   "source_sha256": {
     "alerts.py": "17b12a0baa62bb48141734df97d23c962db267a5f418c188a5d013decba853dd",
     "audit_final.py": "df00942b1f3e64ddd4790392ddc400495910aeb87c0b48917a8e0a8a203de74b",
@@ -663,7 +664,7 @@
     "autonomous_review.py": "670ac94c1d52a4b98be6393c477b2cf808b2f89189bb564686ca346b088469db",
     "backtest_12pt.py": "17841846905bdbc4f46c57b63c06dba58fe85eef2303b5171bc85aa4ddb5e5f3",
     "compare_logs.py": "10e0aeedcd01611078fd414ec96c2bea52f33dee91f9a59a33b5d0cd2dcfe99f",
-    "config.py": "07e5dcef5a8ae68d6490cc7666320b751a1eb4fa261cf4a3bc8a96e1872427d3",
+    "config.py": "4910bcb75749af1f660c4f682222d00ec79d051ab9cb97e10d41109c18720439",
     "confirm_ledger_heal.py": "d948fa9519b3665c1dc297cc5ead679bf84417bd077496815db17b7e1de342d3",
     "data/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "data/alpaca_data.py": "fba5d80c49ad0f7dc37c823cbe0fcb123f75a3249a7e184e10af36ccaff7a402",
@@ -687,7 +688,7 @@
     "events/macro_risk_index.py": "c17bd88dc6955aef9f6cfe7791dc6dd5618f45d84faeb348dfcfd48b6649c1bc",
     "events/news_monitor.py": "c86abb455f95356f1a101e7a214f1263ea560552c4ce77fd31c1856b34310360",
     "execution/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "execution/broker.py": "f3dbc91543376f193ebff281691cf5fb90226da51bec517021e66213dcf2a62a",
+    "execution/broker.py": "aefe444425f8c3de200f706fe04cf82209a778078a099acc7e45c226ae0a60be",
     "execution/counter_trend.py": "f3916219c50acaaeb1cb3111d9644e4eb0621e513608681cbca34f0ab420c1ff",
     "execution/day_promotion.py": "949f1b7907a1b2eea568914896a1eaf2b675945366520c815cb76db6a3f229a5",
     "execution/day_trade_manager.py": "b940e83ecba1de63bc847ee69683b1e7c61f2cfb0890e9f299532d35fa07bf85",
@@ -714,7 +715,7 @@
     "execution/order_admission.py": "e42cd80c3403a3beddb1029de6b0f5c6b61ae6a36feb9a8d5c29374360d1b05a",
     "execution/orphan_manager.py": "d9c512f9e9ca31c6f134050660b5538ef267f690e3d151c34b29073a5c6a4d91",
     "execution/overnight_capacity.py": "a51b40615f33f750b5ef6d49ee1daccf3f700ceabae7265aaaad1e308aac8f90",
-    "execution/ownership_guard.py": "a9d783c5b3c1c9a3a497fc6a2b620aaa8b029245c969f63662b4185cc69ff998",
+    "execution/ownership_guard.py": "9438a10aca4ba0c9ecfb4e2a571d56a4e738b02a66c6fb801260252dc403f3f8",
     "execution/ownership_ledger_codec.py": "698cc308a102be9e0f0c2cafe841a36d97a5273d2ec9f63b223b80abcb423300",
     "execution/ownership_snapshot.py": "11e4a32a2ea112a02a4571acdf8d6d24d1414fab5f14e6780f521c6dd51f4a8d",
     "execution/param_engine.py": "dd8013cbaf410f4c86143a8c6646e5162725b66635e348e5a3c0cef819097382",
@@ -748,7 +749,7 @@
     "reporting/metrics.py": "0276dc31d75e78ac23e1fd654c3c5151512e7e79a3901ec5fa461b1a35c27352",
     "reporting/pnl_ledger.py": "a4e886a35cbd7e223bab87e67e85e3203436c3d596162362a54d240bdc8ea5d1",
     "reporting/report_figures.py": "4309667a59aba6ac3830e104e7fad230c6a9b57dc428ec5580da1fa01adaa850",
-    "research/f6_full_path_simulation.py": "1f3d05d95ffd6fb722e65895c144a17f90cc851f06b899109f487daec58bb461",
+    "research/f6_full_path_simulation.py": "4c5a6a4ce181f3ff6083b43c6d29ca4ae3ef78bf9067f99c84764434cef4ed05",
     "run_day_tier.py": "8bafcdebf7e14af6143a4f204e3e60e0e9e9b3fdb229033c00844f140eb61f27",
     "run_day_tier_shadow.py": "aeb2a7cd7c2db7e427e6b7d9c42b7fbbcd8408ac46ff16d10830d22c70269fbd",
     "run_dip_zones.py": "89900fd170ee3c4200efaf53fd3f177bfdc569ee01a06307efe64188fe34b5b0",
@@ -793,8 +794,8 @@
     "strategy/trend_filter.py": "56b6cc97402cbb0a78f672ebd05ad5a1c8527d46e3bac9fe3a8882c669ad8e50",
     "strategy/volatility_regime.py": "5c546a4b74f105d823fe2b8740bb61d1b1732f971f9336b5fbf0e6713319e7ba",
     "test_ui_tokens.py": "0e080cf6665af4da950b12f6e01aae091d9656cac278c4167c0631fd52c55394",
-    "tests/test_f6_cycle.py": "c6bd2d11c128511f1254a3dd99db851e807f7f674ad3a7619e4f7671b7f82247",
-    "tests/test_f6_full_path_simulation.py": "e6ed9f9659daed1e8843552e55b000338b9f29d985e3ce8249363c84c3d9be52",
+    "tests/test_f6_cycle.py": "540f88827a59c8df19429dffd7750cef7eed414a024fb5ed6ec700044e863059",
+    "tests/test_f6_full_path_simulation.py": "ddbe15f049fc6bbfe47d22c953d3a70603839a5041cfba06347775ea4b3db592",
     "tests/test_run_cycle_kill_switch_exits.py": "c89a936bb6a7aa284e83d6e7347973d54ab759561118f157549295726b76d40f",
     "tier_names.py": "1d84dbbe7985df2bae01731ad9eb4f00005ab93f4758dbfdc44dd02273c71bbd",
     "trade_logger.py": "d2475e4421eab9f7a935ae724fc7f5c032a9ce5c750869acd3fcfecbba6d10a3",
@@ -813,7 +814,7 @@
     "autonomous_review.py": "670ac94c1d52a4b98be6393c477b2cf808b2f89189bb564686ca346b088469db",
     "backtest_12pt.py": "17841846905bdbc4f46c57b63c06dba58fe85eef2303b5171bc85aa4ddb5e5f3",
     "compare_logs.py": "10e0aeedcd01611078fd414ec96c2bea52f33dee91f9a59a33b5d0cd2dcfe99f",
-    "config.py": "07e5dcef5a8ae68d6490cc7666320b751a1eb4fa261cf4a3bc8a96e1872427d3",
+    "config.py": "4910bcb75749af1f660c4f682222d00ec79d051ab9cb97e10d41109c18720439",
     "confirm_ledger_heal.py": "d948fa9519b3665c1dc297cc5ead679bf84417bd077496815db17b7e1de342d3",
     "data/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "data/alpaca_data.py": "fba5d80c49ad0f7dc37c823cbe0fcb123f75a3249a7e184e10af36ccaff7a402",
@@ -837,7 +838,7 @@
     "events/macro_risk_index.py": "c17bd88dc6955aef9f6cfe7791dc6dd5618f45d84faeb348dfcfd48b6649c1bc",
     "events/news_monitor.py": "c86abb455f95356f1a101e7a214f1263ea560552c4ce77fd31c1856b34310360",
     "execution/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "execution/broker.py": "f3dbc91543376f193ebff281691cf5fb90226da51bec517021e66213dcf2a62a",
+    "execution/broker.py": "aefe444425f8c3de200f706fe04cf82209a778078a099acc7e45c226ae0a60be",
     "execution/counter_trend.py": "f3916219c50acaaeb1cb3111d9644e4eb0621e513608681cbca34f0ab420c1ff",
     "execution/day_promotion.py": "949f1b7907a1b2eea568914896a1eaf2b675945366520c815cb76db6a3f229a5",
     "execution/day_trade_manager.py": "b940e83ecba1de63bc847ee69683b1e7c61f2cfb0890e9f299532d35fa07bf85",
@@ -864,7 +865,7 @@
     "execution/order_admission.py": "e42cd80c3403a3beddb1029de6b0f5c6b61ae6a36feb9a8d5c29374360d1b05a",
     "execution/orphan_manager.py": "d9c512f9e9ca31c6f134050660b5538ef267f690e3d151c34b29073a5c6a4d91",
     "execution/overnight_capacity.py": "a51b40615f33f750b5ef6d49ee1daccf3f700ceabae7265aaaad1e308aac8f90",
-    "execution/ownership_guard.py": "a9d783c5b3c1c9a3a497fc6a2b620aaa8b029245c969f63662b4185cc69ff998",
+    "execution/ownership_guard.py": "9438a10aca4ba0c9ecfb4e2a571d56a4e738b02a66c6fb801260252dc403f3f8",
     "execution/ownership_ledger_codec.py": "698cc308a102be9e0f0c2cafe841a36d97a5273d2ec9f63b223b80abcb423300",
     "execution/ownership_snapshot.py": "11e4a32a2ea112a02a4571acdf8d6d24d1414fab5f14e6780f521c6dd51f4a8d",
     "execution/param_engine.py": "dd8013cbaf410f4c86143a8c6646e5162725b66635e348e5a3c0cef819097382",
@@ -898,7 +899,7 @@
     "reporting/metrics.py": "0276dc31d75e78ac23e1fd654c3c5151512e7e79a3901ec5fa461b1a35c27352",
     "reporting/pnl_ledger.py": "a4e886a35cbd7e223bab87e67e85e3203436c3d596162362a54d240bdc8ea5d1",
     "reporting/report_figures.py": "4309667a59aba6ac3830e104e7fad230c6a9b57dc428ec5580da1fa01adaa850",
-    "research/f6_full_path_simulation.py": "1f3d05d95ffd6fb722e65895c144a17f90cc851f06b899109f487daec58bb461",
+    "research/f6_full_path_simulation.py": "4c5a6a4ce181f3ff6083b43c6d29ca4ae3ef78bf9067f99c84764434cef4ed05",
     "run_day_tier.py": "8bafcdebf7e14af6143a4f204e3e60e0e9e9b3fdb229033c00844f140eb61f27",
     "run_day_tier_shadow.py": "aeb2a7cd7c2db7e427e6b7d9c42b7fbbcd8408ac46ff16d10830d22c70269fbd",
     "run_dip_zones.py": "89900fd170ee3c4200efaf53fd3f177bfdc569ee01a06307efe64188fe34b5b0",
@@ -943,8 +944,8 @@
     "strategy/trend_filter.py": "56b6cc97402cbb0a78f672ebd05ad5a1c8527d46e3bac9fe3a8882c669ad8e50",
     "strategy/volatility_regime.py": "5c546a4b74f105d823fe2b8740bb61d1b1732f971f9336b5fbf0e6713319e7ba",
     "test_ui_tokens.py": "0e080cf6665af4da950b12f6e01aae091d9656cac278c4167c0631fd52c55394",
-    "tests/test_f6_cycle.py": "c6bd2d11c128511f1254a3dd99db851e807f7f674ad3a7619e4f7671b7f82247",
-    "tests/test_f6_full_path_simulation.py": "e6ed9f9659daed1e8843552e55b000338b9f29d985e3ce8249363c84c3d9be52",
+    "tests/test_f6_cycle.py": "540f88827a59c8df19429dffd7750cef7eed414a024fb5ed6ec700044e863059",
+    "tests/test_f6_full_path_simulation.py": "ddbe15f049fc6bbfe47d22c953d3a70603839a5041cfba06347775ea4b3db592",
     "tests/test_run_cycle_kill_switch_exits.py": "c89a936bb6a7aa284e83d6e7347973d54ab759561118f157549295726b76d40f",
     "tier_names.py": "1d84dbbe7985df2bae01731ad9eb4f00005ab93f4758dbfdc44dd02273c71bbd",
     "trade_logger.py": "d2475e4421eab9f7a935ae724fc7f5c032a9ce5c750869acd3fcfecbba6d10a3",
@@ -963,7 +964,7 @@
     "autonomous_review.py": "670ac94c1d52a4b98be6393c477b2cf808b2f89189bb564686ca346b088469db",
     "backtest_12pt.py": "17841846905bdbc4f46c57b63c06dba58fe85eef2303b5171bc85aa4ddb5e5f3",
     "compare_logs.py": "10e0aeedcd01611078fd414ec96c2bea52f33dee91f9a59a33b5d0cd2dcfe99f",
-    "config.py": "07e5dcef5a8ae68d6490cc7666320b751a1eb4fa261cf4a3bc8a96e1872427d3",
+    "config.py": "4910bcb75749af1f660c4f682222d00ec79d051ab9cb97e10d41109c18720439",
     "confirm_ledger_heal.py": "d948fa9519b3665c1dc297cc5ead679bf84417bd077496815db17b7e1de342d3",
     "data/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "data/alpaca_data.py": "fba5d80c49ad0f7dc37c823cbe0fcb123f75a3249a7e184e10af36ccaff7a402",
@@ -987,7 +988,7 @@
     "events/macro_risk_index.py": "c17bd88dc6955aef9f6cfe7791dc6dd5618f45d84faeb348dfcfd48b6649c1bc",
     "events/news_monitor.py": "c86abb455f95356f1a101e7a214f1263ea560552c4ce77fd31c1856b34310360",
     "execution/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "execution/broker.py": "f3dbc91543376f193ebff281691cf5fb90226da51bec517021e66213dcf2a62a",
+    "execution/broker.py": "aefe444425f8c3de200f706fe04cf82209a778078a099acc7e45c226ae0a60be",
     "execution/counter_trend.py": "f3916219c50acaaeb1cb3111d9644e4eb0621e513608681cbca34f0ab420c1ff",
     "execution/day_promotion.py": "949f1b7907a1b2eea568914896a1eaf2b675945366520c815cb76db6a3f229a5",
     "execution/day_trade_manager.py": "b940e83ecba1de63bc847ee69683b1e7c61f2cfb0890e9f299532d35fa07bf85",
@@ -1014,7 +1015,7 @@
     "execution/order_admission.py": "e42cd80c3403a3beddb1029de6b0f5c6b61ae6a36feb9a8d5c29374360d1b05a",
     "execution/orphan_manager.py": "d9c512f9e9ca31c6f134050660b5538ef267f690e3d151c34b29073a5c6a4d91",
     "execution/overnight_capacity.py": "a51b40615f33f750b5ef6d49ee1daccf3f700ceabae7265aaaad1e308aac8f90",
-    "execution/ownership_guard.py": "a9d783c5b3c1c9a3a497fc6a2b620aaa8b029245c969f63662b4185cc69ff998",
+    "execution/ownership_guard.py": "9438a10aca4ba0c9ecfb4e2a571d56a4e738b02a66c6fb801260252dc403f3f8",
     "execution/ownership_ledger_codec.py": "698cc308a102be9e0f0c2cafe841a36d97a5273d2ec9f63b223b80abcb423300",
     "execution/ownership_snapshot.py": "11e4a32a2ea112a02a4571acdf8d6d24d1414fab5f14e6780f521c6dd51f4a8d",
     "execution/param_engine.py": "dd8013cbaf410f4c86143a8c6646e5162725b66635e348e5a3c0cef819097382",
@@ -1048,7 +1049,7 @@
     "reporting/metrics.py": "0276dc31d75e78ac23e1fd654c3c5151512e7e79a3901ec5fa461b1a35c27352",
     "reporting/pnl_ledger.py": "a4e886a35cbd7e223bab87e67e85e3203436c3d596162362a54d240bdc8ea5d1",
     "reporting/report_figures.py": "4309667a59aba6ac3830e104e7fad230c6a9b57dc428ec5580da1fa01adaa850",
-    "research/f6_full_path_simulation.py": "1f3d05d95ffd6fb722e65895c144a17f90cc851f06b899109f487daec58bb461",
+    "research/f6_full_path_simulation.py": "4c5a6a4ce181f3ff6083b43c6d29ca4ae3ef78bf9067f99c84764434cef4ed05",
     "run_day_tier.py": "8bafcdebf7e14af6143a4f204e3e60e0e9e9b3fdb229033c00844f140eb61f27",
     "run_day_tier_shadow.py": "aeb2a7cd7c2db7e427e6b7d9c42b7fbbcd8408ac46ff16d10830d22c70269fbd",
     "run_dip_zones.py": "89900fd170ee3c4200efaf53fd3f177bfdc569ee01a06307efe64188fe34b5b0",
@@ -1093,8 +1094,8 @@
     "strategy/trend_filter.py": "56b6cc97402cbb0a78f672ebd05ad5a1c8527d46e3bac9fe3a8882c669ad8e50",
     "strategy/volatility_regime.py": "5c546a4b74f105d823fe2b8740bb61d1b1732f971f9336b5fbf0e6713319e7ba",
     "test_ui_tokens.py": "0e080cf6665af4da950b12f6e01aae091d9656cac278c4167c0631fd52c55394",
-    "tests/test_f6_cycle.py": "c6bd2d11c128511f1254a3dd99db851e807f7f674ad3a7619e4f7671b7f82247",
-    "tests/test_f6_full_path_simulation.py": "e6ed9f9659daed1e8843552e55b000338b9f29d985e3ce8249363c84c3d9be52",
+    "tests/test_f6_cycle.py": "540f88827a59c8df19429dffd7750cef7eed414a024fb5ed6ec700044e863059",
+    "tests/test_f6_full_path_simulation.py": "ddbe15f049fc6bbfe47d22c953d3a70603839a5041cfba06347775ea4b3db592",
     "tests/test_run_cycle_kill_switch_exits.py": "c89a936bb6a7aa284e83d6e7347973d54ab759561118f157549295726b76d40f",
     "tier_names.py": "1d84dbbe7985df2bae01731ad9eb4f00005ab93f4758dbfdc44dd02273c71bbd",
     "trade_logger.py": "d2475e4421eab9f7a935ae724fc7f5c032a9ce5c750869acd3fcfecbba6d10a3",
@@ -1104,5 +1105,5 @@
     "weekly_postmortem.py": "bd6191b72fcde7990e9fd0871b4df5b50f6439026c28ece931cea79b05c457d6",
     "weekly_review.py": "c08779d3dac15538b23121243ce26aaec9d0406c52e7b26015e76f3fdcaf7ea0"
   },
-  "source_tree_sha256": "1154fc8392601b6d46d27e69e71b64768e5b9ede0959290dd6c4a0d3a17f35ec"
+  "source_tree_sha256": "3d333651cc3bf1b3ff0d536aaae2bb7568448d169d0ed15503633ddce423d29b"
 }

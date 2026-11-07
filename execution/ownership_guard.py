@@ -21,7 +21,8 @@ Two catastrophic-mode defenses baked in:
      with NO protected floor has nothing to protect, so an ordinary reducing order (an
      intraday stop-loss/target) is APPROVED unconditionally and FAILS OPEN even on a
      ledger/Alpaca read error — blocking a legitimate exit (unbounded loss) is the worse
-     error. A cached protected-symbols set decides this without a live read.
+     error. A durable monotonic protected-symbol watermark decides this without a live read;
+     missing or corrupt proof is ambiguity and fails closed.
 
 Rafael-locked (2026-07-09): ring-fenced names are LONG-ONLY for the share tiers
 (bearish exposure → options program). So a short on a floor>0 symbol is REJECTED here.
@@ -38,6 +39,7 @@ import logging
 import math
 import os
 import stat
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -61,16 +63,22 @@ _LEDGER_PATH = _ROOT / "data" / "state" / "ownership_ledger.json"
 # Gro + GAI, Rafael-approved). The derived protected-set is NO LONGER a separate file
 # — two files can't be atomically consistent, and a 0->qhm ledger write landing while
 # the sidecar write failed left a silent fail-OPEN window on the ledger-unreadable
-# fallback. The ledger IS the single source of truth; on an unreadable CURRENT ledger
-# the guard falls back to this one-generation .bak of the WHOLE ledger and runs the
-# full floor check against it (fails CLOSED on any live-Alpaca drift). save_ledger
-# rotates it best-effort (never hangs the cron) and only from a VALID current ledger.
+# fallback. The ledger IS the current source of truth; this one-generation .bak of the
+# WHOLE ledger remains an operational recovery snapshot, but it is not proof that a
+# symbol was never protected because it may predate a 0→protected transition.
+# save_ledger rotates it best-effort and only from a VALID current ledger.
 _LEDGER_BAK_PATH = _ROOT / "data" / "state" / "ownership_ledger.bak.json"
+# Monotonic proof that a symbol has ever carried a protected QHM/F6 floor.  It is
+# advanced and fsynced BEFORE a ledger save may establish a new protected claim.
+# The guard consults it only when the current ledger is unreadable: an older .bak
+# may predate a 0→protected transition and therefore cannot prove fail-open safety.
+_PROTECTED_WATERMARK_PATH = _ROOT / "data" / "state" / "ownership_protected_watermark.json"
 # Cross-process advisory lock serializing sync_ledger's read-modify-write of the ledger
 # (the RTH cron and any in-process caller both go through sync_ledger). See
 # _ledger_write_lock — without it, two concurrent full-replays can lost-update
 # each other (each compares its rebuild to a baseline read BEFORE the other's write).
 _LEDGER_LOCK_PATH = _ROOT / "data" / "state" / ".ledger.lock"
+_LEDGER_LOCK_STATE = threading.local()
 # Dedicated schema-migration fence. Every durable save holds SHARED; the migration
 # command holds EXCLUSIVE. Unlike the legacy liveness lock, this fence never proceeds
 # unlocked, so schema conversion cannot race any routine writer.
@@ -149,6 +157,146 @@ def _empty_ledger() -> dict:
     return {"version": 1, "last_reconciled_utc": None, "positions": {}}
 
 
+def _whole_finite(value: Any, name: str) -> float:
+    """Return a finite signed whole-share quantity or raise ``LedgerError``."""
+    if isinstance(value, bool):
+        raise LedgerError(f"{name} is boolean")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise LedgerError(f"{name} is not numeric") from exc
+    if not math.isfinite(number) or abs(number - round(number)) > _QTY_EPS:
+        raise LedgerError(f"{name} is not a finite whole-share quantity")
+    return float(round(number))
+
+
+def _whole_nonnegative(value: Any, name: str) -> float:
+    """Return a finite nonnegative whole-share quantity or raise ``LedgerError``."""
+    number = _whole_finite(value, name)
+    if number < 0:
+        raise LedgerError(f"{name} is negative")
+    return number
+
+
+def _validated_tier_quantities(ledger: dict, symbol: str) -> dict[str, float]:
+    """Return every known tier quantity after independent whole-share validation.
+
+    Validating only a sum is unsafe: a corrupt negative QHM value can cancel a
+    positive F6 value and manufacture a zero protected floor.  Every component
+    must be valid before either the protected-floor or ledger-total shortcut is
+    allowed to run.
+    """
+    try:
+        normalized = convert_ledger(ledger, 1)
+    except (LedgerSchemaError, ValueError, TypeError) as exc:
+        raise LedgerError(f"ledger schema is invalid: {exc}") from exc
+    entry = _entry(normalized, symbol)
+    if entry is None:
+        return {tier: 0.0 for tier in _TIERS}
+    if not isinstance(entry, dict):
+        raise LedgerError(f"{symbol} ledger entry is invalid")
+    tiers = entry.get("tiers", {})
+    if not isinstance(tiers, dict):
+        raise LedgerError(f"{symbol} tier map is invalid")
+    unknown = set(tiers) - set(_TIERS)
+    if unknown:
+        raise LedgerError(f"{symbol} ledger contains unknown tiers: {sorted(unknown)!r}")
+    quantities: dict[str, float] = {}
+    for tier in _TIERS:
+        row = tiers.get(tier, {})
+        if not isinstance(row, dict):
+            raise LedgerError(f"{symbol} {tier} tier row is invalid")
+        validator = _whole_nonnegative if tier in _PROTECTED_TIERS else _whole_finite
+        quantities[tier] = validator(row.get("qty", 0.0), f"{symbol} {tier} qty")
+    return quantities
+
+
+def _protected_symbols(ledger: dict) -> set[str]:
+    positions = ledger.get("positions")
+    if not isinstance(positions, dict):
+        raise LedgerError("ledger positions are invalid")
+    protected: set[str] = set()
+    for raw_symbol in positions:
+        symbol = str(raw_symbol or "").strip().upper()
+        if not symbol:
+            raise LedgerError("ledger contains an empty symbol")
+        quantities = _validated_tier_quantities(ledger, raw_symbol)
+        floor = sum(quantities[tier] for tier in _PROTECTED_TIERS)
+        if floor > _QTY_EPS:
+            protected.add(symbol)
+    return protected
+
+
+def _load_protected_watermark_strict() -> set[str]:
+    if not _PROTECTED_WATERMARK_PATH.exists():
+        raise LedgerError("protected watermark is absent")
+    try:
+        value = json.loads(_PROTECTED_WATERMARK_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise LedgerError(f"protected watermark unreadable/corrupt: {exc}") from exc
+    if not isinstance(value, dict) or value.get("schema") != 1:
+        raise LedgerError("protected watermark schema is invalid")
+    raw_symbols = value.get("symbols")
+    if not isinstance(raw_symbols, list):
+        raise LedgerError("protected watermark symbols are invalid")
+    symbols: set[str] = set()
+    for raw_symbol in raw_symbols:
+        if not isinstance(raw_symbol, str) or not raw_symbol.strip():
+            raise LedgerError("protected watermark contains an invalid symbol")
+        symbol = raw_symbol.strip().upper()
+        if symbol != raw_symbol or symbol in symbols:
+            raise LedgerError("protected watermark symbols are not canonical and unique")
+        symbols.add(symbol)
+    return symbols
+
+
+def _advance_protected_watermark(ledger: dict) -> None:
+    """Durably union newly protected symbols before the ledger can publish them."""
+    _PROTECTED_WATERMARK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = _PROTECTED_WATERMARK_PATH.with_name(
+        f".{_PROTECTED_WATERMARK_PATH.name}.lock"
+    )
+    lock_fd = os.open(
+        lock_path,
+        os.O_CREAT | os.O_RDWR,
+        stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH,
+    )
+    held = False
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        held = True
+        candidate = _protected_symbols(ledger)
+        if _PROTECTED_WATERMARK_PATH.exists():
+            candidate |= _load_protected_watermark_strict()
+        payload = json.dumps(
+            {"schema": 1, "symbols": sorted(candidate)},
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+        tmp = _PROTECTED_WATERMARK_PATH.with_name(
+            f"{_PROTECTED_WATERMARK_PATH.name}.{os.getpid()}.tmp"
+        )
+        try:
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, _PROTECTED_WATERMARK_PATH)
+            dfd = os.open(_PROTECTED_WATERMARK_PATH.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
+        finally:
+            with contextlib.suppress(FileNotFoundError):
+                tmp.unlink()
+    finally:
+        if held:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
 def load_ledger() -> dict:
     """Load the ownership ledger. Raises LedgerError on a present-but-corrupt file so
     the guard fails CLOSED (an absent file is a fresh/empty ledger, which is fine)."""
@@ -179,10 +327,11 @@ def _migration_save_fence():
 def _save_ledger_fenced(ledger: dict) -> None:
     """Atomic tmp→replace write (RC-5). Before overwriting the current ledger, rotate
     the existing (VALID) ledger to a one-generation .bak — the last-known-good snapshot
-    the guard falls back to when the CURRENT ledger is unreadable (Opt-2, board
-    2026-07-17; retires the separate protected_symbols.json sidecar). Rotation is
-    best-effort and copies ONLY a VALID current ledger, so it can neither hang the cron
-    nor overwrite a good .bak with corruption."""
+    retained for operational recovery (Opt-2, board 2026-07-17). The monotonic
+    protected watermark, not this potentially stale backup, controls whether an
+    unreadable current ledger can use the non-protected fail-open keystone. Rotation
+    is best-effort and copies ONLY a VALID current ledger, so it can neither hang the
+    cron nor overwrite a good .bak with corruption."""
     _LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
     # Validate and serialize the complete candidate before changing current or backup.
     # Routine writers preserve the validated on-disk schema; only the explicit migration
@@ -199,6 +348,10 @@ def _save_ledger_fenced(ledger: dict) -> None:
             # must remain blind/fail-closed until an explicit repair resolves it.
             raise LedgerError(f"current ledger invalid; refusing save: {exc}") from exc
     candidate = dump_ledger(ledger, target=target_schema)
+    # Publish the monotonic fail-closed proof first.  If this write fails, the
+    # ledger save is refused; a protected claim can never become newer than the
+    # evidence used when current-ledger recovery decides fail-open vs fail-closed.
+    _advance_protected_watermark(ledger)
     # Rotate the CURRENT good ledger to .bak BEFORE overwriting it. Best-effort: skipped
     # if current ledger is absent or already corrupt, so .bak keeps the last VALID one.
     try:
@@ -222,9 +375,10 @@ def _save_ledger_fenced(ledger: dict) -> None:
 
 
 def save_ledger(ledger: dict) -> None:
-    """Validate and atomically save while participating in the migration fence."""
-    with _migration_save_fence():
-        _save_ledger_fenced(ledger)
+    """Validate and atomically save inside the strict cross-process commit domain."""
+    with _strict_ledger_write_lock():
+        with _migration_save_fence():
+            _save_ledger_fenced(ledger)
 
 
 def _load_bak_ledger() -> dict:
@@ -271,72 +425,40 @@ def load_canonical_ledger() -> dict:
 
 
 def _cached_protected_symbols() -> set:
-    """Symbols with a nonzero protected floor per the last-known-good .bak ledger
-    (Opt-2 — replaces the retired protected_symbols.json sidecar). Read by the guard
-    ONLY when the CURRENT ledger is unreadable, so a never-protected symbol still fails
-    OPEN. Absent/corrupt .bak → empty set (a genuinely protected symbol would be in a
-    valid .bak)."""
-    bak = _load_bak_ledger()
-    try:
-        return {
-            s for s in bak.get("positions", {}) if protected_floor(bak, s) > _QTY_EPS
-        }
-    except Exception as e:  # RC-3: type-corrupt .bak entry must not raise to a caller.
-        logger.debug("_cached_protected_symbols: derive failed, empty: %s", e)
-        return set()
+    """Return the monotonic set of symbols that have ever had a protected floor.
+
+    The historical one-generation ledger backup can predate a 0→QHM/F6 transition,
+    so it is not a safe protection cache.  Callers must treat a raised ``LedgerError``
+    as ambiguity and fail closed; a valid watermark that omits the symbol is the only
+    proof that a corrupt current ledger may use the non-protected fail-open keystone.
+    """
+    return _load_protected_watermark_strict()
 
 
 @contextlib.contextmanager
 def _ledger_write_lock(timeout_s: float = 5.0):
-    """Cross-process advisory lock serializing sync_ledger's read-modify-write of the
-    ledger. fcntl.flock is kernel-auto-released on process death (no stale-lock
-    deadlock, unlike a hand-rolled pidfile). On acquire timeout, proceed WITHOUT the
-    lock + a WARNING — save_ledger is atomic (tmp->replace), so the worst case degrades
-    to the pre-lock last-writer-wins behavior, NEVER a hang (a lock must never be able
-    to freeze the RTH maintainer cron). Always releases via finally."""
-    _fd = None
-    _held = False
-    try:
-        # Setup (mkdir/open) is INSIDE the guard so a lockfile-setup failure (permission
-        # or ENOSPC on the state dir) ALSO degrades to proceed-without-lock — never
-        # crashes the RTH cron (cold-2nd 2026-07-17: best-effort must include setup).
-        try:
-            _LEDGER_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _fd = os.open(str(_LEDGER_LOCK_PATH), os.O_CREAT | os.O_RDWR, 0o644)
-            _deadline = time.monotonic() + timeout_s
-            while True:
-                try:
-                    fcntl.flock(_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    _held = True
-                    break
-                except OSError:
-                    if time.monotonic() >= _deadline:
-                        logger.warning(
-                            "ledger write-lock not acquired in %.1fs — proceeding "
-                            "without it (save is atomic; last-writer-wins).",
-                            timeout_s,
-                        )
-                        break
-                    time.sleep(0.1)
-        except OSError as _se:
-            logger.warning(
-                "ledger write-lock setup failed (%s) — proceeding without it.", _se
-            )
+    """Strict compatibility name for the shared ledger commit-domain lock.
+
+    Historical callers used a best-effort lock and could proceed unlocked. That
+    permits a stale readable ledger to overwrite a newer protected claim after its
+    watermark was advanced. All read-modify-write callers now fail closed on setup
+    failure or timeout instead of accepting last-writer-wins ownership loss.
+    """
+    with _strict_ledger_write_lock(timeout_s=timeout_s):
         yield
-    finally:
-        if _fd is not None:
-            try:
-                if _held:
-                    fcntl.flock(_fd, fcntl.LOCK_UN)
-            except OSError as _ue:  # RC-3: logged; fd close below still frees the lock.
-                logger.warning("ledger write-lock release failed: %s", _ue)
-            finally:
-                os.close(_fd)
 
 
 @contextlib.contextmanager
 def _strict_ledger_write_lock(timeout_s: float = 5.0):
-    """Cross-process ledger lock that fails closed instead of proceeding unlocked."""
+    """Re-entrant-per-thread ledger lock that never proceeds unlocked."""
+    depth = int(getattr(_LEDGER_LOCK_STATE, "depth", 0) or 0)
+    if depth:
+        _LEDGER_LOCK_STATE.depth = depth + 1
+        try:
+            yield
+        finally:
+            _LEDGER_LOCK_STATE.depth = depth
+        return
     _LEDGER_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(
         str(_LEDGER_LOCK_PATH),
@@ -350,6 +472,7 @@ def _strict_ledger_write_lock(timeout_s: float = 5.0):
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 held = True
+                _LEDGER_LOCK_STATE.depth = 1
                 break
             except OSError as exc:
                 if time.monotonic() >= deadline:
@@ -357,6 +480,7 @@ def _strict_ledger_write_lock(timeout_s: float = 5.0):
                 time.sleep(0.1)
         yield
     finally:
+        _LEDGER_LOCK_STATE.depth = 0
         if held:
             fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
@@ -707,97 +831,85 @@ def check_never_sell_floor(
     except Exception as e:  # noqa: BLE001 - every journal ambiguity must block
         logger.critical("[%s] reducing order blocked by pending F6 reservation state: %s", symbol, e)
         return GuardResult("REJECT", 0.0, f"pending F6 ownership unresolved: {e}")
-    if qty is None or qty <= _QTY_EPS:
+    try:
+        qty = _whole_nonnegative(qty, "requested qty")
+    except LedgerError as exc:
+        return GuardResult("REJECT", 0.0, f"invalid requested qty: {exc}")
+    if qty <= _QTY_EPS:
         return GuardResult("REJECT", 0.0, "non-positive qty")
     if tier not in _TIERS:
         return GuardResult("REJECT", 0.0, f"unknown tier {tier!r}")
+    if str(side).lower() not in {"sell", "short"}:
+        return GuardResult("REJECT", 0.0, f"invalid reducing side {side!r}")
 
     # ── KEYSTONE — fail OPEN for a non-protected symbol (board 4-0, 2026-07-11).
     # A symbol with NO protected floor (qhm+forever6 == 0) has nothing to protect, so an
     # ordinary reducing order (an intraday stop-loss/target) MUST be approved — blocking
     # or shrinking a legitimate exit is the catastrophic error, worse than floor risk.
     # Protected status needs no live Alpaca read; on a ledger-read failure we
-    # consult the lightweight cache so a never-protected symbol still fails OPEN.
+    # consult the monotonic watermark so only a proven never-protected symbol fails OPEN.
     try:
         ledger = load_ledger()
     except LedgerError as e:
-        # Opt-2 fallback (board 2026-07-17): CURRENT ledger unreadable → fall back to
-        # the last-known-good .bak and run the FULL check against it. Not protected per
-        # the .bak → fail OPEN (blocking a legitimate intraday exit is the worse error —
-        # keystone). Protected → continue below, where the live-Alpaca reconciliation
-        # (ledger_sum vs alpaca_net + the drift field) fails CLOSED on any stale drift.
         try:
-            _bak = (
-                _load_bak_ledger_strict()
-                if alpaca_net_qty is None
-                else _load_bak_ledger()
-            )
-        except LedgerError as _bak_error:
+            ever_protected = _load_protected_watermark_strict()
+        except LedgerError as watermark_error:
             page_floor_blind(
                 symbol,
                 tier,
                 "ledger_unreadable",
-                f"current and backup ledger unresolved while Alpaca net unavailable: {_bak_error}",
+                f"current ledger unreadable and protected watermark unresolved: {watermark_error}",
             )
             return GuardResult(
                 "REJECT",
                 0.0,
-                "current and backup ledger unresolved with Alpaca net unavailable — fail closed",
+                "current ledger and protected watermark unresolved — fail closed",
             )
+        if symbol in ever_protected:
+            page_floor_blind(
+                symbol,
+                tier,
+                "ledger_unreadable",
+                f"current ledger unreadable for ever-protected symbol: {e}",
+            )
+            logger.critical(
+                "[%s] check_never_sell_floor: current ledger unreadable (%s) and "
+                "the monotonic watermark proves prior protection — fail closed.",
+                symbol,
+                e,
+            )
+            return GuardResult(
+                "REJECT",
+                0.0,
+                "current ledger unreadable for ever-protected symbol — fail closed",
+            )
+        return GuardResult(
+            "APPROVE",
+            qty,
+            "current ledger unreadable, monotonic watermark proves symbol never protected — exit ok",
+        )
+
+    # ── Protection determination (main ledger). A raise here (type-corrupt qty) means we
+    # CANNOT determine protection. Resolve it with the monotonic watermark: fail CLOSED
+    # when prior protection exists or the watermark is unreadable; fail OPEN only when a
+    # valid watermark proves the symbol was never protected.
+    try:
+        tier_quantities = _validated_tier_quantities(ledger, symbol)
+        floor = sum(tier_quantities[protected] for protected in _PROTECTED_TIERS)
+    except Exception as _pe:
         try:
-            _bak_floor = protected_floor(_bak, symbol)
-        except Exception as _pe:
-            # OBS-A (Exec-risk seat 2026-07-18): current ledger unreadable AND the .bak's
-            # protected field is type-corrupt = BOTH records compromised. Only a protected
-            # symbol carries a protected-tier value here, so this narrow double-blind is the
-            # one place fail-CLOSED is correct. Page it — the guard is blind on a would-be
-            # protected exit.
+            ever_protected = _load_protected_watermark_strict()
+        except LedgerError as watermark_error:
             page_floor_blind(
                 symbol,
                 tier,
                 "ledger_type_corrupt",
-                f"current ledger unreadable + .bak protected_floor raised: {_pe}",
-            )
-            logger.critical(
-                "[%s] check_never_sell_floor: current ledger unreadable AND .bak "
-                "protected_floor raised (%s) — fail closed.",
-                symbol,
-                _pe,
+                f"protected floor and watermark unresolved: {_pe}; {watermark_error}",
             )
             return GuardResult(
-                "REJECT",
-                0.0,
-                "current ledger unreadable and .bak corrupt — fail closed",
+                "REJECT", 0.0, "ledger entry and protected watermark unresolved — fail closed"
             )
-        if _bak_floor <= _QTY_EPS:
-            return GuardResult(
-                "APPROVE",
-                qty,
-                "current ledger unreadable, symbol not protected in .bak — exit ok",
-            )
-        page_floor_blind(
-            symbol,
-            tier,
-            "ledger_unreadable",
-            f"current ledger unreadable, using .bak for protected symbol: {e}",
-        )
-        logger.critical(
-            "[%s] check_never_sell_floor: current ledger unreadable (%s) — using "
-            "last-known-good .bak for a PROTECTED symbol; live-Alpaca drift fails "
-            "closed on any mismatch.",
-            symbol,
-            e,
-        )
-        ledger = _bak
-
-    # ── Protection determination (main ledger). A raise here (type-corrupt qty) means we
-    # CANNOT determine protection → OBS-A .bak resolution (Reliability + Exec-risk seats):
-    # fail CLOSED only if the symbol is cached-protected (page it); else fail OPEN — blocking a
-    # legitimate intraday exit is the keystone catastrophe, worse than floor risk.
-    try:
-        floor = protected_floor(ledger, symbol)  # ledger-derived ONLY (forever6 + qhm)
-    except Exception as _pe:
-        if symbol in _cached_protected_symbols():
+        if symbol in ever_protected:
             page_floor_blind(
                 symbol,
                 tier,
@@ -814,15 +926,15 @@ def check_never_sell_floor(
                 "REJECT", 0.0, "ledger entry corrupt for protected symbol — fail closed"
             )
         logger.warning(
-            "[%s] check_never_sell_floor: protected_floor raised, symbol not protected in "
-            ".bak — fail open (keystone): %s",
+            "[%s] check_never_sell_floor: protected_floor raised, monotonic watermark proves "
+            "the symbol was never protected — fail open (keystone): %s",
             symbol,
             _pe,
         )
         return GuardResult(
             "APPROVE",
             qty,
-            "ledger entry corrupt, symbol not protected in .bak — exit ok",
+            "ledger entry corrupt, monotonic watermark proves symbol never protected — exit ok",
         )
     if floor <= _QTY_EPS:
         # No protected floor → nothing to protect. Approve the full order regardless of
@@ -846,10 +958,11 @@ def check_never_sell_floor(
                 0.0,
                 "Alpaca net unavailable for PROTECTED symbol — fail closed",
             )
+        net = _whole_nonnegative(alpaca_net_qty, f"{symbol} Alpaca net")
         _ent = _entry(ledger, symbol)
         if _ent is not None:
             _drift = float(_ent.get("drift", 0.0) or 0.0)
-            if abs(_drift) > _QTY_EPS:
+            if not math.isfinite(_drift) or abs(_drift) > _QTY_EPS:
                 page_floor_blind(
                     symbol, tier, "drift_freeze", f"ledger drift field={_drift}"
                 )
@@ -859,8 +972,8 @@ def check_never_sell_floor(
                     f"LEDGER_DRIFT {symbol} drift={_drift} — sells frozen",
                 )
         # reconciliation: ledger tier-sum must equal Alpaca net, else FREEZE
-        ledger_sum = get_combined_symbol_exposure(ledger, symbol)
-        if abs(ledger_sum - float(alpaca_net_qty)) > _QTY_EPS:
+        ledger_sum = sum(tier_quantities.values())
+        if abs(ledger_sum - net) > _QTY_EPS:
             page_floor_blind(
                 symbol,
                 tier,
@@ -873,8 +986,7 @@ def check_never_sell_floor(
                 f"drift ledger={ledger_sum} alpaca={alpaca_net_qty} — fail closed",
             )
 
-        own = tier_qty(ledger, symbol, tier)
-        net = float(alpaca_net_qty)
+        own = tier_quantities[tier]
         # A protected tier (qhm/forever6) selling its OWN shares reduces its own share
         # to the floor, so it need only stay above the OTHER protected tiers' qty. Example:
         # net=4 intraday=1 qhm=2 f6=1 → a QHM sell of its own 2 respects only forever6(1).
@@ -939,6 +1051,12 @@ def check_never_sell_floor(
 
 # ── Drift reconcile ───────────────────────────────────────────────────────────
 def reconcile_drift(alpaca_positions: list) -> dict:
+    """Serialize the complete drift read/decision/write transaction."""
+    with _ledger_write_lock():
+        return _reconcile_drift_locked(alpaca_positions)
+
+
+def _reconcile_drift_locked(alpaca_positions: list) -> dict:
     """Compare ledger tier-sums to Alpaca live positions; set per-symbol `drift`
     (alpaca_net - ledger_sum). Any nonzero drift → that symbol is frozen for sells by
     the guard (STEP 0/1). Returns {symbol: drift} for the drifted symbols. Never raises
@@ -1650,7 +1768,8 @@ def sync_ledger(
     # its OWN stale baseline and clobbers the fresher write. The lock serializes them so
     # the second committer reads the first's write as its baseline and never-shrink then
     # correctly aborts a stale-lower rebuild (a benign spurious healed=False, not a lost
-    # F6 floor). Lock is best-effort (atomic save is the real durability guarantee).
+    # F6 floor). The lock is strict: timeout/setup failure aborts rather than allowing
+    # last-writer-wins ownership loss.
     with _ledger_write_lock():
         try:
             _base = load_ledger()
@@ -1812,6 +1931,12 @@ def sync_ledger(
 
 # ── Launch init (run ONCE) ────────────────────────────────────────────────────
 def launch_init(alpaca_positions: list, force: bool = False) -> dict:
+    """Serialize the complete launch seed read/decision/write transaction."""
+    with _ledger_write_lock():
+        return _launch_init_locked(alpaca_positions, force=force)
+
+
+def _launch_init_locked(alpaca_positions: list, force: bool = False) -> dict:
     """Seed the ledger from the current Alpaca book, attributing ALL existing shares to
     INTRADAY (forever6/qhm start at 0 — Rafael 2026-07-09). NO orders sent. Refuses to
     run if the ledger already exists with any nonzero forever6/qhm qty (re-seeding would

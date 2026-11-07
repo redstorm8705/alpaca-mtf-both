@@ -143,6 +143,9 @@ class GuardBoundaryTests(unittest.TestCase):
                 guard, "_LEDGER_BAK_PATH", root / "ownership_ledger.bak.json"
             ),
             mock.patch.object(
+                guard, "_PROTECTED_WATERMARK_PATH", root / "protected-watermark.json"
+            ),
+            mock.patch.object(
                 guard, "_LEDGER_MIGRATION_LOCK_PATH", root / ".migration.lock"
             ),
             mock.patch.object(guard, "_LEDGER_LOCK_PATH", root / ".ledger.lock"),
@@ -165,6 +168,71 @@ class GuardBoundaryTests(unittest.TestCase):
         guard._LEDGER_PATH.write_bytes(dumps(ledger_v1(), target=2))
         guard.save_ledger(guard.load_ledger())
         self.assertEqual(loads_strict(guard._LEDGER_PATH.read_bytes())["version"], 2)
+
+    def test_routine_save_advances_monotonic_protected_watermark(self):
+        row = ledger_v1()
+        guard.save_ledger(row)
+        self.assertEqual(guard._load_protected_watermark_strict(), {"NVDA"})
+
+        # A later legitimate protected reduction must not erase the fact that
+        # NVDA was once protected; that fact is what defeats a stale .bak after
+        # a future current-ledger read failure.
+        row["positions"]["NVDA"]["tiers"]["qhm"]["qty"] = 0.0
+        row["positions"]["NVDA"]["tiers"]["forever6"]["qty"] = 0.0
+        row["positions"]["NVDA"]["alpaca_net_qty"] = 3.0
+        guard.save_ledger(row)
+        self.assertEqual(guard._load_protected_watermark_strict(), {"NVDA"})
+
+    def test_corrupt_watermark_refuses_new_protected_ledger_publish(self):
+        original = dumps(ledger_v1(), target=1)
+        guard._LEDGER_PATH.write_bytes(original)
+        guard._PROTECTED_WATERMARK_PATH.write_text("{corrupt", encoding="utf-8")
+        with self.assertRaises(guard.LedgerError):
+            guard.save_ledger(guard.load_ledger())
+        self.assertEqual(guard._LEDGER_PATH.read_bytes(), original)
+
+    def test_direct_save_refuses_when_commit_domain_lock_is_busy(self):
+        guard._LEDGER_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        fd = guard.os.open(
+            guard._LEDGER_LOCK_PATH,
+            guard.os.O_CREAT | guard.os.O_RDWR,
+            0o644,
+        )
+        guard.fcntl.flock(fd, guard.fcntl.LOCK_EX | guard.fcntl.LOCK_NB)
+        original_lock = guard._strict_ledger_write_lock
+        try:
+            with mock.patch.object(
+                guard,
+                "_strict_ledger_write_lock",
+                side_effect=lambda: original_lock(timeout_s=0.0),
+            ):
+                with self.assertRaises(guard.LedgerError):
+                    guard.save_ledger(ledger_v1())
+            self.assertFalse(guard._LEDGER_PATH.exists())
+            self.assertFalse(guard._PROTECTED_WATERMARK_PATH.exists())
+        finally:
+            guard.fcntl.flock(fd, guard.fcntl.LOCK_UN)
+            guard.os.close(fd)
+
+    def test_drift_and_launch_transactions_hold_commit_lock_before_read(self):
+        observed = []
+
+        def drift_inner(_positions):
+            observed.append(("drift", guard._LEDGER_LOCK_STATE.depth))
+            return {"drift": "ok"}
+
+        def launch_inner(_positions, *, force=False):
+            observed.append(("launch", guard._LEDGER_LOCK_STATE.depth, force))
+            return {"launch": "ok"}
+
+        with mock.patch.object(
+            guard, "_reconcile_drift_locked", side_effect=drift_inner
+        ), mock.patch.object(
+            guard, "_launch_init_locked", side_effect=launch_inner
+        ):
+            self.assertEqual(guard.reconcile_drift([]), {"drift": "ok"})
+            self.assertEqual(guard.launch_init([], force=True), {"launch": "ok"})
+        self.assertEqual(observed, [("drift", 1), ("launch", 1, True)])
 
     def test_v2_load_returns_fresh_v1_compatibility_and_canonical_view(self):
         guard._LEDGER_PATH.write_bytes(dumps(ledger_v1(), target=2))

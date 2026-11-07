@@ -788,6 +788,11 @@ def test_false_f6_flag_bypasses_symbol_lock_and_reducer_journal(monkeypatch):
 def test_false_f6_flag_sell_creates_no_pending_journal_or_lock(monkeypatch):
     import config
     monkeypatch.setattr(config, "FOREVER6_ENABLED", False)
+    # This regression isolates the F6 reservation decorator's dark-path
+    # behavior. Ownership enforcement has its own independent market-sell
+    # coverage and must be disabled here so existing protected ledger state
+    # cannot turn this into an ownership test.
+    monkeypatch.setattr(config, "OWNERSHIP_GUARD_ENFORCE", False)
     accepted = SimpleNamespace(id="sell-1")
     calls = []
     monkeypatch.setattr(

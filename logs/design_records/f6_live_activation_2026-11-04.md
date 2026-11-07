@@ -1,21 +1,47 @@
 # Forever-6 live activation — 2026-11-04
 
 **Author:** OpenAI Codex
-**Status:** rejected/superseded by `F6-GUARD-1104`; simultaneous activation will not ship
+**Status:** revised final activation design prepared after exact-diff review; exact owner approval required
 Approval-ID: F6-LIVE-1104
-Owner numbers:
-Covers: config.py, logs/design_records/f6_live_activation_2026-11-04.md,
-  handoff.md, logs/tb_audit_log.md
+Owner numbers: config.py FOREVER6_ENABLED=1; config.py OWNERSHIP_GUARD_ENFORCE=1
+Covers: config.py, execution/broker.py, execution/ownership_guard.py,
+  research/f6_full_path_simulation.py, research/f6_guard_activation_probe.py,
+  tests/test_broker_limit_sell_ownership.py, tests/test_broker_stop_replace.py,
+  tests/test_broker_tier_safety.py, tests/test_day_tier_bracket_exit.py,
+  tests/test_day_tier_cohold_bracket.py, tests/test_f6_cycle.py,
+  tests/test_f6_pending_buy_reservation.py,
+  tests/test_f6_full_path_simulation.py, tests/test_f6_guard_activation_probe.py,
+  tests/test_ownership_ledger.py, tests/test_ownership_ledger_v2.py,
+  tests/test_tier_transfers.py, logs/f6_full_path_simulation_latest.json,
+  logs/design_records/f6_live_activation_2026-11-04.md, handoff.md,
+  logs/tb_audit_log.md
 
 ## Decision requested
 
-Activate the already-built Forever-6 tier on the paper account by changing exactly two existing
-configuration booleans in one risk-path diff:
+Activate the already-built Forever-6 tier on the paper account by changing one existing
+configuration boolean, while closing three exact-diff safety findings that become launch-blocking
+once F6 can own protected shares:
 
 1. `config.FOREVER6_ENABLED = True` so the shipped after-close F6 route may run.
-2. `config.OWNERSHIP_GUARD_ENFORCE = True` so F6 and QHM protected shares are ring-fenced at every
-   reducing-order boundary. `config.py:1107-1111` already refuses startup if F6 is enabled without
-   this guard, so a one-flag activation is invalid and will not ship.
+2. Reject non-finite, fractional, negative or otherwise malformed ownership quantities at the
+   reducing-order boundary instead of allowing IEEE `NaN` comparisons to bypass a floor.
+3. Replace the one-generation backup as proof of historical protection with an atomic, fsynced,
+   cross-process monotonic watermark, and put every ledger writer in the same strict commit-domain
+   lock as that watermark. A stale backup can predate a 0→QHM/F6 assignment; if the
+   current ledger is corrupt, only a readable watermark that proves a symbol was never protected
+   may use the reviewed fail-open exit keystone. Missing/corrupt proof, lock setup failure or lock
+   timeout fails closed; no writer may proceed with last-writer-wins ownership state.
+4. Validate the exact raw limit-order quantity as a finite positive whole share before both the
+   ownership check and Alpaca request construction. Fractional, Boolean and non-finite quantities
+   are refused rather than truncated for the guard and then submitted at their original size.
+5. Route every market SELL/short request through the same ownership floor before broker submission.
+   A stale in-memory strategy position set must not let a new short liquidate F6 or QHM shares;
+   unreadable live position evidence is delegated to the fail-closed ownership proof rather than
+   inferred from the requested order.
+
+`config.OWNERSHIP_GUARD_ENFORCE=True` shipped separately in PR #849 (`F6-GUARD-1104`) and is live
+on OCI. It continues to ring-fence F6 and QHM protected shares at every reducing-order boundary.
+`config.py:1107-1111` still refuses startup if that prerequisite is ever disabled while F6 is on.
 
 No trigger, universe, sizing, cash, stop, trim, kill-switch, product or timing value changes. F6
 remains paper-only, cash-only, common-stock-only and crash-only. It may consider a starter only after
@@ -55,24 +81,45 @@ gate and heightened-VIX gate pass. It never buys an ordinary single-stock dip.
 
 ## Current-state measurements
 
-- OCI is on `152de54`; `mtf-bot`, `mtf-writer` and `mtf-http` are all active; live
-  `FOREVER6_ENABLED=False` and `OWNERSHIP_GUARD_ENFORCE=False` were read on 2026-11-04 PT.
-- The committed source-bound artifact reports `overall=PASS`, 20/20 scenarios PASS and
-  `production_flag_remained_disabled=true` (`logs/f6_full_path_simulation_latest.json`).
+- OCI was read at `4ef44e2` on 2026-11-06; live `FOREVER6_ENABLED=False` and
+  `OWNERSHIP_GUARD_ENFORCE=True` remain binding. The tracked activation flag is not live.
+- The committed source-bound artifact reports `overall=PASS` and 20/20 scenarios PASS
+  (`logs/f6_full_path_simulation_latest.json`). The activation candidate updates its state proof
+  from “remained disabled” to the stronger “starting production flag was restored exactly,” so the
+  same hermetic proof remains valid after the flag is intentionally enabled.
 - The final replay covers 1,715 completed sessions: 25 qualifying crash observations, 20 affordable
   reference plans, A/B/C counts 7/12/6, and zero fires in 2021, 2023 and 2026
   (`logs/design_records/f6_crash_trigger_restoration_2026-10-28.md:247-254`).
-- A read-only OCI ownership probe on 2026-11-04 PT returned zero source errors and zero residual
-  shares for all six live positions: BRK.B 2 Swing, GOOGL 1 QHM, MSFT 1 Swing, NVDA 2 QHM, V 1
-  Swing and WMT 5 Swing.
-- The same read-only guard probe approved full QHM-owned exits for GOOGL 1 and NVDA 2, approved full
-  non-protected Swing exits for BRK.B/MSFT/V/WMT, and rejected a foreign one-share intraday sell of
-  both GOOGL and NVDA. No order was submitted, changed or cancelled.
+- The shipped guard artifact is 11/11 PASS with zero live mutations
+  (`logs/evidence/f6_guard_activation_2026-11-05.json`). The revised exact candidate adds three
+  stale-backup stop, partial-close and full-close refusals; its focused probe is 14/14 PASS and
+  remains broker-hermetic.
+- PR #849 deployed the guard prerequisite at `6e9a744`; startup completed GTC, position, pending-order
+  and QHM reconciliation with zero reconcile errors. Its first full guard-on RTH cycle completed at
+  19:26:12 UTC in 172 seconds with no ownership-guard or control-fault error.
+- The activation candidate's refreshed source-bound proof is 20/20 PASS, broker-hermetic and
+  `production_flag_initial=true`, `production_flag_restored=true`; enabling the tracked flag no
+  longer invalidates the proof that the simulator restores production state exactly.
+- The exact Nov. 5 completed-bar replay classified Tier B: SPY close -4.409%, session low -4.447%,
+  VIX 28.18 or 1.597x its strictly-prior 20-session average, and VIX/VIX3M 1.103. The live account
+  snapshot on Nov. 6 premarket showed cash -$338.31 against the $200 F6 reserve, so the production
+  cash-only planner would have bought $0 despite a valid crash trigger. This proves trigger truth
+  and capital availability are separate gates; activation does not authorize margin.
+- OCI Python 3.10 focused validation is 337 passed plus 20 subtests. The exact staged bytes passed
+  3,302 full-suite tests plus 234 subtests with the one known Day-promotion fixture failure; that same failure is the
+  clean-main baseline and is outside this Covers list. Python compile, Ruff E/W/F/B, and mypy
+  `--warn-unreachable` also pass on OCI Python 3.10.
 
 ## Exact activation and rollback
 
-The reviewed implementation diff changes only the two booleans above plus this durable record,
-handoff and audit log. Before merge it must pass config validation, the F6 focused suites, the
+The reviewed implementation diff changes the F6 master boolean, hardens the ownership boundary,
+adapts the source-bound simulator and its tests to prove exact restoration for either boolean state,
+and updates durable records. It does not globally hide F6 from tests. Four named legacy Day/broker
+unit modules that do not construct F6 journals locally disable the flag for their own module only;
+every enabled-path F6 test runs with the production flag on, including success and injected-failure
+restoration.
+It does not change entry policy, crash thresholds, sizing, symbols, order semantics or exits. Before
+merge it must pass config validation, the F6 focused suites, the
 source-bound artifact check where applicable, cold-second, adversarial, execution-board,
 masked-loss, Groq and Google AI Studio review on the exact bytes. Tests remain broker-hermetic.
 
@@ -105,9 +152,9 @@ NVDA sells; no broker call followed.
 ## Required questions
 
 Q1. Yes — activation lets the fully tested crash buyer collect real paper fills toward $25K; the 20/20 production-path proof and 25 measured events justify activation rather than continued inactivity.
-Q2. Yes — it changes F6 from zero trades to trades only on the measured joint SPY/VIX crash events; no Day, Swing or QHM entry count changes (`strategy/run_cycle.py:991-1001`).
-Q3. Yes — the capability exists to buy dislocations; the simplest valid launch is the two required booleans because `config.py:1107-1111` rejects F6 without ownership enforcement.
-Q4. It activates, rather than duplicates, the shipped records listed under Prior work; open PRs #834/#804/#727 do not touch F6 execution or `config.py`.
+Q2. Yes — it changes F6 from zero trades to eligible trades only on measured joint SPY/VIX crash events; Nov. 5 qualified but produced a $0 cash-only budget because account cash was -$338.31, and no Day, Swing or QHM entry count changes (`strategy/run_cycle.py:991-1001`).
+Q3. Yes — the capability exists to buy dislocations; the simplest valid launch is the one remaining master flag because PR #849 already made the ownership prerequisite live and `config.py:1107-1111` rejects F6 if it regresses.
+Q4. It activates, rather than duplicates, the shipped records listed under Prior work; PR #849 owns the guard prerequisite, and open PRs #834/#804/#727 do not touch F6 execution or `config.py`.
 Q5. No new static number is added; activation exposes the already-reviewed dynamic completed-data classifier and its owner-approved historical crash map (`f6_crash_trigger_restoration_2026-10-28.md:65-104`).
 Q6. The remaining static assumption is the fixed F6 stock universe (`config.py:421-422`); the forward pass is owner-approved universe replacement only after per-name thesis/quality evidence, not part of activation.
 Q7. It connects the crash classifier, allocator, ownership ledger, broker admission, shared-symbol stops, kill attribution, Slack fills and post-live audit through the existing `run_f6_after_close` route (`execution/f6_cycle.py:47-108`).
@@ -116,23 +163,23 @@ Q9. Front-loaded proof covers 20 production-path scenarios plus 1,715 completed 
 Q10. Yes — the execution path has passed while activation remains the sole reason it cannot collect paper evidence; waiting for a perfect live sample would prevent the sample from existing.
 Q11. Yes — this changes trade frequency/exposure from zero and activates a global sell-floor chokepoint, so execution-board and masked-loss review are mandatory.
 Q12. `paper=True` remains locked at `execution/broker.py:182-185`; trading-tier stops and the 7% brake remain; F6 is the documented never-sell tier (`CLAUDE.md:124`) and the enforced ownership floor prevents another tier from selling it.
-Q13. Missing/stale/corrupt ownership, cash, trigger, quote, catalyst, order or broker evidence fails closed for F6/protected shares; non-protected exits retain the reviewed fail-open keystone (`execution/ownership_guard.py:696-793`).
+Q13. Missing/stale/corrupt ownership, cash, trigger, quote, catalyst, order or broker evidence fails closed for F6/protected shares; every tier and raw order quantity is validated without truncation, every read-modify-write transaction shares a strict commit-domain lock, and a valid monotonic watermark is required before an unreadable current ledger may classify a symbol as never protected, preserving the reviewed non-protected fail-open keystone without trusting a stale backup.
 Q14. No shadow mode is introduced; once enabled, the real after-close route acts when all live gates pass.
 Q15. Yes — the route logs `change=f6-sim-1023`, trigger evidence stores both price/VIX legs and digests, and order/fill ownership uses tier-tagged durable journals.
 Q16. `change=f6-sim-1023 after-close shared route active` proves invocation; the existing expectation record requires it after activation and the first qualifying event gets a fill/ledger replay.
 Q17. The 20-scenario proof runs the production route, allocator and broker boundary; the read-only OCI probe verified the current broker/ledger ownership contract before activation.
-Q18. No anomaly is dismissed; activation is blocked until the previously dormant global guard is explicitly reviewed with its current live-book outcomes.
-Q19. Yes — activation changes entry routing and global exit bounding; Rafael must name `F6-LIVE-1104` before commit.
+Q18. No anomaly is dismissed; PR #849 separated the dormant global guard, proved it read-only against the live book, and activated it before this one-flag launch.
+Q19. Yes — activation changes entry routing and the exact final Covers list now includes the ownership-boundary hardening; Rafael must name `F6-LIVE-1104` after receiving this revised package and before commit.
 Q20. Neutral cold/adversarial prompts must test both false-blocked exits and protected-share leakage; exact bytes go to board, Groq and GAI before ship.
 Q21. Every activation test uses mocks or the hermetic transport-refusing F6 simulator; the only OCI probe is read-only and submitted no order.
-Q22. Yes — the new live control was called directly in read-only mode against the current broker and ledger; own/non-protected exits passed and foreign protected sells failed.
-Q23. Yes — the committed connected artifact is 20/20 PASS; it exercises the imported enabled route in an isolated guarded child while production stays off.
+Q22. Yes — the guard control was called directly in read-only mode against the current broker and ledger, then shipped separately in PR #849; its post-deploy cycle must complete cleanly before this diff is committed.
+Q23. Yes — the source-bound candidate artifact is 20/20 PASS; it exercises the imported enabled route in an isolated guarded child while live production stays off. It must be regenerated once more on final staged bytes after all reviews.
 Q24. N/A — activation makes no absence, tradability or ETF-availability claim; the existing order boundary classifies each candidate and rejects uncertain/leveraged/inverse instruments.
 Q25. Yes — crash frequency/depth claims come from the 1,715-session replay, not memory.
 Q26. Existing sources remain T1 Alpaca for SPY/broker truth and the approved T4 yfinance exception for VIX/VIX3M; missing or misaligned data sends no order.
 Q27. The flag lives in `config.py`; decisions use fsynced JSON/JSONL trigger, allocator, reservation, ownership and post-live records with their existing atomic-write contracts.
 Q28. `strategy/run_cycle.py:991-1001` invokes `execution/f6_cycle.py` after close; trims run first, then the crash-gated starter, then broker admission and canonical reconciliation.
-Q29. This is the highest-value remaining F6 item because every prerequisite is deployed and the disabled flag is the only reason the tier cannot collect crash-event paper evidence.
+Q29. This is the highest-value remaining F6 item because every prerequisite, including the ownership guard, is deployed and the disabled flag is the only reason the tier cannot collect crash-event paper evidence.
 Q30. A professional launch requires independent execution controls, source-bound simulation, reconciled ownership, idempotent order lifecycle and live rollback; all are present, while the global guard's false-block risk is the chief residual risk.
 Q31. Activation itself has no fitted return model; the classifier disclosed all 25 events and its 20 affordable plans, while the launch size remains bounded because no statistically precise expectancy is claimed.
 Q32. The replay uses completed, date-aligned SPY/VIX/VIX3M observations and strictly prior averages; it does not select stocks based on future membership (`f6_crash_trigger_restoration_2026-10-28.md:65-104`).
@@ -143,7 +190,7 @@ Q36. The eight-name universe is highly liquid relative to a $25K account, and ea
 Q37. Twenty affordable historical reference plans are insufficient for a tight expectancy interval, so activation uses bounded paper size and a predefined first-event audit rather than claiming significance.
 Q38. Non-working means an enabled qualifying event fails to invoke, submits outside its tier/cash bound, violates ownership, or materially diverges from replay; the owner then disables F6 entries while leaving ownership enforcement on for protected claims and replaces the failing component.
 Q39. Size follows the pre-existing crash-depth cash ladder rather than win-rate Kelly because no reliable F6 win-rate estimate exists; fresh settled cash is recomputed at the order boundary.
-Q40. It owns the outcome “F6 can buy only during a verified crash without selling another tier”; runtime tag, zero-order ordinary-day check and broker/ledger transcript are machine-evaluated result checks.
+Q40. It owns the outcome “F6 can buy only during a verified crash with positive segregated cash, without selling another tier”; runtime tag, zero-order ordinary-day/insufficient-cash checks, component-quantity, commit-lock and monotonic-floor regressions, plus broker/ledger transcript, are machine-evaluated result checks.
 Q41. The best expert would run a reconciled live-book preflight, activate with exact rollback, and audit the first event end to end; this design requires all three.
 Q42. It uses raw completed bars, live broker positions/orders/fills, canonical ledger claims and durable decision rows rather than dashboard summaries.
 Q43. The professional method is a controlled production activation after source-bound simulation, independent risk review, reconciled ownership and deterministic rollback; this design follows it.
