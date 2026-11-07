@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import unittest
 import json
+import sys
+import unittest
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -113,12 +114,83 @@ class WeeklyPostmortemTruth(unittest.TestCase):
         self.assertEqual(trades[0]["week_realized_pnl"], -1.0)
         self.assertEqual(accounting["weekly_realized"], -1.0)
 
-    def test_unknown_tier_fails_closed(self):
-        with self.assertRaisesRegex(ValueError, "tier attribution is incomplete"):
-            wtp._week_ledger_view(
-                [self._rt(tier="unattributed")],
-                date(2026, 10, 5), date(2026, 10, 9),
+    def test_unattributed_tier_is_reported_in_its_own_bucket(self):
+        # The 2026-11-07 case: two manual GE buys from the Alpaca app (untagged
+        # orders that ARE joined to order history) closed this week next to a
+        # bot Swing lifecycle.
+        rows = [
+            self._rt(tier="unattributed", entry_id="459dab69", pnl=14.51, exit_id="M1"),
+            self._rt(tier="unattributed", entry_id="189b8e42", pnl=43.76, exit_id="M2"),
+            self._rt(tier="intraday", entry_id="IN-1", pnl=-2.0, exit_id="SX"),
+        ]
+        for row in rows[:2]:
+            row["symbol"] = "GE"
+        trades, accounting = wtp._week_ledger_view(
+            rows, date(2026, 10, 5), date(2026, 10, 9)
+        )
+        by_tier = accounting["weekly_by_tier"]
+        self.assertEqual(by_tier["unattributed"], 58.27)
+        self.assertEqual(by_tier["swing"], -2.0)
+        for tier in ("day", "qhm", "forever_6"):
+            self.assertEqual(by_tier[tier], 0.0)
+        self.assertEqual(accounting["weekly_realized"], 56.27)
+        self.assertEqual(round(sum(by_tier.values()), 2), accounting["weekly_realized"])
+        self.assertEqual(accounting["manual"],
+                         {"pnl": 58.27, "count": 2, "symbols": ["GE"]})
+        self.assertEqual(sorted(t["tier"] for t in trades),
+                         ["swing", "unattributed", "unattributed"])
+
+        # Table, stats and Slack: Manual is its own row and never scores the bot's W/L.
+        with mock.patch.object(wtp, "_load_postmortem", return_value={}), \
+             mock.patch.object(wtp, "_had_earnings_during_hold", return_value=False):
+            table, slack, stats = wtp._build_wtp_table(trades, {}, {}, {}, accounting)
+        self.assertIn("| Manual | GE |", table)
+        self.assertEqual((stats["count"], stats["winners"], stats["losers"]), (1, 0, 1))
+        self.assertEqual(stats["completed_lifecycle_pnl"], -2.0)
+        self.assertEqual(stats["total_pnl"], 56.27)
+        self.assertEqual(stats["manual"]["completed_pnl"], 58.27)
+        sent = []
+        with mock.patch.object(wtp, "SLACK_WEBHOOK", "test"), \
+             mock.patch.object(wtp, "_slack_raw", side_effect=sent.append):
+            wtp._post_slack(slack, stats, Path("wtp_2026-10-09.md"),
+                            "2026-10-05 → 2026-10-09")
+        self.assertIn("Manual / unattributed `+58.27` · 2 lifecycle(s) · GE", sent[0])
+        self.assertIn("Swing `-2.00`", sent[0])
+        prompt = wtp._build_gemini_prompt(
+            "2026-10-05 → 2026-10-09", table, trades, stats
+        )
+        self.assertIn("includes Manual +58.27 over 2 lifecycle(s)", prompt)
+
+        # Tier goals never count the manual bucket toward any tier.
+        goals = {
+            g["tier"]: g for g in wtp._tier_goals(
+                rows, date(2026, 10, 5), date(2026, 10, 9), rounds=50
             )
+        }
+        self.assertEqual(set(goals), {"day", "swing", "qhm", "forever_6"})
+        self.assertEqual(goals["swing"]["week_n"], 1)
+        self.assertEqual(goals["day"]["week_n"], 0)
+
+    def test_other_unknown_tier_fails_closed(self):
+        for tier in ("bogus", "Unattributed", " unattributed", None):
+            with self.subTest(tier=tier):
+                with self.assertRaisesRegex(
+                    ValueError, "tier attribution is incomplete"
+                ):
+                    wtp._week_ledger_view(
+                        [self._rt(tier=tier)],
+                        date(2026, 10, 5), date(2026, 10, 9),
+                    )
+
+    def test_slack_omits_empty_manual_bucket(self):
+        stats = {"total_pnl": 4.0, "winners": 1, "losers": 0, "unmatched": 0,
+                 "earnings_cnt": 0, "positive_friday_diagnostics": 1,
+                 "manual": {"pnl": 0.0, "count": 0, "symbols": []}}
+        sent = []
+        with mock.patch.object(wtp, "SLACK_WEBHOOK", "test"), \
+             mock.patch.object(wtp, "_slack_raw", side_effect=sent.append):
+            wtp._post_slack("", stats, Path("wtp.md"), "w")
+        self.assertNotIn("Manual", sent[0])
 
     def test_related_prior_leg_with_conflicting_tier_fails_closed(self):
         rows = [
@@ -328,6 +400,28 @@ class WeeklyPostmortemTruth(unittest.TestCase):
                 )
         self.assertEqual(rows[0]["exit_reason"], "final-stop")
         self.assertEqual(rows[0]["score"], 11)
+
+
+class ManualBeliefFilter(unittest.TestCase):
+    def test_manual_rows_never_reach_belief_tests(self):
+        seen = {}
+
+        def _eval(rts, entries, spy):
+            seen["tiers"] = sorted({r.get("tier") for r in rts})
+            return []
+        fake = type(sys)("belief_tests")
+        fake.evaluate = _eval
+        fake.append_log = lambda *a, **k: None
+        rows = [
+            {"tier": "unattributed", "entry_time": "2026-11-02T15:00Z", "symbol": "GE"},
+            {"tier": "daytrade", "entry_time": "2026-11-03T15:00Z", "symbol": "NVDA"},
+        ]
+        missing = Path("/nonexistent/trade_events.jsonl")
+        with mock.patch.dict(sys.modules, {"belief_tests": fake}), \
+                mock.patch.object(wtp, "TRADE_EVENTS", missing), \
+                mock.patch.object(wtp, "_alpaca_get", return_value={}):
+            wtp._belief_results(rows, date(2026, 11, 6))
+        self.assertEqual(seen.get("tiers"), ["daytrade"])
 
 
 if __name__ == "__main__":

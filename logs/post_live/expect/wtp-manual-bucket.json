@@ -1,0 +1,19 @@
+{
+  "change": "wtp-manual-bucket",
+  "tier": 1,
+  "paths": [
+    "weekly_postmortem.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/wtp_cron.log",
+      "pattern": "change=wtp-manual-bucket Manual bucket:"
+    }
+  ],
+  "expected_rate": "once on every weekly post-mortem run (Saturday or Sunday morning)",
+  "window_sessions": 2,
+  "window_reason": "The report runs only on weekend mornings; nine calendar days from the ship date always include one full weekend.",
+  "window_days": 9,
+  "reversal": "the weekly report fails on an unattributed (manual) lifecycle again, the five buckets do not sum to weekly realized cash, or a manual lifecycle counts in a bot tier's W/L, goals or belief tests",
+  "verification": "tests/test_weekly_postmortem_truth.py"
+}

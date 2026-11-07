@@ -29,7 +29,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from gai_client import GAI_MODEL_LADDER  # single source of truth for the live Gemini model ladder
-from tier_names import TIER_IDS, TierId, canonical_tier, tier_label
+from tier_names import TIER_IDS, canonical_tier, tier_label
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -57,7 +57,31 @@ TRADE_EVENTS    = LOGS_DIR / "trade_events.jsonl"
 POSTMORTEM_DIR  = BASE_DIR / "data" / "state" / "postmortem"
 EARNINGS_CACHE  = BASE_DIR / "data" / "cache" / "earnings_week.json"
 
-_TIER_ZERO = {tier: 0.0 for tier in TIER_IDS}
+# An order joined to broker order history but carrying no tier tag (e.g. the owner's manual trade
+# placed from the Alpaca app) is labelled exactly "unattributed" by reporting/report_figures.py. It
+# is reported in its own bucket next to the four tiers, never guessed into one of them and never
+# counted toward any tier's goal. Any OTHER unknown tier string still fails closed.
+MANUAL_BUCKET = "unattributed"
+MANUAL_LABEL = "Manual / unattributed"
+MANUAL_SHORT = "Manual"
+BUCKET_IDS: tuple[str, ...] = (*TIER_IDS, MANUAL_BUCKET)
+
+_TIER_ZERO = {bucket: 0.0 for bucket in BUCKET_IDS}
+
+
+def _bucket_of(raw: object) -> str:
+    """The reporting bucket for a lifecycle's tier: a canonical tier ID, or MANUAL_BUCKET for a value that is
+    exactly "unattributed". Raises ValueError (via canonical_tier) for anything else."""
+    if raw == MANUAL_BUCKET:
+        return MANUAL_BUCKET
+    return canonical_tier(raw)
+
+
+def _bucket_label(bucket: object, short: bool = False) -> str:
+    """Display name for a bucket; the manual bucket gets its own label, tiers use tier_label."""
+    if bucket == MANUAL_BUCKET:
+        return MANUAL_SHORT if short else MANUAL_LABEL
+    return tier_label(bucket)
 
 try:
     import certifi as _certifi
@@ -452,10 +476,20 @@ def _week_ledger_view(round_trips: list[dict], monday: date, friday: date) -> tu
             raise ValueError(f"weekly exit date/time disagree for {symbol}")
         return symbol, direction, entry_id, entry_time, exit_time, exit_day
 
-    def _validated(row: dict) -> tuple[str, str, str, datetime, TierId, int, float]:
+    def _ownership_conflict(entry_id: str, have: tuple[str, str, str], got: tuple[str, str, str]) -> ValueError:
+        """One entry order seen with two owners. A tier disagreement (including manual vs a tier) is incomplete
+        tier attribution; a symbol/direction disagreement is conflicting ownership."""
+        if have[2] != got[2]:
+            return ValueError(
+                f"weekly tier attribution is incomplete for {got[0]}: entry {entry_id} has conflicting "
+                f"ownership ({have[2]!r} vs {got[2]!r})"
+            )
+        return ValueError(f"weekly entry identity has conflicting ownership: {entry_id}")
+
+    def _validated(row: dict) -> tuple[str, str, str, datetime, str, int, float]:
         symbol, direction, entry_id, entry_time, _exit_time, _exit_day = _identity_time(row)
         try:
-            tier = canonical_tier(row.get("tier"))
+            tier = _bucket_of(row.get("tier"))
         except ValueError as exc:
             raise ValueError(
                 f"weekly tier attribution is incomplete for {symbol}: {row.get('tier')!r}"
@@ -485,7 +519,7 @@ def _week_ledger_view(round_trips: list[dict], monday: date, friday: date) -> tu
         symbol, direction, entry_id, _entry_time, tier, _qty, _pnl = _validated(row)
         signature = (symbol, direction, tier)
         if entry_id in expected_signature and expected_signature[entry_id] != signature:
-            raise ValueError(f"weekly entry identity has conflicting ownership: {entry_id}")
+            raise _ownership_conflict(entry_id, expected_signature[entry_id], signature)
         expected_signature[entry_id] = signature
         relevant_ids.add(entry_id)
 
@@ -495,7 +529,7 @@ def _week_ledger_view(round_trips: list[dict], monday: date, friday: date) -> tu
             continue
         symbol, direction, entry_id, entry_time, tier, _qty, pnl = _validated(row)
         if expected_signature[entry_id] != (symbol, direction, tier):
-            raise ValueError(f"weekly entry identity has conflicting ownership: {entry_id}")
+            raise _ownership_conflict(entry_id, expected_signature[entry_id], (symbol, direction, tier))
         item = dict(row)
         item["tier"] = tier
         item["_entry_dt"] = entry_time
@@ -511,6 +545,8 @@ def _week_ledger_view(round_trips: list[dict], monday: date, friday: date) -> tu
     partial_open_lifecycles = 0
     partial_open_weekly_pnl = 0.0
     partial_open_by_tier = dict(_TIER_ZERO)
+    manual_lifecycles = 0
+    manual_symbols: set[str] = set()
     for (_sym, _identity, _direction, tier), rows in groups.items():
         rows.sort(key=lambda row: row["_exit_dt"])
         weekly_rows = [
@@ -519,6 +555,9 @@ def _week_ledger_view(round_trips: list[dict], monday: date, friday: date) -> tu
         ]
         if not weekly_rows:
             continue
+        if tier == MANUAL_BUCKET:
+            manual_lifecycles += 1
+            manual_symbols.add(_sym)
         complete = all(row["lifecycle_complete"] for row in rows)
         if not complete:
             value = sum(float(row.get("pnl") or 0.0) for row in weekly_rows)
@@ -566,8 +605,10 @@ def _week_ledger_view(round_trips: list[dict], monday: date, friday: date) -> tu
         trades.append(trade)
 
     trades.sort(key=lambda trade: str(trade.get("exit_time") or ""))
+    # weekly_by_tier / partial_open_by_tier carry the four tiers PLUS the manual bucket; the
+    # four tiers and the manual bucket together reconcile to the weekly total.
     _weekly_by_tier_rounded = {
-        tier: round(weekly_by_tier[tier], 2) for tier in TIER_IDS
+        bucket: round(weekly_by_tier[bucket], 2) for bucket in BUCKET_IDS
     }
     accounting = {
         "weekly_realized": round(weekly_realized, 2),
@@ -575,10 +616,15 @@ def _week_ledger_view(round_trips: list[dict], monday: date, friday: date) -> tu
         "partial_open_lifecycles": partial_open_lifecycles,
         "partial_open_weekly_pnl": round(partial_open_weekly_pnl, 2),
         "partial_open_by_tier": {
-            tier: round(partial_open_by_tier[tier], 2) for tier in TIER_IDS
+            bucket: round(partial_open_by_tier[bucket], 2) for bucket in BUCKET_IDS
+        },
+        "manual": {
+            "pnl": _weekly_by_tier_rounded[MANUAL_BUCKET],
+            "count": manual_lifecycles,
+            "symbols": sorted(manual_symbols),
         },
     }
-    _tier_total = sum(_weekly_by_tier_rounded[tier] for tier in TIER_IDS)
+    _tier_total = sum(_weekly_by_tier_rounded[bucket] for bucket in BUCKET_IDS)
     if round(_tier_total, 2) != accounting["weekly_realized"]:
         raise ValueError("weekly tier split does not reconcile to weekly realized P&L")
     return trades, accounting
@@ -824,6 +870,7 @@ def _build_wtp_table(
     full_rows  = []
     slack_rows: list[tuple] = []    # (pnl_sort_key, monospace row) — sorted worst→best for the Slack post
     total_pnl  = 0.0
+    manual_completed_pnl = 0.0
     positive_friday_diagnostics = 0
 
     for t in trades:
@@ -835,8 +882,8 @@ def _build_wtp_table(
         score  = t.get("score", "?")
         mri    = t.get("mri_level", "?")
         size   = t.get("size", 1)
-        tier   = canonical_tier(t.get("tier", "swing"))
-        tier_s = tier_label(tier)
+        tier   = _bucket_of(t.get("tier", "swing"))
+        tier_s = _bucket_label(tier, short=True)
 
         pm     = _load_postmortem(sym, t["exit_date"])
         tqi    = pm.get("tqi_score", "?")
@@ -864,6 +911,8 @@ def _build_wtp_table(
 
         if pnl is not None:
             total_pnl += pnl
+            if tier == MANUAL_BUCKET:
+                manual_completed_pnl += pnl
         t.update({
             "_stage": stage, "_wkly": wkly, "_delta_s": delta_s,
             "_earn": earn, "_tqi": tqi, "_hold": hold_s, "_r": r_s,
@@ -884,7 +933,7 @@ def _build_wtp_table(
         _rsn = rsn_s or "—"
         _sk  = pnl if pnl is not None else float("inf")   # unmatched (P&L '?') sort last
         slack_rows.append(
-            (_sk, f"{tier_s:<5} {sym:<5} {pnl_s:>8}  {_rsn:<12} "
+            (_sk, f"{tier_s:<6} {sym:<5} {pnl_s:>8}  {_rsn:<12} "
                   f"{stage:<8} (Fri Δ/sh {delta_s})")
         )
 
@@ -892,12 +941,24 @@ def _build_wtp_table(
     _weekly_realized = _accounting.get("weekly_realized")
     if _weekly_realized is None:
         _weekly_realized = round(total_pnl, 2)
+    # Completed-lifecycle count, W/L and lifecycle P&L describe the bot's four tiers only; the manual
+    # bucket (untagged orders placed outside the bot) is reported separately and never scores the bot.
+    bot_trades = [t for t in trades if t.get("tier") != MANUAL_BUCKET]
+    manual_trades = [t for t in trades if t.get("tier") == MANUAL_BUCKET]
+    _manual_acc = _accounting.get("manual") or {}
     stats = {
         "total_pnl":    round(float(_weekly_realized), 2),
-        "completed_lifecycle_pnl": round(total_pnl, 2),
-        "count":        len(trades),
-        "winners":      sum(1 for t in trades if (t.get("pnl") or 0) > 0),
-        "losers":       sum(1 for t in trades if (t.get("pnl") or 0) < 0),
+        "completed_lifecycle_pnl": round(total_pnl - manual_completed_pnl, 2),
+        "count":        len(bot_trades),
+        "winners":      sum(1 for t in bot_trades if (t.get("pnl") or 0) > 0),
+        "losers":       sum(1 for t in bot_trades if (t.get("pnl") or 0) < 0),
+        "manual": {
+            "pnl": round(float(_manual_acc.get("pnl", 0.0)), 2),
+            "count": int(_manual_acc.get("count", len(manual_trades))),
+            "symbols": list(_manual_acc.get("symbols") or sorted({t["symbol"] for t in manual_trades})),
+            "completed": len(manual_trades),
+            "completed_pnl": round(manual_completed_pnl, 2),
+        },
         "earnings_cnt": sum(1 for t in trades if t.get("_earn")),
         "positive_friday_diagnostics": positive_friday_diagnostics,
         # rows whose OPENING fill predates the 90-day lookback → entry/P&L unknown ('?'),
@@ -916,7 +977,7 @@ def _build_wtp_table(
 
 def _build_gemini_prompt(week_str: str, full_table: str, trades: list[dict], stats: dict) -> str:
     details = "\n".join(
-        f"  {tier_label(t.get('tier'))} | {t['symbol']} | {t['direction']} | entry={t.get('entry_price')} "
+        f"  {_bucket_label(t.get('tier'), short=True)} | {t['symbol']} | {t['direction']} | entry={t.get('entry_price')} "
         f"exit={t.get('exit_price')} pnl={t.get('pnl')} size={t.get('size')} | "
         f"reason={t.get('exit_reason','')} | stage={t.get('_stage','')} | "
         f"earnings={t.get('_earn',False)} | mri={t.get('mri_level','')} | "
@@ -925,11 +986,15 @@ def _build_gemini_prompt(week_str: str, full_table: str, trades: list[dict], sta
         for t in trades
     )
     pnl_sign = "+" if stats["total_pnl"] >= 0 else ""
+    _man = stats.get("manual") or {}
+    manual_s = f"{float(_man.get('pnl', 0.0)):+.2f} over {int(_man.get('count', 0))} lifecycle(s)"
     return f"""You are an adversarial performance auditor for a four-tier paper-trading
 algorithmic bot running on Alpaca Markets. The tiers are Day, Swing, QHM, and F6.
+Rows labelled Manual are the owner's untagged orders placed outside the bot: report them, but never
+attribute them to a tier or use them to judge the bot's signals or execution.
 
 Week reviewed: {week_str}
-Weekly realized cash P&L: {pnl_sign}${stats['total_pnl']} | Completed lifecycles: {stats['count']} |
+Weekly realized cash P&L: {pnl_sign}${stats['total_pnl']} (includes Manual {manual_s}) | Bot-tier completed lifecycles: {stats['count']} |
 Winners: {stats['winners']} | Losers: {stats['losers']} |
 Earnings-adjacent entries: {stats['earnings_cnt']} |
 Positive Friday per-share diagnostics: {stats['positive_friday_diagnostics']}
@@ -940,7 +1005,7 @@ WEEKLY TRADE POST-MORTEM (WTP) TABLE
 {full_table}
 
 Column definitions:
-  Tier              — entry-order owner: Day, Swing, QHM, or F6
+  Tier              — entry-order owner: Day, Swing, QHM, or F6; Manual = untagged order placed outside the bot
   Entry$ / Exit$   — actual fill prices from Alpaca fills API (authoritative)
   Lifecycle P&L    — dollars across every partial close in the fully closed entry lifecycle
   Exit Reason      — bot's internal exit classification (shortened)
@@ -1050,6 +1115,19 @@ def _slack_raw(text: str) -> None:
         logger.warning(f"Slack post failed: {e}")
 
 
+def _manual_summary(stats: dict, always: bool = False) -> str:
+    """One row for the manual / unattributed bucket: P&L, lifecycle count and symbols. Empty when the bucket
+    has nothing this week, unless `always`."""
+    man = stats.get("manual") or {}
+    count = int(man.get("count") or 0)
+    pnl = float(man.get("pnl") or 0.0)
+    if not always and count == 0 and pnl == 0.0:
+        return ""
+    symbols = ", ".join(man.get("symbols") or []) or "none"
+    return (f"{MANUAL_LABEL} `{pnl:+.2f}` · {count} lifecycle(s) · {symbols} "
+            "(untagged orders, not any tier's trade)")
+
+
 def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
                 fallback_note: str = "") -> None:
     if not SLACK_WEBHOOK:
@@ -1070,6 +1148,9 @@ def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
         _value = float((stats.get("weekly_by_tier") or {}).get(_tier, 0.0))
         _tier_bits.append(f"{tier_label(_tier)} `{_value:+.2f}`")
     _tier_line = " · ".join(_tier_bits)
+    _manual_line = _manual_summary(stats)
+    if _manual_line:
+        _tier_line += f"\n{_manual_line}"
     _partial = ""
     if stats.get("partial_open_lifecycles"):
         _partial = (
@@ -1173,7 +1254,7 @@ def _tier_goals(round_trips: list, monday: date, friday: date, rounds: int = 200
                 if canonical_tier(c.get("tier")) != tier:
                     continue
             except ValueError:
-                continue
+                continue   # the manual / unattributed bucket (and any unknown tier) counts toward no tier's goal
             rows.append((pt_day(c["exit_time"]), float(c["pnl"])))
         week = [p for d, p in rows if d and monday <= d <= friday]
         trail = [p for d, p in rows if d and trail_start <= d < monday]
@@ -1200,6 +1281,9 @@ def _belief_results(round_trips: list, friday: date) -> list:
     """Rule 3: evaluate every live-decision belief on the cumulative history; append to logs/belief_tests.jsonl."""
     sys.path.insert(0, str(BASE_DIR / "scripts"))
     import belief_tests as bt
+    # The owner's manual trades (MANUAL_BUCKET) are never evidence for a bot belief (cold-2nd 2026-11-07): an untagged
+    # bot entry event could otherwise be joined to a manual lifecycle in belief_tests.join_entries.
+    round_trips = [r for r in round_trips if r.get("tier") != MANUAL_BUCKET]
     entries = []
     if TRADE_EVENTS.exists():
         with open(TRADE_EVENTS, encoding="utf-8") as fh:
@@ -1329,6 +1413,11 @@ def main() -> None:
         "weekly realized $%.2f, %d open partial(s).",
         len(trades), accounting["weekly_realized"], accounting["partial_open_lifecycles"],
     )
+    _manual = accounting.get("manual") or {}
+    logger.info(
+        "change=wtp-manual-bucket Manual bucket: $%+.2f across %d lifecycle(s) %s",
+        float(_manual.get("pnl") or 0.0), int(_manual.get("count") or 0), _manual.get("symbols") or [],
+    )
 
     if not trades and not accounting["partial_open_lifecycles"] and not accounting["weekly_realized"]:
         logger.warning(f"No closed trades found for {week_str}.")
@@ -1387,7 +1476,9 @@ def main() -> None:
             f"{tier_label(tier)} `{stats['weekly_by_tier'].get(tier, 0.0):+.2f}`"
             for tier in TIER_IDS
         ),
-        f"- **Completed lifecycles:** {stats['count']} ({stats['winners']}W / {stats['losers']}L); "
+        f"- **{_manual_summary(stats, always=True)}** — in the cash total above, outside the four tiers, "
+        "W/L and tier goals",
+        f"- **Completed lifecycles (bot tiers):** {stats['count']} ({stats['winners']}W / {stats['losers']}L); "
         f"full-lifecycle P&L `{stats['completed_lifecycle_pnl']:+.2f}`",
         f"- **Open partial lifecycles:** {stats['partial_open_lifecycles']}; realized this week "
         f"`{stats['partial_open_weekly_pnl']:+.2f}` (included in cash P&L, excluded from W/L)",
