@@ -38,6 +38,18 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   on rev 3.14 through the full gate (old patch logs/wip/regime_size_1104_slice1_2026-11-05.patch is superseded:
   rebuild, don't apply). POST-LIVE-WEEKLY: build Diff A first.
 
+## ⏩ PARALLEL (2026-11-07, OpenAI Codex signed) — F6 live on paper
+
+- **F6-LIVE-1104 shipped:** PR #867 merged/deployed at `4016c9f`; OCI printed
+  `DEPLOY_OK:4016c9f`, `FOREVER6_ENABLED=True`, `OWNERSHIP_GUARD_ENFORCE=True`, and all three
+  services are active. Startup ledger sync reported zero drift, F6 ownership reconciliation reported
+  zero F6 symbols/no pending F6 orders, and GTC/position/pending/QHM reconciliation completed with
+  zero QHM errors. All seven broker positions have live GTC stop coverage, including BRK.B 2 shares
+  at `$561.85`. The scheduled after-close F6 evaluation has not yet run on the deployed process, so
+  activation is **live but route-unexercised**; audit its first eligible after-close cycle and first
+  qualifying crash event end to end. F6 remains paper-only, crash-only, settled-cash-only,
+  common-stock-only, and cannot borrow or reallocate another tier's shares.
+
 ## ⏩ EARLIER (2026-11-06 evening) — VIX design rev 3.8 + weekly post-live review rev 2
 
 - **REGIME-SIZE-1104 rev 3.8** (`logs/design_records/regime_size_2026-11-04.md`): board (McKinney, Katsuyama, Taleb)
