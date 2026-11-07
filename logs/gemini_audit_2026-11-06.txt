@@ -1,0 +1,132 @@
+Nightly Gemini Audit — 2026-11-06
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+*(The bot is operational and executing trades correctly, but logging shows persistent QHM overnight equity check failures due to an unpriced QQQM order, a 17+ second ledger sync delay, and pre-heal FIFO trade matching warnings for day-trade exits.)*
+
+---
+
+### LOG ANOMALIES
+
+- **QHM Overnight Cap Check Blocked (Fail-Closed)**: 
+  - *Timestamp*: `2026-11-06 20:47:13,460` and `2026-11-06 20:55:47,888`
+  - *Log*: `QHM overnight room unavailable (working buy without a price on QQQM) — fail-closed, QHM buy blocked`
+  - *Condition*: `execution.quarterly_hold_manager` blocked entries for `GOOGL` and `GEV` because an open overnight limit order for `QQQM` lacked a price reference, failing the global allocation room check safely.
+- **Ledger Sync Latency Spike**:
+  - *Timestamp*: `2026-11-06 20:40:19,366` and `2026-11-06 21:00:18,420`
+  - *Log*: `WARNING ledger_sync ledger_sync wall-time 17.5s (fills=979 orders=3333)`
+  - *Condition*: Synchronizing order and fill history across 3,333 historical orders takes 17+ seconds, causing minor delays in cycle timing.
+- **Intraday Phase-1 Scan Timeout**:
+  - *Timestamp*: `2026-11-06 20:41:04,015`
+  - *Log*: `WARNING strategy.signal_generator | run_scan: phase-1 global timeout — abandoned symbols: ['GS', 'JPM', 'MS', 'CVX']`
+  - *Condition*: Multi-timeframe bar fetch timed out on late symbols due to overall cycle latency, abandoning the remaining pool safely.
+- **Fail-Closed Daily Data Guard (`DRAM`)**:
+  - *Timestamp*: `2026-11-06 20:32:51,792`
+  - *Log*: `[DRAM] No daily data — long entry blocked (fail-closed)`
+  - *Condition*: Intentional and expected fail-closed guard preventing trade execution when daily data is incomplete.
+
+---
+
+### PERFORMANCE AUDIT
+
+- **P&L Sign & Trade Integrity**: 
+  - All 10 executed/closed trades over the last 7 days (`NVD`, `AMZN`, `GOOGL`, `TSLA`, `COIN`, `SNDQ`, `AAPL`, `XOM`, `AVS`, `MU`, `PLTD`, `SNDK`, `AVGO`) were audited.
+  - **P&L Sign Verification**:
+    - **Short Trades**:
+      - `GOOGL` short (Entry: 278.72, Exit: 277.22) → `realized_pnl` = +$1.50 (Correct).
+      - `AMZN` short (Entry: 246.94, Exit: 245.49) → `realized_pnl` = +$8.70 (Correct).
+      - `COIN` short (Entry: 139.03, Partial Exit: 139.92, Exit: 140.12) → `realized_pnl` = -$8.81 total (Correct).
+      - `NVDA` short (Entry: 191.9275, Exit: 189.9875) → `realized_pnl` = +$7.76 (Correct).
+      - `NVDA` short (Entry: 187.51, Exit: 185.57) → `realized_pnl` = +$3.88 (Correct).
+      - `NVDA` short (Entry: 186.46, Exit: 181.80) → `realized_pnl` = +$32.62 (Correct).
+      - `MU` short (Entry: 710.66, Exit: 669.53) → `realized_pnl` = +$41.13 (Correct).
+      - `SNDK` short (Entry: 874.55, Exit: 850.21) → `realized_pnl` = +$24.34 (Correct).
+      - `AVGO` short (Entry: 299.275, Exit: 295.885) → `realized_pnl` = +$6.78 (Correct).
+    - **Long Trades**:
+      - `NVD` long (Entry: 4.35, Exit: 4.41) → `realized_pnl` = +$11.46 (Correct).
+      - `SNDQ` long (Entry: 22.79, Exit: 23.33) → `realized_pnl` = +$22.68 (Correct).
+      - `AAPL` long (Entry: 352.58, Exits: 350.33 / 350.34) → `realized_pnl` = -$8.98 total (Correct).
+- **Stop-Hit Rate & Exit Reasons**:
+  - Out of recent closed intraday/day-trade positions, take-profit exits dominated over protective stops during high VIX/stressed MRI conditions. 
+  - Stop execution adhered closely to calculated risk boundaries (e.g., `TSLA` long stop target 409.64 exited at 409.625).
+
+---
+
+### TRADE INTEGRITY
+
+- **FIFO Orphan Warnings during Intraday Exits**:
+  - *Logs*: `FIFO orphan: closing fill for SNDK has no prior lot and no tracker record — fill unmatched.`
+  - *Analysis*: Day-trade fast fills (`SNDK`, `AVGO`) executed and closed within 2–4 minutes. The internal tracker position state log updated asynchronously relative to Alpaca execution streams.
+  - *Impact*: Telemetry self-check showed `tracker_pnl = 0.00` vs `alpaca_pnl = $31.12`. Per report rules, this dual-compute pre-heal drift sampled at 4:05 PM ET is expected, benign, and fully resolved by the 8:30 PM ET authoritative ledger heal.
+
+---
+
+### MODIFIED FILE FINDINGS
+
+- **No source files modified in the last 24 hours.**
+
+---
+
+### P5 STATUS
+
+- **P5-C1** (FVG MultiIndex silent crash): **UNTOUCHED**
+- **P5-C2** (`run_movers.py` ImportError): **UNTOUCHED**
+- **P5-H1** (PDT enforcement): **OBSOLETE** (Rule permanently deleted via S63 sweep).
+- **P5-H2** (Fill price crosstalk): **UNTOUCHED**
+- **P5-H3** (Orphan GTC 404 path): **UNTOUCHED**
+- **P5-H4** (Rule 2 dead code): **UNTOUCHED**
+- **P5-H5** (GTC stop suppression): **FIXED**
+- **P5-M1** (Cycle watchdog restart loop): **UNTOUCHED**
+- **P5-M2** (MRI score cached stale): **UNTOUCHED**
+- **P5-M3** (Score comparison JSON unbounded growth): **UNTOUCHED**
+- **P5-L1** (`_classify_loss_driver` empty label): **UNTOUCHED**
+- **P5-L2** (`eod_YYYY-MM-DD.json` timing): **UNTOUCHED**
+- **P5-L3** (`live_data_writer.py` reconnect): **UNTOUCHED**
+
+---
+
+### NEW BUGS FOUND
+
+1. **EXECUTION BUG | MEDIUM | `execution.quarterly_hold_manager`**
+   - **Description**: QHM capacity check blocks new entries when working limit orders lack price metadata in state.
+   - **Exact Failure Condition**: When an overnight limit buy order (e.g., `QQQM`) is submitted without an explicit cached price field in the local order state object, `QuarterlyHoldManager.check_capacity()` cannot calculate open pending committed capital. It defaults to returning `room = 0` (fail-closed), causing valid tranche entries (`GOOGL`, `GEV`) to be blocked unnecessarily.
+
+2. **INFRASTRUCTURE | LOW | `execution.ledger_sync`**
+   - **Description**: Linear scan of historical fills causes loop execution latency.
+   - **Exact Failure Condition**: As total paper trade volume grows (exceeding 3,330 orders and 970 fills), `ledger_sync` takes >17 seconds to iterate over the full Alpaca order history during routine cycles, triggering scan phase-1 timeouts for late-symbol evaluations (`GS`, `JPM`, `MS`, `CVX`).
+
+---
+
+### FIX VALIDATION
+
+- **No prior fixes to validate.**
+
+---
+
+### RECOMMENDED ACTIONS
+
+1. **Prune/Filter Historical Orders in `ledger_sync`**: Update `execution/ledger_sync.py` to fetch orders with `until`/`after` timestamp parameters limited to the past 7–14 days instead of pulling all 3,300+ historical orders, resolving the 17-second cycle latency.
+2. **Patch QHM Pending Order Price Fallback**: In `execution/quarterly_hold_manager.py`, fallback to the latest quote/bar close price if an open working order (e.g., `QQQM`) does not have a price attribute populated on the Alpaca order object.
+3. **Address P5-C2 (`run_movers.py` ImportError)**: Fix the invalid `DataFetcher` import in `run_movers.py:19` to prevent runtime failure during pre-market mover scanning scripts.
+4. **Address P5-M3 (JSON log growth)**: Implement a rolling window cap on `score_comparison.json` to prevent unbounded file growth on live paper trading disk storage.
+
+================================================================================
+SUPPRESSION POST-FILTER: 0 false-alarm removed, 0 acknowledged | card verdict WARN → FAIL (see logs/audit_suppressions.jsonl; ground-truth escalation)
+
+================================================================================
+BROKER GROUND TRUTH (2026-11-06, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AVGO   COVERED                  owners=day exposed=4m no-broker-stop=0m [07:26-07:26, 07:30-07:30] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     NAKED                    owners=qhm exposed=315m no-broker-stop=19m [07:44-08:04] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   NAKED                    owners=qhm exposed=346m no-broker-stop=10m [07:13-07:24] rejected_stop_orders=0
+  SNDK   COVERED                  owners=day exposed=31m no-broker-stop=0m [06:56-06:56] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

@@ -1,0 +1,41 @@
+Midday Gemini Audit — 2026-11-06
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 2
+- NAKED position (no broker stop) | GE
+- NAKED position (no broker stop) | NVDA
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+- **Integrity**: SNDK and AVGO closed trades show correct P&L signs (Long: Exit > Entry = Profit).
+- **P&L**: Total P&L of $31.12 is consistent with the provided closed trade details.
+- **Stop-hit rate**: 0% is misleading given the presence of NAKED positions; the bot is currently exposed to unmanaged risk on GE and NVDA.
+- **Recording**: No P&L = $0.00 with mismatched prices detected.
+
+### ENTRY QUALITY
+- **No issues**: Current entries appear to follow the 75% sizing rule for midday doldrums.
+
+### EXIT QUALITY
+- **No issues**: Closed trades (SNDK, AVGO) were profitable.
+
+### MRI ALIGNMENT
+- **Regime**: MRI is HIGH (70/100). The bot correctly applied a size floor of 0.55x and triggered a `BV-5` block on new entries, which is consistent with the `MRI SESSION DISTRIBUTION` and `strategy.run_cycle` logs.
+
+### LOG ANOMALIES
+- **[ANOMALY-2]**: `[MSFT] confirm_gate=3 scans but no entry — risk.open_positions=4 vs tracker=0`. This indicates a discrepancy between the risk manager's view of open positions and the tracker, potentially causing missed entries or ghost risk.
+- **[BRK.B] GTC stop blocked**: The bot is repeatedly failing to place a GTC stop due to `40310000 held_for_orders`. While the bot identifies this as a "stable live reducing order," the persistence of this warning suggests a potential failure in the order-tracking logic for protective stops.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | CRITICAL | NAKED position exposure | GE and NVDA are listed as NAKED in the broker ground truth. The bot is failing to maintain protective stops for these symbols during RTH.**
+- **EXECUTION BUG | HIGH | Order blocking/Stop failure | The `40310000` error on BRK.B indicates the bot cannot reconcile its protective stop with existing orders, leading to a failure to secure the position.**
+- **INFRASTRUCTURE | MEDIUM | Position tracking discrepancy | The `[ANOMALY-2]` log for MSFT suggests the `risk.open_positions` counter is out of sync with the actual tracker, which could lead to incorrect sizing or erroneous entry blocks.**
+
+### FIX VALIDATION
+- No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Immediate investigation into why GE and NVDA are NAKED; verify if the `execution.broker` module is failing to submit stops or if the `execution.swing_breakout_manager` is incorrectly suppressing them.
+2. **EXECUTION**: Resolve the `40310000` (held_for_orders) conflict for BRK.B; the bot must be able to identify and replace/update existing stops rather than failing to place them.
+3. **INFRA**: Audit the `ledger_sync` vs `risk.open_positions` logic to eliminate the `[ANOMALY-2]` discrepancy, as this impacts the bot's ability to accurately calculate remaining position capacity.
