@@ -14,6 +14,14 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
   REGIME-SIZE-1104 rev 3.14 (VIX: per-consumer selection table, `run_vix_snapshot.py` every 2 min per the owner's
   11-06 direction, shared snapshot + spike/blind alert) and POST-LIVE-WEEKLY-1106 rev 7 (Diff A daily-evaluator
   signature fixes, then Diff B weekly triage with dispositions).
+- **11-06 night (latest):** REGIME-SIZE-1104 (25 paths), POST-LIVE-WEEKLY-1106 (9) and APPROVAL-READY-1106 (5) are
+  APPROVED and recorded. Owner chose `maximum` for the VIX < 14 row (PR 860). APPROVAL-READY build is written and
+  its 19 tests pass, but it is NOT committed (untracked in the vix-slice-1-continue worktree:
+  `.claude/preship/approval_ready.py` + `test_approval_ready.py`). Blocker found: the approval gate's `covered()` never
+  matches a Covers entry marked `(new)`, so new behaviour files (`run_vix_snapshot.py`, `approval_ready.py`) cannot be
+  committed. NEW-MARKER-1106 (design merged PR 861, board/GAI/Gro aligned) fixes it and awaits `APPROVE
+  NEW-MARKER-1106`. Next: ship NEW-MARKER, then APPROVAL-READY (wire the Stop hook in settings.json +
+  install_managed_gates.sh, one CLAUDE.md line), then the Monday probe and REGIME slice 1 / POST-LIVE Diff A.
 - **11-06 late:** owner sent APPROVE for both. The records' Covers lists were incomplete (REGIME named 13 of the 25
   files its rev 3.10-3.14 sections touch; POST-LIVE had none), so PR 857 completed them — which voids the recorded
   approvals by design. Every worktree copy synced so the gate resolves both IDs. **Owner must re-send both APPROVEs
