@@ -30,21 +30,43 @@ streak-state file.
 Data tier: T1 (Alpaca Paper REST via reporting.pnl_ledger — read-only; no SDK).
 Output: data/state/ownership_ledger.json (the ledger, RC-5 atomic via ownership_guard),
 logs/mtf_bot.log, logs/.ledger_sync_streak.json.
+
+ON-DEMAND REBUILD (KILL-JOIN-1107 rev 4 + 4.1, owner-approved; logs/design_records/kill_join_2026-11-07.md):
+  * The kill check writes data/state/ledger_rebuild_request.json (a generation id) when its exact ledger/broker join
+    fails. `run_ledger_sync.py --if-requested` (every-minute cron) exits at once unless that generation is not yet
+    done, so the ledger catches up within about a minute of a fill instead of up to 20.
+  * ONE non-blocking file lock covers EVERY pass (scheduled, on-request, manual, startup, F6 callers of sync_once).
+    A pass that finds it held logs "busy; request remains pending" and returns without touching the request.
+  * `last_rebuild_utc` (the time captured just before the fill fetch) and the done generation are written to the
+    streak file only after a healed pass, i.e. after the ledger's atomic replace. A refusal or an error never
+    advances them, and a request written during a pass stays pending for the next one.
+  * Back-off: an on-request pass is skipped while the last pass was a refused shrink and the request still carries
+    the same fills/positions fingerprint and no new operator confirmation exists. The scheduled pass always runs.
+  * Only scheduled passes page and count toward the 3-pass "ledger may be stale" page (paging timing unchanged).
 """
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import os
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterator
 from zoneinfo import ZoneInfo
 
 _ROOT = Path(__file__).resolve().parent
 _LOGS = _ROOT / "logs"
 _STREAK_PATH = _LOGS / ".ledger_sync_streak.json"
+_STATE_DIR = _ROOT / "data" / "state"
+# KILL-JOIN-1107 plumbing: the rebuild request written by execution/risk_manager.py, the one lock every pass takes,
+# and the operator heal-confirmation file (a new confirmation ends a refusal back-off).
+_REQUEST_PATH = _STATE_DIR / "ledger_rebuild_request.json"
+_LOCK_PATH = _STATE_DIR / "ledger_sync.lock"
+_HEAL_CONFIRM_PATH = _STATE_DIR / "ledger_heal_confirmations.json"
 
 logger = logging.getLogger("ledger_sync")
 
@@ -53,6 +75,10 @@ _WALLTIME_CRIT_S = 30.0
 _HEALED_FALSE_STREAK_ALERT = 3
 _ET = ZoneInfo("America/New_York")
 _NET_STABILITY_SAMPLE_GAP_S = 3.0   # gap between the two /v2/positions samples (a settling leg moves)
+# KILL-JOIN-1107 cold-2nd: a scheduled pass waits this long for the lock instead of exiting busy, so an on-request pass
+# that holds it cannot make the 20-minute rebuild (and its stale-page count) skip. Bound = one pass at its CRITICAL
+# walltime plus the settle sample gap.
+_SCHEDULED_LOCK_TIMEOUT_S = _WALLTIME_CRIT_S + _NET_STABILITY_SAMPLE_GAP_S
 _UNSETTLED_ORDER_STATUSES = frozenset({
     "partially_filled", "pending_new", "pending_cancel", "pending_replace",
     "pending_review", "calculated",
@@ -100,6 +126,79 @@ def _write_streak(streak: dict) -> None:
         tmp.replace(_STREAK_PATH)
     except Exception as e:
         logger.warning("streak write failed: %s", e)
+
+
+@contextmanager
+def _rebuild_lock(wait_timeout_s: float = 0.0) -> Iterator["bool | None"]:
+    """KILL-JOIN-1107 rev 4.1 item 1: the one non-blocking lock every rebuild pass takes.
+
+    Yields True when held, False when another pass holds it (busy), None when the lock file cannot be opened. flock is
+    per open file, so two passes in one process exclude each other as well. Released on exit (and by the OS if the
+    process dies). wait_timeout_s > 0 retries the non-blocking lock until that many seconds have passed (cron passes only,
+never the trading thread). Never raises on acquisition."""
+    import fcntl
+    handle = None
+    try:
+        _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(_LOCK_PATH, "a+", encoding="utf-8")
+    except OSError as e:
+        logger.critical("ledger_sync: lock file unavailable (%s) — pass skipped [change=kill-join-1107]", e)
+        yield None
+        return
+    try:
+        deadline = time.monotonic() + max(0.0, wait_timeout_s)
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    yield False
+                    return
+                time.sleep(0.5)
+        try:
+            yield True
+        finally:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError as e:
+                logger.warning("ledger_sync: lock release failed (%s)", e)
+    finally:
+        handle.close()
+
+
+def _read_request() -> "dict | None":
+    """The pending rebuild request ({generation, requested_utc, fingerprint, ...}) or None (absent / unreadable).
+    An unreadable request is logged and treated as absent: the scheduled pass still rebuilds. Never raises."""
+    try:
+        if not _REQUEST_PATH.exists():
+            return None
+        d = json.loads(_REQUEST_PATH.read_text(encoding="utf-8"))
+        if isinstance(d, dict) and isinstance(d.get("generation"), str) and d["generation"]:
+            return d
+        logger.warning("ledger_sync: rebuild request malformed — ignored [change=kill-join-1107]")
+    except FileNotFoundError:
+        return None
+    except Exception as e:  # noqa: BLE001 — RC-3: logged
+        logger.warning("ledger_sync: rebuild request unreadable (%s) — ignored [change=kill-join-1107]", e)
+    return None
+
+
+def _confirmations_stamp() -> "float | None":
+    """mtime of the operator heal-confirmation file, or None when absent/unreadable. Never raises."""
+    try:
+        return _HEAL_CONFIRM_PATH.stat().st_mtime if _HEAL_CONFIRM_PATH.exists() else None
+    except OSError:
+        return None
+
+
+def _minutes_since(iso_ts) -> "float | None":
+    """Minutes from an ISO UTC timestamp to now (the on-request latency metric), or None. Never raises."""
+    then = _parse_utc(iso_ts) if iso_ts else None
+    if then is None:
+        return None
+    waited_seconds = (datetime.now(timezone.utc) - then).total_seconds()
+    return round(waited_seconds / 60, 2)
 
 
 def _inherit_leg_tiers(coid_map: dict, orders: list) -> int:
@@ -206,8 +305,67 @@ def _stale_message(streak: dict, pending: dict) -> str:
             "Anything that reads which tier owns which shares sees the old record until this clears:\n" + body)
 
 
-def sync_once() -> dict:
-    """Run one full-replay maintenance pass. Returns a result dict for logging/tests.
+def _on_request_skip(request: "dict | None", streak: dict) -> "str | None":
+    """Why an `--if-requested` pass should not rebuild, or None to rebuild. Runs under the lock.
+    "no_request": no request, or its generation is already done. "backoff": the last pass refused a protected-floor
+    shrink and nothing it could change has appeared since (same fills/positions fingerprint, no new operator
+    confirmation) — logged once per fingerprint; the scheduled pass still runs."""
+    if request is None or request.get("generation") == streak.get("request_done_generation"):
+        return "no_request"
+    fingerprint = request.get("fingerprint")
+    if (streak.get("last_pass_refused") is True and fingerprint
+            and fingerprint == streak.get("refused_fingerprint")
+            and _confirmations_stamp() == streak.get("refused_confirm_stamp")):
+        if streak.get("backoff_logged_fingerprint") != fingerprint:
+            logger.info("ledger_sync on request: skipped (back-off) — the last pass refused a protected-floor shrink "
+                        "and no new fill, position change or operator confirmation has appeared since; request "
+                        "%s stays pending for the scheduled pass [change=kill-join-1107]", request.get("generation"))
+            streak["backoff_logged_fingerprint"] = fingerprint
+            _write_streak(streak)
+        return "backoff"
+    return None
+
+
+def sync_once(*, scheduled: bool = True, if_requested: bool = False, lock_wait_s: float = 0.0) -> dict:
+    """Run one full-replay maintenance pass under the one rebuild lock (KILL-JOIN-1107). Returns a result dict.
+
+    scheduled=True (the default: the 20-minute cron, manual and startup runs, the F6 callers) keeps today's paging and
+    streak counting. scheduled=False (the every-minute `--if-requested` cron) never pages and never counts toward the
+    stale page. if_requested=True returns at once unless a rebuild request generation is pending and not backed off.
+    A pass that finds the lock held (after lock_wait_s) returns {"ok": False, "busy": True} without touching the request.
+    An if_requested pass with nothing pending returns before taking the lock, so the every-minute cron never holds it
+    when it has no work (cold-2nd: it used to take the lock first and make a simultaneous 20-minute pass exit busy).
+    Never raises."""
+    try:
+        if if_requested:
+            _pre = _read_request()
+            if _pre is None or _pre.get("generation") == _read_streak().get("request_done_generation"):
+                return {"ok": True, "healed": False, "skipped": "no_request"}   # lock-free: files are atomically replaced
+        with _rebuild_lock(lock_wait_s) as held:
+            if held is None:
+                return {"ok": False, "healed": False, "stage": "lock", "error": "lock file unavailable"}
+            request = _read_request()
+            if not held:
+                if if_requested and request is None:
+                    return {"ok": False, "healed": False, "busy": True}   # nothing requested: no log line every minute
+                logger.info("ledger_sync busy; request remains pending (generation %s) [change=kill-join-1107]",
+                            (request or {}).get("generation"))
+                return {"ok": False, "healed": False, "busy": True}
+            if if_requested:
+                skip = _on_request_skip(request, _read_streak())
+                if skip:
+                    return {"ok": True, "healed": False, "skipped": skip}
+                logger.info("ledger_sync on request: rebuilding for generation %s, requested %s min ago "
+                            "[change=kill-join-1107]", (request or {}).get("generation"),
+                            _minutes_since((request or {}).get("requested_utc")))
+            return _sync_locked(scheduled=scheduled, request=request)
+    except Exception as e:  # noqa: BLE001 — the cron maintainer must never raise
+        logger.critical("ledger_sync: unhandled error around the rebuild lock: %s", e)
+        return {"ok": False, "healed": False, "stage": "lock", "error": str(e)}
+
+
+def _sync_locked(*, scheduled: bool, request: "dict | None") -> dict:
+    """Run one full-replay maintenance pass (the lock is held by sync_once). Returns a result dict for logging/tests.
     NEVER raises into a cron caller — the ENTIRE body (imports, fetch, attribute, sync,
     instrumentation) is wrapped in one try/except with a `stage` tag; any error is
     caught, logged CRITICAL + best-effort Slack, and reported as ok=False so the ledger
@@ -216,6 +374,10 @@ def sync_once() -> dict:
     the instrumentation loop would crash cron — invariant now enforced end-to-end.)"""
     t0 = time.monotonic()
     stage = "import"
+    # KILL-JOIN-1107: only scheduled passes page (an on-request pass may run every minute).
+    page = _slack if scheduled else (lambda msg: logger.warning("ledger_sync on request (no page): %s", msg))
+    request_generation = (request or {}).get("generation")
+    request_fingerprint = (request or {}).get("fingerprint")
     try:
         from reporting.pnl_ledger import (
             fetch_all_fills, fetch_all_orders, fetch_positions, build_coid_map,
@@ -224,6 +386,10 @@ def sync_once() -> dict:
         from execution.quarterly_hold_manager import get_quarterly_hold_quantities
 
         stage = "fetch"
+        # KILL-JOIN-1107 rev 4.1 item 2: the rebuild watermark is the time just before the fill fetch (every fill at or
+        # before it is in this replay); an operator confirmation written after this point ends a refusal back-off.
+        rebuild_started_utc = datetime.now(timezone.utc).isoformat()
+        confirm_stamp_at_start = _confirmations_stamp()
         fills = fetch_all_fills()
         orders = fetch_all_orders(nested=True)   # legs carry their parent link (see _inherit_leg_tiers)
         positions = fetch_positions()
@@ -304,8 +470,8 @@ def sync_once() -> dict:
         if elapsed > _WALLTIME_CRIT_S:
             logger.critical("ledger_sync wall-time %.1fs > %ss — Alpaca slow / "
                             "pagination hang?", elapsed, _WALLTIME_CRIT_S)
-            _slack(f"The share-ownership record update took {elapsed}s (normal is a few seconds) — Alpaca may be slow. "
-                   "No action needed unless this repeats.")
+            page(f"The share-ownership record update took {elapsed}s (normal is a few seconds) — Alpaca may be slow. "
+                 "No action needed unless this repeats.")
         elif elapsed > _WALLTIME_WARN_S:
             logger.warning("ledger_sync wall-time %.1fs (fills=%d orders=%d)",
                            elapsed, len(fills), len(orders))
@@ -314,9 +480,23 @@ def sync_once() -> dict:
         streak = _read_streak()
 
         if not healed:
+            reason = led.get("reason", "unknown")
+            # KILL-JOIN-1107 rev 4.1 item 4: remember the refusal and what it was refused on, so on-request passes back
+            # off until a new fill, position change or operator confirmation appears. Neither the watermark nor the
+            # done generation moves (the request stays pending).
+            streak["last_pass_refused"] = True
+            streak["refused_fingerprint"] = request_fingerprint
+            streak["refused_confirm_stamp"] = confirm_stamp_at_start
+            if not scheduled:
+                # On-request passes never page and never count toward the stale page (the scheduled pass does both,
+                # on its unchanged timing).
+                logger.warning("ledger_sync on request: NOT healed (reason=%s) — generation %s remains pending; the "
+                               "scheduled pass pages [change=kill-join-1107]", reason, request_generation)
+                _write_streak(streak)
+                return {"ok": False, "healed": False, "reason": reason, "on_request": True,
+                        "elapsed_s": elapsed, "fills": len(fills), "orders": len(orders)}
             # sync_ledger refused (protected-floor shrink / truncated replay) — ledger
             # NOT updated. Track the consecutive-failure streak and escalate.
-            reason = led.get("reason", "unknown")
             streak["count"] = int(streak.get("count", 0)) + 1
             streak["reasons"] = (streak.get("reasons", []) + [reason])[-10:]
             streak["last_utc"] = datetime.now(timezone.utc).isoformat()
@@ -357,8 +537,17 @@ def sync_once() -> dict:
         # ── healed OK — reset streak, emit per-symbol sanity ─────────────────
         if streak.get("count", 0):
             logger.info("ledger_sync recovered after %d non-heal(s)", streak["count"])
+        # KILL-JOIN-1107 rev 4.1 items 2-3: sync_ledger has already replaced the ledger atomically (healed=True), so the
+        # watermark and the generation this pass started from are recorded now — and only now. A request written
+        # during the pass carries a different generation and stays pending.
         _write_streak({"count": 0, "reasons": [], "last_utc": None,
-                       "last_healed_utc": datetime.now(timezone.utc).isoformat()})
+                       "last_healed_utc": datetime.now(timezone.utc).isoformat(),
+                       "last_rebuild_utc": rebuild_started_utc,
+                       "request_done_generation": request_generation or streak.get("request_done_generation")})
+        if request_generation:
+            logger.info("ledger_sync%s: rebuild request %s done %s min after the request (%.2fs pass) "
+                        "[change=kill-join-1107]", "" if scheduled else " on request", request_generation,
+                        _minutes_since((request or {}).get("requested_utc")), elapsed)
 
         positions_out = led.get("positions", {})
         drift_syms = {s: e.get("drift", 0.0) for s, e in positions_out.items()
@@ -395,12 +584,17 @@ def sync_once() -> dict:
         # ledger is never partially written).
         logger.critical("ledger_sync: unhandled error at stage=%s — ledger left "
                         "stale: %s", stage, e)
-        _slack(f"The share-ownership record update failed ({stage} step: {e}). The last good record stays in use; "
-               "it retries on its next run. If this repeats, check logs/mtf_bot.log on the server.")
+        page(f"The share-ownership record update failed ({stage} step: {e}). The last good record stays in use; "
+             "it retries on its next run. If this repeats, check logs/mtf_bot.log on the server.")
         return {"ok": False, "stage": stage, "error": str(e)}
 
 
-def main() -> int:
+def main(argv: "list[str] | None" = None) -> int:
+    parser = argparse.ArgumentParser(description="Rebuild the per-tier ownership ledger from Alpaca fills.")
+    parser.add_argument("--if-requested", action="store_true",
+                        help="KILL-JOIN-1107: rebuild only when the kill check has requested it (every-minute cron); "
+                             "never pages and never counts toward the stale page.")
+    args = parser.parse_args(argv)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -408,8 +602,11 @@ def main() -> int:
                   logging.FileHandler(_LOGS / "mtf_bot.log")],
     )
     _load_env()
-    res = sync_once()
-    return 0 if res.get("ok") else 1
+    # The scheduled cron pass waits for the lock (an on-request pass may hold it); the on-request pass never waits.
+    res = sync_once(scheduled=not args.if_requested, if_requested=args.if_requested,
+                    lock_wait_s=0.0 if args.if_requested else _SCHEDULED_LOCK_TIMEOUT_S)
+    # A busy pass (another rebuild holds the lock) is not a failure: the request stays pending for the next pass.
+    return 0 if res.get("ok") or res.get("busy") else 1
 
 
 if __name__ == "__main__":

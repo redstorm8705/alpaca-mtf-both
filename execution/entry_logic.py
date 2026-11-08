@@ -724,9 +724,13 @@ def execute_entries(
             # FIX BUG-PH-1: kill-switch is unconditional — must check BEFORE expansion logic.
             # can_open_position() returns False for BOTH kill-switch AND position-limit;
             # expansion is only valid for position-limit case.
-            if risk.check_kill_switch():
+            # KILL-JOIN-1107: read the verdict can_open_position() just recorded (latched kill, or a kill check
+            # that raised) instead of evaluating the kill a second time — a raise here aborted the cycle on
+            # 2026-11-06, and a fault must never fall through to the power-hour expansion below.
+            if risk.kill_blocks_entries():
                 logger.warning(
-                    f"[{symbol}] Kill switch active — stopping entries (expansion blocked)."
+                    f"[{symbol}] Kill switch active — stopping entries (expansion blocked)"
+                    f"{' (kill check fault: ' + str(risk.kill_check_fault) + ')' if risk.kill_check_fault else ''}."
                 )
                 break
             # Standard position-limit (not kill-switch).
