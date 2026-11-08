@@ -1,0 +1,16 @@
+{
+ "version": 1,
+ "change": "swing-ratchet-1105",
+ "variant": "R+ k=2",
+ "trigger_r": 2.0,
+ "lock_r": 0.25,
+ "tick_usd": 0.01,
+ "produced": "2026-11-05",
+ "replay": "logs/research/swing_pm/breakeven_ratchet_replay.py",
+ "data": "giveback_daily.pkl",
+ "trial_count": 46,
+ "selection": "owner risk-shape choice (no +2R winner becomes a loss); not the best-mean-R pick",
+ "discovery": {"n": 725, "mean_r": 0.377, "base_mean_r": 0.374},
+ "test": {"n": 556, "mean_r": 0.572, "base_mean_r": 0.592, "paired_dr": -0.016, "paired_t": -1.52, "paired_n": 551},
+ "rederive": "quarterly, on the Swing tier's universe"
+}

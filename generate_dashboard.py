@@ -658,6 +658,25 @@ def _weighted_basis(lots: list[tuple[float, float]], owned: float) -> float | No
     return sum(q * px for q, px in lots) / total
 
 
+def _ratchet_text(rec: dict) -> str:
+    """The Swing lot's profit-lock stop and its basis (SWING-RATCHET-1105), from the tier's own state only."""
+    raw = rec.get("ratchet")
+    rt: dict = raw if isinstance(raw, dict) else {}
+    entry = float(rec.get("entry_px") or 0)
+    stop = float(rec.get("stop_px") or 0)
+    status = str(rt.get("status") or "")
+    if rt.get("order_ids") and stop > 0:
+        rel = f"{'above' if stop >= entry else 'below'} entry {_money(entry)}" if entry > 0 else ""
+        return f"stop raised to {_money(stop)} ({rel}; armed {rt.get('armed_session') or '?'})"
+    if status in ("pending", "reprotect_pending"):
+        return f"profit-lock stop {status.replace('_', ' ')} (broker not confirmed)"
+    if rt.get("armed_session"):
+        lock = rt.get("lock_px")
+        return f"profit-lock armed {rt['armed_session']}" + (f" · lock {_money(float(lock))}" if lock else "")
+    trig = rt.get("trigger_px")
+    return f"profit-lock at a close ≥ {_money(float(trig))}" if trig else "profit-lock not yet armed"
+
+
 def _tier_slice_plan(
     tier: str, sym: str, owned: float, plans: dict, td: dict, fact: dict | None, today,
 ) -> tuple[float | None, str]:
@@ -683,6 +702,7 @@ def _tier_slice_plan(
                 else f"time exit on session {max_hold}"
             )
             parts.append(f"no profit target (trend exit) · {time_txt}")
+            parts.append(_ratchet_text(rec))
         if isinstance(night, dict) and night.get(sym):
             parts.append("sells at next open")
         if td.get("target"):
@@ -777,6 +797,8 @@ _TS_RE = re.compile(r'"ts": "([^"]+)"')
 _EXIT_REASON_LABELS = {
     "protective_stop": "protective stop",
     "protective_stop_partial": "protective stop (part)",
+    "ratchet_stop": "profit-lock stop",            # SWING-RATCHET-1105
+    "ratchet_stop_partial": "profit-lock stop (part)",
     "take_profit": "target",
     "trend_break": "trend break",
     "time": "time exit",
