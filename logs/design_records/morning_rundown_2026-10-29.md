@@ -670,3 +670,22 @@ Codex found two failing inputs; both fixed:
      = that day's close (Alpaca calendar) minus the decision time, using the quote's own implied volatility.
    - Both use the same decision timestamp, which is logged. A candidate with no IV root, or with risk ≤ 0, falls back
      to the v7 intrinsic ÷ ask rank (v9 item 2).
+
+## v9.3 — Codex round 2 folded (2026-11-08)
+
+Codex (reviewer #2) found one failing input, round 2 on v9.2:
+- fresh bid $0.80, ask $1.20, model premium at invalidation $1.00;
+- v9's validity rule (reject only `≤ $0.05` or `> ask`) passes it, so the idea is labelled ACTIONABLE with a $1.00 sell-stop that sits above the current bid;
+- that regresses v7's `0 < stop < current bid`. A sell-stop inside the spread can be elected at once.
+
+Folded:
+1. **Stop placeability:** ACTIONABLE requires `$0.05 < model_stop < fresh_bid`. The trigger record keeps the bid used for this check (`stop_check_bid`, with its quote timestamp).
+2. **Re-check before send:** if a quote retry runs, or the bid moves right before the ACTIONABLE send, the check is redone on the latest fresh bid. If the stop is at or above that bid, the message renders `TRIGGERED — REFERENCE ONLY — no placeable stop`, with no entry limit.
+3. **Fill time:** the existing fill-time warning stays. The owner fills asynchronously, so the message tells him to confirm the stop is still below the bid when he places it.
+4. **Tests:**
+   - bid .80 / ask 1.20 / stop 1.00 → REFERENCE ONLY;
+   - bid .80 / ask 1.20 / stop .79 → eligible, subject to every other check;
+   - the bid falls below the stop during the quote retry or just before send → REFERENCE ONLY;
+   - the fill-time warning is still present.
+
+Nothing else changes from v9.2.
