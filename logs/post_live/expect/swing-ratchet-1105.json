@@ -1,0 +1,38 @@
+{
+  "change": "swing-ratchet-1105",
+  "tier": 2,
+  "paths": [
+    "execution/swing_breakout_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "swing ratchet [A-Z.]+: stop [0-9.]+ -> [0-9.]+ .*\\[change=swing-ratchet-1105\\]"
+    }
+  ],
+  "expected_rate": "once per Swing lot whose completed daily close reaches entry + 2R (BRK.B qualifies at the first regular-hours cycle after ship)",
+  "window_sessions": 5,
+  "window_reason": "BRK.B's completed close already exceeds +2R, so the first regular-hours cycle after deploy should raise its stop; five sessions allow for a missed or unconfirmed replace",
+  "reversal": "a Swing lot whose completed close reached entry + 2R still has a resting tier stop below entry + 0.25R (or below bid - $0.01 when the market is lower) after the next session's near-close check without a pending/reprotect_pending page, or any Swing stop lowered by the ratchet, or two live sell stops on one lot",
+  "verification": "tests/test_swing_ratchet.py",
+  "metrics": [
+    {
+      "name": "Swing lots at or above +2R whose tier stop sits below entry + 0.25R after the next near-close check",
+      "source": "logs/mtf_bot.log ratchet lines + Alpaca open orders for Swing IN- stops vs the Swing lot state",
+      "direction": "down",
+      "bound": "zero, unless a pending/reprotect page names the lot"
+    },
+    {
+      "name": "Swing stops lowered by the ratchet, or two live own sell stops on one lot",
+      "source": "Alpaca order history (replace chain) for Swing IN-/IN-rp- stops",
+      "direction": "none",
+      "bound": "zero"
+    },
+    {
+      "name": "Swing lot fills booked twice or above the lot qty",
+      "source": "Swing lot state booked_fills vs Alpaca fills (FIFO)",
+      "direction": "none",
+      "bound": "zero; any excess is a CRITICAL page, never booked"
+    }
+  ]
+}

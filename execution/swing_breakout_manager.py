@@ -50,18 +50,27 @@ CAPITAL: every entry is admitted by execution.tier_capital_allocator.live_admit(
   overnight bound is the K-limb sizing cap above (Invariant #11). While TIER_CAPITAL_ALLOCATOR_ENABLED is
   False (since 2026-10-02) live_admit approves without a lease and the sizing cap is the binding bound.
 
+PROFIT LOCK (SWING-RATCHET-1105, owner design logs/design_records/swing_ratchet_2026-11-05.md rev 9/9.1): once a lot's
+  completed daily close reaches entry + trigger × R (R = the lot's own entry stop distance per share, fixed at entry),
+  its own IN- GTC stop is replaced IN PLACE at max(current stop, min(entry + lock × R rounded up to the cent, bid − one
+  tick)). trigger / lock / tick come only from the replay-produced logs/research/swing_pm/ratchet_params.json. Only
+  ever raised; never cancelled; an owner (untagged) or other-tier stop is never touched. A per-lot state machine
+  (idle | pending | reprotect_pending | done) reconciles every regular-hours cycle from broker truth.
+
 LOGGING: every entry, skip and exit writes its decision stack to trade_events.jsonl (Rule D).
 FAIL-SAFE: SWING_BREAKOUT_ENABLED False → no new entries; lots already held keep their stops and managed exits. Any error in one symbol aborts THAT
   symbol only and never raises into run_cycle.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import os
+import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 from zoneinfo import ZoneInfo
@@ -91,6 +100,13 @@ _ENTRY_START_MIN = 10 * 60 + 5     # first entry cycle: 10:05 ET — after run_c
 _PAGE_EVERY_S = 1800               # repeat an unresolved-lot page at most every 30 minutes
 
 CHANGE = "swing-owner-1025"
+RATCHET_CHANGE = "swing-ratchet-1105"
+_RATCHET_PARAMS = Path(__file__).resolve().parent.parent / "logs" / "research" / "swing_pm" / "ratchet_params.json"
+_TRADE_EVENTS = Path(__file__).resolve().parent.parent / "logs" / "trade_events.jsonl"
+_ALPACA_CLIENT_ID_API_CHARS = 48   # Alpaca's documented client_order_id length limit (API plumbing)
+_RP_HASH_DIGITS = 24               # hex chars of sha256(lot coid) in a re-protection client id (design rev 9)
+_LIVE_STOP = ("new", "held", "accepted", "pending_new")     # a stop order that is in force
+_REPLACEABLE = ("new", "held")                              # Alpaca refuses a replace in accepted / pending_*
 _PRIOR = Path(__file__).resolve().parent.parent / "research" / "swing_owner_prior_2026-10-25.json"
 # The pool (SWING-OWNER-1025): every current S&P 500 / NDX member that ranked in the top 50 by 60-day median dollar
 # volume on any session of the last 252 (lab cache, last bar 2026-09-25; research/swing_owner_prior.py). The daily
@@ -248,13 +264,119 @@ def lot_r(rec: dict) -> Optional[float]:
         if risk is None:
             if rec.get("partial_pnl") is not None or rec.get("partial_pnl_unknown"):
                 return None
-            risk = (float(rec.get("entry_px") or 0) - float(rec.get("stop_px") or 0)) * float(rec.get("qty") or 0)
+            risk = _entry_risk_ps(rec) * float(rec.get("qty") or 0)
         risk = float(risk)
         if not (_finite(pnl, risk) and risk > 0):
             return None
         return float(pnl) / risk
     except (TypeError, ValueError):
         return None
+
+
+def _risk_usd_ps(rec: dict) -> Optional[float]:
+    """risk_usd / qty, only while the lot's qty is still its entry qty (no partial booked or unknown); else None."""
+    try:
+        risk, qty = rec.get("risk_usd"), float(rec.get("qty") or 0)
+        if risk is None or qty <= 0 or rec.get("partial_pnl") is not None or rec.get("partial_pnl_unknown"):
+            return None
+        v = float(risk) / qty
+        return v if math.isfinite(v) and v > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _entry_risk_ps(rec: dict) -> float:
+    """Risk per share at ENTRY: init_risk_ps (written once at fill), else risk_usd / entry qty, else entry −
+    init_stop_px, else entry − stop_px ONLY for a lot whose stop the ratchet never raised. Never a raised stop
+    (SWING-RATCHET-1105 rev 4 item 10c, cold review M2). 0.0 when unknown."""
+    try:
+        v = rec.get("init_risk_ps")
+        if v is not None and _finite(v) and float(v) > 0:
+            return float(v)
+        rps = _risk_usd_ps(rec)
+        if rps is not None:
+            return rps
+        if rec.get("init_stop_px") is not None:
+            stop = rec.get("init_stop_px")
+        elif (rec.get("ratchet") or {}).get("order_ids") or (rec.get("ratchet") or {}).get("new_order_id"):
+            return 0.0                                   # the stop was raised: stop_px is not the entry risk
+        else:
+            stop = rec.get("stop_px")
+        v = float(rec.get("entry_px") or 0) - float(stop or 0)
+        return v if math.isfinite(v) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+# every exit at or through a stop level, measured against the stop_px in force (R6-2: a market close because the price
+# was already through an unplaceable stop is a stop loss, and its gap counts)
+_STOP_FAMILY = ("protective_stop", "ratchet_stop", "stop_breached_unprotected")
+_STOP_PARTIALS = tuple(f"{r}_partial" for r in _STOP_FAMILY)
+
+
+def _gap_mult(stop: Any, fill: Any, risk: Any) -> Optional[float]:
+    """1 + max(0, stop − fill) / risk for one stop fill; None when any input is unusable."""
+    try:
+        stop, fill, risk = float(stop or 0), float(fill or 0), float(risk or 0)
+    except (TypeError, ValueError):
+        return None
+    if not (_finite(stop, fill, risk) and stop > 0 and fill > 0 and risk > 0):
+        return None
+    return 1.0 + max(0.0, stop - fill) / risk
+
+
+def stop_gap_multiple(rec: dict) -> Optional[float]:
+    """A lot's stop loss multiple: the qty-weighted mean, over EVERY stop leg (each *_stop_partial leg booked by
+    _book_partial, plus a stop-family final exit), of 1 + max(0, stop − fill) / entry risk per share (cold review M1,
+    R3-1): the gap EXCESS of each stop that filled, so a fill at or above its stop counts 1.0 and a ratchet or relabelled
+    fill can never count below 1. A leg whose prices are unknown is left out and the KNOWN legs decide (R4-2); a lot with
+    a stop leg but none known returns None (the caller excludes it, never a guessed 1.0). The one exact fallback: a
+    legacy single-leg protective stop at its entry stop with no prices recorded, where the gap is −R − 1, so the
+    multiple is max(1, −R)."""
+    raw_legs = rec.get("stop_legs")
+    legs: dict = raw_legs if isinstance(raw_legs, dict) else {}
+    lq, lmq = float(legs.get("qty") or 0), float(legs.get("mult_qty") or 0)
+    if not (_finite(lq, lmq) and lq > 0):
+        lq, lmq = 0.0, 0.0
+    final_q, final_m = 0.0, None
+    if rec.get("exit_reason") in _STOP_FAMILY:
+        final_m = _gap_mult(rec.get("stop_px"), rec.get("exit_px"), _entry_risk_ps(rec))
+        final_q = float(rec.get("qty") or 0) if final_m is not None else 0.0
+    known_q = lq + final_q
+    if known_q > 0:
+        return (lmq + final_q * (final_m or 0.0)) / known_q
+    if final_m is not None:
+        return final_m                                    # a final leg with no qty recorded: its own multiple
+    if (not legs and rec.get("exit_reason") == "protective_stop"
+            and not (rec.get("ratchet") or {}).get("order_ids")):
+        x = lot_r(rec)
+        return max(1.0, -x) if x is not None and math.isfinite(x) else None
+    return None
+
+
+def _net_fill(rec: dict, oid: str, cum_qty: Any, cum_avg: Any) -> tuple[int, float]:
+    """The part of an order's CUMULATIVE fill not yet booked by the ratchet (ratchet.booked_fills), priced
+    incrementally: (cum qty × cum avg − booked qty × booked avg) / new qty. (0, 0.0) when nothing is new; price 0.0 when
+    it cannot be derived (the caller books it as unknown, never fabricated)."""
+    try:
+        cq, ca = int(float(cum_qty or 0)), float(cum_avg or 0)
+    except (TypeError, ValueError):
+        return 0, 0.0
+    b = ((rec.get("ratchet") or {}).get("booked_fills") or {}).get(oid) if oid else None
+    if not b:
+        return cq, ca
+    bq = int(float((b.get("qty") if isinstance(b, dict) else b) or 0))
+    ba = float((b.get("avg") if isinstance(b, dict) else ca) or 0)
+    nq = cq - bq
+    if nq <= 0:
+        return 0, 0.0
+    px = (cq * ca - bq * ba) / nq if ca > 0 and ba > 0 else 0.0
+    return nq, (px if math.isfinite(px) and px > 0 else 0.0)
+
+
+def _mark_booked(rec: dict, oid: str, cum_qty: Any, cum_avg: Any) -> None:
+    rec.setdefault("ratchet", {}).setdefault("booked_fills", {})[oid] = {"qty": int(float(cum_qty or 0)),
+                                                                         "avg": float(cum_avg or 0)}
 
 
 def closed_lots(state: dict) -> list[dict]:
@@ -282,24 +404,42 @@ def _archive_closed(state: dict, rec: Optional[dict]) -> None:
         return
     arch.append({k: rec.get(k) for k in ("coid", "entry_date", "exit_date", "exit_reason", "realized_pnl", "entry_px",
                                           "stop_px", "exit_px", "qty", "risk_usd", "partial_pnl", "partial_pnl_unknown",
-                                          "entry_px_estimated")} | {"status": "closed"})
+                                          "entry_px_estimated", "init_risk_ps", "init_stop_px", "ratchet",
+                                          "stop_legs")}
+               | {"status": "closed"})
 
 
 def kelly_risk(lots: list[dict], prior: Optional[dict]) -> dict:
     """Risk per lot r (fraction of equity) and the loss multiple, from this tier's closed lots once
     KELLY_MIN_SAMPLE_SIZE have a known R, else from the replay prior. r = SWING_BREAKOUT_KELLY_FRACTION × max(0,
-    mean R − SE) / var R, never above SWING_BREAKOUT_MAX_RISK_PCT. Loss multiple = the mean loss, in R, of lots that
-    exited on the protective stop (gap-throughs cost more than 1R), never below 1. No live sample and no prior → r 0
+    mean R − SE) / var R, never above SWING_BREAKOUT_MAX_RISK_PCT. Loss multiple = the mean stop_gap_multiple of lots
+    that exited on a stop (gap-throughs cost more than 1R), never below 1. No live sample and no prior → r 0
     (the caller's one-share floor still trades the setup)."""
     rs = [x for x in (lot_r(rec) for rec in lots) if x is not None and math.isfinite(x)]
-    stop_rs = [x for rec in lots if rec.get("exit_reason") == "protective_stop"
-               for x in [lot_r(rec)] if x is not None and math.isfinite(x)]
-    out: dict[str, Any] = {"n_live": len(rs), "n_live_stopped": len(stop_rs)}
+    # SWING-RATCHET-1105 (masked-loss seat, cold review M1): the loss multiple measures each stop fill's GAP EXCESS
+    # (1 + max(0, stop − fill) / entry risk), for every stop-family exit — protective or ratchet, whatever the label —
+    # so a profit-lock fill can never shrink it and up-size new lots; a gap through a raised stop counts in full.
+    stop_ms, detail, excluded = [], [], []
+    for rec in lots:
+        legs = rec.get("stop_legs") if isinstance(rec.get("stop_legs"), dict) else {}
+        if rec.get("exit_reason") not in _STOP_FAMILY and not legs:
+            continue
+        m = stop_gap_multiple(rec)
+        if m is None or not math.isfinite(m):
+            # a stop lot whose stop prices are unknown is left out of the loss multiple, never counted as 1.0 (R4-2)
+            excluded.append(rec.get("coid"))
+            logger.info("swing kelly: lot %s (%s) excluded from the loss multiple — no stop leg with known prices",
+                        rec.get("coid"), rec.get("exit_reason"))
+            continue
+        stop_ms.append(m)
+        detail.append({"coid": rec.get("coid"), "reason": rec.get("exit_reason"), "mult": round(m, 4)})
+    out: dict[str, Any] = {"n_live": len(rs), "n_live_stopped": len(stop_ms), "stop_multiples": detail,
+                           "stop_excluded": excluded}
     try:
         import statistics
         if len(rs) >= int(config.KELLY_MIN_SAMPLE_SIZE):
             n, mean, sd, src = len(rs), statistics.fmean(rs), statistics.stdev(rs), "fills"
-            lm = -statistics.fmean(stop_rs) if stop_rs else float((prior or {}).get("loss_mult_stopped") or 1.0)
+            lm = statistics.fmean(stop_ms) if stop_ms else float((prior or {}).get("loss_mult_stopped") or 1.0)
         elif prior:
             n, mean, sd, src = int(prior["n"]), float(prior["mean_r"]), float(prior["sd_r"]), "replay_prior"
             lm = float(prior["loss_mult_stopped"])
@@ -420,11 +560,12 @@ def _lot_notional(rec: dict) -> float:
 
 
 def _lot_risk(rec: dict) -> float:
-    """A held lot's loss at its stop in $ (risk_usd recorded at entry, else (entry − stop) × qty); 0 when unknown."""
+    """A held lot's loss at its stop in $ (risk_usd recorded at entry, else the entry risk per share × qty — never a
+    raised stop); 0 when unknown."""
     try:
         v = rec.get("risk_usd")
         if v is None:
-            v = (float(rec.get("entry_px") or 0) - float(rec.get("stop_px") or 0)) * float(rec.get("qty") or 0)
+            v = _entry_risk_ps(rec) * float(rec.get("qty") or 0)
         v = float(v)
         return v if math.isfinite(v) and v > 0 else 0.0
     except (TypeError, ValueError):
@@ -490,6 +631,7 @@ def _save_state(state: dict) -> bool:
 
 
 _last_good_symbols: frozenset = frozenset()
+_SESSION_CACHE: dict = {}          # SWING-RATCHET-1105: Alpaca calendar session opens per (start, end) date
 
 
 def get_breakout_symbols_checked() -> tuple[set, bool]:
@@ -551,9 +693,10 @@ def _page_throttled(rec: dict, msg: str) -> None:
 def _log(event: str, symbol: str, **kw) -> None:
     try:
         import trade_logger
+        change = kw.pop("change", CHANGE)
         trade_logger.log_event(event, symbol=symbol, data_source="alpaca_data", tier=TIER,
                                setup="c2_breakout_55d", family_id=FAMILY_ID,
-                               hypothesis_version=HYPOTHESIS_VERSION, change=CHANGE, **kw)
+                               hypothesis_version=HYPOTHESIS_VERSION, change=change, **kw)
     except Exception as e:
         logger.warning("[%s] swing_breakout trade_logger write failed: %s", symbol, e)
 
@@ -565,6 +708,142 @@ def _is_terminal(status: Any) -> bool:
     """True for a final order status. 'partially_filled' is NOT terminal (it also ends in 'filled')."""
     st = str(status or "").lower().split(".")[-1]
     return st in _TERMINAL
+
+
+# ── SWING-RATCHET-1105: profit-lock stop (pure functions, unit-tested) ─────────────────────────────
+def _ord_status(o: Any) -> str:
+    st = getattr(o, "status", "")
+    return str(getattr(st, "value", st) or "").lower().split(".")[-1]
+
+
+def _ord_field(o: Any, name: str) -> str:
+    v = getattr(o, name, "")
+    return str(getattr(v, "value", v) or "").lower()
+
+
+def _is_sell_stop(o: Any) -> bool:
+    typ = _ord_field(o, "order_type") or _ord_field(o, "type")
+    return _ord_field(o, "side").endswith("sell") and "stop" in typ
+
+
+def _validate_ratchet_params(d: Any) -> Optional[dict]:
+    """Schema check of the replay-produced parameter record: version 1, finite trigger > 0, 0 <= lock < trigger, finite
+    tick > 0. None on any failure (→ the last valid version, else no ratchet)."""
+    if not isinstance(d, dict) or d.get("version") != 1:
+        return None
+    raw = [d.get("trigger_r"), d.get("lock_r"), d.get("tick_usd")]
+    nums = [float(x) for x in raw if isinstance(x, (int, float)) and not isinstance(x, bool)]
+    if len(nums) != len(raw) or not _finite(*nums):
+        return None
+    trig, lock, tick = nums
+    if not (trig > 0 and 0 <= lock < trig and tick > 0):
+        return None
+    return {"trigger_r": trig, "lock_r": lock, "tick_usd": tick, "variant": d.get("variant"),
+            "produced": d.get("produced"), "trial_count": d.get("trial_count")}
+
+
+def _ratchet_last_valid_path() -> Path:
+    return _STATE.parent / "swing_ratchet_params.last_valid.json"
+
+
+def load_ratchet_params() -> tuple[Optional[dict], str]:
+    """(params, source). The replay file when valid (its copy is kept as the last valid version, written atomically);
+    else the last valid version; else (None, reason) — no ratchet (today's behaviour), the caller pages."""
+    why = "parameter file missing"
+    try:
+        raw = json.loads(_RATCHET_PARAMS.read_text())
+        p = _validate_ratchet_params(raw)
+        if p is not None:
+            try:
+                lv = _ratchet_last_valid_path()
+                if not lv.exists() or json.loads(lv.read_text()) != raw:
+                    os.makedirs(lv.parent, exist_ok=True)
+                    tmp = lv.with_suffix(f".tmp{os.getpid()}")
+                    with open(tmp, "w", encoding="utf-8") as f:
+                        json.dump(raw, f, indent=1)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    os.replace(tmp, lv)
+            except Exception as e:
+                logger.warning("swing ratchet: last-valid parameter copy not written (%s)", e)
+            return p, "file"
+        why = "parameter file invalid"
+    except Exception as e:
+        why = f"parameter file unreadable ({e})"
+    try:
+        p = _validate_ratchet_params(json.loads(_ratchet_last_valid_path().read_text()))
+        if p is not None:
+            return p, f"last_valid ({why})"
+    except Exception as e:
+        logger.warning("swing ratchet: last-valid parameters unreadable (%s)", e)
+    return None, why
+
+
+def tick_ceil(x: float, tick: float) -> float:
+    """Round UP to the tick (a lock level never sits below entry + lock × R), to the cent."""
+    return round(math.ceil(round(x / tick, 6)) * tick, 2)
+
+
+def tick_floor(x: float, tick: float) -> float:
+    """Round DOWN to the tick (a level set under the bid), to the cent."""
+    return round(math.floor(round(x / tick, 6)) * tick, 2)
+
+
+def reprotect_coid(lot_coid: Any, seq: Any) -> Optional[str]:
+    """Deterministic re-protection client_order_id (design rev 9): IN-rp-<first 24 hex of sha256(lot coid)>-<seq>.
+    Only [A-Za-z0-9-], keeps the tier's IN- tag. None (→ no order, paged) when the sequence is not a non-negative int,
+    the lot coid is empty, or the id would exceed Alpaca's 48-character limit."""
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        return None
+    if not isinstance(lot_coid, str) or not lot_coid:
+        return None
+    cid = f"IN-rp-{hashlib.sha256(lot_coid.encode('utf-8')).hexdigest()[:_RP_HASH_DIGITS]}-{seq}"
+    return cid if len(cid) <= _ALPACA_CLIENT_ID_API_CHARS else None
+
+
+def ratchet_armed(df, entry_date: str, entry_px: float, risk_ps: float, trigger_r: float,
+                  tick: float) -> Optional[dict]:
+    """Armed when a COMPLETED daily close on/after the entry date reached entry + trigger × R, that level rounded UP
+    to the tick (cold review L1: 142.58 + 2 × 19.85 must arm on a 182.28 close despite float error). `df` holds
+    completed bars only (fetch_closed_bars). An empty entry date never arms. None on unreadable input (→ retried,
+    never armed blind)."""
+    try:
+        if df is None or not _finite(entry_px, risk_ps, trigger_r, tick) or risk_ps <= 0 or tick <= 0:
+            return None
+        trigger_px = tick_ceil(float(entry_px) + float(trigger_r) * float(risk_ps), tick)
+        if not entry_date:
+            return {"armed": False, "max_close": None, "trigger_px": trigger_px, "armed_session": None,
+                    "last_session": None, "why": "no entry date"}
+        rows = [(str(t)[:10], float(c)) for t, c in zip(df.index, df["close"].astype(float), strict=True) if str(t)[:10] >= entry_date]
+        rows = [(d, c) for d, c in rows if math.isfinite(c)]
+        if not rows:
+            return {"armed": False, "max_close": None, "trigger_px": trigger_px, "armed_session": None,
+                    "last_session": None}
+        hit = next((d for d, c in rows if c >= trigger_px), None)
+        return {"armed": hit is not None, "max_close": max(c for _, c in rows), "trigger_px": trigger_px,
+                "armed_session": hit, "last_session": rows[-1][0]}
+    except Exception:
+        return None
+
+
+def ratchet_target(entry_px: float, risk_ps: float, cur_stop: float, bid: float, lock_r: float, tick: float) -> dict:
+    """target = max(current stop, min(lock_px, bid − one tick)), lock_px = entry + lock × R rounded UP to the tick; the
+    level under the bid rounded DOWN. `raise_` only when the target is strictly above the current stop (never down)."""
+    lock_px = tick_ceil(float(entry_px) + float(lock_r) * float(risk_ps), tick)
+    under = tick_floor(float(bid) - tick, tick)
+    cur = round(float(cur_stop), 2)
+    target = round(max(cur, min(lock_px, under)), 2)
+    return {"lock_px": lock_px, "under_bid_px": under, "target": target, "cur_stop": cur,
+            "raise_": target > cur and target > 0}
+
+
+def _stop_exit_label(rec: dict, order_id: str, partial: bool = False) -> str:
+    """Exit label by PROVENANCE (rev 4 item 1): a fill of an order the ratchet placed or moved to is a ratchet stop;
+    every other stop fill stays a protective stop. One helper for every booking site (rev 4 item 10b)."""
+    rt = rec.get("ratchet") or {}
+    ids = list(rt.get("order_ids") or []) + list(rt.get("chain_ids") or []) + [str(rt.get("new_order_id") or "")]
+    base = "ratchet_stop" if order_id and order_id in ids else "protective_stop"
+    return f"{base}_partial" if partial else base
 
 
 class SwingBreakoutManager:
@@ -1093,7 +1372,8 @@ class SwingBreakoutManager:
             stop_dist = float(config.SWING_BREAKOUT_STOP_ATR) * float(sig.get("atr") or 0.0)
         stop_px = round(px - float(stop_dist), 2)
         rec.update(status="open", qty=int(filled), entry_px=px, stop_px=stop_px, stop_order_id="",
-                   opened_ts=time.time(), risk_usd=round(int(filled) * (px - stop_px), 2))
+                   opened_ts=time.time(), risk_usd=round(int(filled) * (px - stop_px), 2),
+                   init_stop_px=stop_px, init_risk_ps=round(px - stop_px, 6))   # immutable per lot (RATCHET rev 4)
         _save_state(state)
         _log("entry", symbol, price=px, size=int(filled), direction="long", stop=stop_px,
              limit=rec.get("limit"), sizing=rec.get("sizing"), signal=sig, trade_id=rec.get("coid"),
@@ -1108,6 +1388,12 @@ class SwingBreakoutManager:
         every cycle. A price already through the stop → the lot is closed instead (depth guard: once)."""
         from execution import broker
         if rec.get("status") == "closed":
+            return False
+        if self._ratchet_owns(rec, state, symbol=symbol):
+            # SWING-RATCHET-1105 rev 7 item 3: the ratchet's own reconcile owns this lot's stop until broker truth is
+            # proven — placing a second stop here could duplicate it (only within the session it started, R3-3)
+            logger.warning("[%s] breakout re-protect deferred: ratchet %s owns the stop", symbol,
+                           (rec.get("ratchet") or {}).get("status"))
             return False
         held = self._broker_qty(symbol)
         if held is None:
@@ -1132,11 +1418,47 @@ class SwingBreakoutManager:
             rec["partial_pnl_unknown"] = True
             _page(f"[{symbol}] breakout lot expected {want_qty} sh but the broker holds {held} — protecting {qty}; "
                   f"{int(want_qty) - qty} sh unaccounted (P&L marked unknown); check fills")
+        ls = self._lot_stops(symbol, rec)
+        stop_qty = qty                               # the lot keeps `qty`; the stop may cover only part of it (R7-2)
+        if ls is not None:
+            # R10-2: ONE own stop per lot. An own stop of this lot already live (other than the dead id) is adopted —
+            # _topup_cover sizes it — never a second stop next to it
+            dead = str(rec.get("stop_order_id") or "")
+            own_live = [x for x in ls["own"] if str(getattr(x, "id", "")) != dead]
+            if len(own_live) == 1:
+                px0 = float(getattr(own_live[0], "stop_price", 0) or 0)
+                rec.update(status="open", unprotected=False, stop_order_id=str(getattr(own_live[0], "id", "")),
+                           stop_px=round(px0, 2) if px0 > 0 else rec.get("stop_px"))
+                _save_state(state)
+                logger.info("[%s] breakout: this lot's live stop %s adopted (no second stop)", symbol,
+                            rec["stop_order_id"])
+                return True
+            if len(own_live) > 1 or ls["own_trans"]:
+                rec.update(unprotected=True)
+                _page_throttled(rec, f"CRITICAL [{symbol}] lot {rec.get('coid')}: {len(own_live)} own stop(s) live / "
+                                     f"{len(ls['own_trans'])} in transition — no further stop placed; review")
+                _save_state(state)
+                return False
+        if ls is not None and ls["owner"]:
+            covers, uncovered = self._owner_cover(symbol, ls["owner"], held, qty, rec)
+            if covers or uncovered < 1:
+                # R6-1: an owner (untagged) stop already holds these shares — protection, never re-protected over
+                self._owner_protects(symbol, rec, state, ls["owner"], held)
+                return True
+            self._clear_owner_snapshot(rec)          # R10-4: full cover has ended
+            stop_qty = min(qty, uncovered)           # R7-2: this lot's own stop for what the owner stop leaves
+            # R8-1a: a PARTIAL owner cover is never recorded as this lot's protection (owner_stop_ids); it is tracked
+            # apart, only so a real broker reduction behind it can be booked under the R8-1b cap
+            rec["owner_partial_ids"] = sorted(str(getattr(o, "id", "")) for o in ls["owner"])
+        elif ls is not None:
+            self._clear_owner_snapshot(rec)          # R10-4: no owner stop at all — no cover snapshot
+        stop_qty = max(min(stop_qty, qty), 0)        # never above min(lot qty, broker qty)
         stop_px = float(rec.get("stop_px") or 0.0)
         o: Any = None
         if stop_px > 0:
             try:
-                o = broker.submit_gtc_stop_order(symbol, qty, "sell", stop_px, tier=TIER, allow_cancel_blocking=False)
+                o = broker.submit_gtc_stop_order(symbol, stop_qty, "sell", stop_px, tier=TIER,
+                                                 allow_cancel_blocking=False)
             except Exception as e:
                 logger.warning("[%s] breakout stop submit raised: %s", symbol, e)
                 o = None
@@ -1144,15 +1466,20 @@ class SwingBreakoutManager:
         if o is not None and held_sentinel is not None and o is held_sentinel:
             # a stable live reducing order already holds these shares (typically this lot's own stop that a read
             # could not see) — protected; nothing cancelled. The next cycle re-checks.
-            rec.update(status="open", qty=qty, unprotected=False, stop_order_id=self._find_resting_stop(symbol, qty))
+            rec.update(status="open", qty=qty, unprotected=False,
+                       stop_order_id=self._find_resting_stop(symbol, stop_qty))
             _save_state(state)
             logger.info("[%s] breakout stop not placed: shares already held by a live reducing order (%s)",
                         symbol, rec["stop_order_id"] or "id not found")
             return True
         if o is not None and getattr(o, "id", None):
             rec.update(status="open", qty=qty, unprotected=False, stop_order_id=str(getattr(o, "id", "")))
+            rt = rec.get("ratchet") or {}
+            if rt.get("ratchet_stop_px") is not None and round(stop_px, 2) == round(float(rt["ratchet_stop_px"]), 2):
+                # re-placed at the ratchet's own level: a fill is still a ratchet stop (provenance, masked-loss seat)
+                rt.setdefault("order_ids", []).append(rec["stop_order_id"])
             _save_state(state)
-            logger.info("[%s] breakout lot protected: %d sh, GTC stop %.2f", symbol, qty, stop_px)
+            logger.info("[%s] breakout lot protected: %d of %d sh, GTC stop %.2f", symbol, stop_qty, qty, stop_px)
             return True
         unknown_sentinel = getattr(broker, "PROTECTION_UNKNOWN", None)
         if o is not None and unknown_sentinel is not None and o is unknown_sentinel:
@@ -1214,9 +1541,13 @@ class SwingBreakoutManager:
             logger.warning("swing_breakout: clock read failed (%s) — treating the market as closed", e)
             return False
 
+    @classmethod
+    def _last_trade(cls, symbol: str) -> float:
+        return cls._last_trade_and_age(symbol)[0]
+
     @staticmethod
-    def _last_trade(symbol: str) -> float:
-        """The last trade price (T1 Alpaca Data), or NaN when unavailable or older than SWING_LAST_TRADE_MAX_AGE_S.
+    def _last_trade_and_age(symbol: str) -> tuple[float, float]:
+        """(last trade or NaN, the tier's price-age bound in seconds, NaN when not reached). The last trade price (T1 Alpaca Data), or NaN when unavailable or older than SWING_LAST_TRADE_MAX_AGE_S.
         Price-movement decisions (stop breached, trend break) use the last trade, never the IEX bid/ask, which swings
         wildly (CEO 2026-10-09; 10/07-08 Day-tier logs: MU's IEX spread went $3.50 -> $37.86 two minutes apart). A
         stale print (board Harris+Taleb: a thin name's last IEX print can be hours old) counts as unavailable, so the
@@ -1226,18 +1557,18 @@ class SwingBreakoutManager:
             from data.alpaca_data import get_latest_trade_with_time
             r = get_latest_trade_with_time(symbol)
             if r is None:
-                return float("nan")
+                return float("nan"), float("nan")
             px, ts = float(r[0]), r[1]
             age = (datetime.now(timezone.utc) - ts).total_seconds()
             max_age = float(_cfg("SWING_LAST_TRADE_MAX_AGE_S", 180))  # PROV:swing-last-trade-2026-10-09
             if not (-5.0 <= age <= max_age):
                 logger.warning("[%s] breakout last trade %.2f is %.0fs old (> %.0fs) — treated as unavailable",
                                symbol, px, age, max_age)
-                return float("nan")
-            return px if math.isfinite(px) and px > 0 else float("nan")
+                return float("nan"), max_age
+            return (px if math.isfinite(px) and px > 0 else float("nan")), max_age
         except Exception as e:
             logger.warning("[%s] breakout last-trade read failed: %s", symbol, e)
-            return float("nan")
+            return float("nan"), float("nan")
 
     @classmethod
     def _price_through_stop(cls, symbol: str, stop_px: float) -> bool:
@@ -1259,12 +1590,19 @@ class SwingBreakoutManager:
             return []
         self._reconcile(state)
         now = now or datetime.now(ET)          # call-time clock by default (the hook runs mid-cycle)
+        self._ratchet(state, now)              # SWING-RATCHET-1105: after reconcile, before the near-close return
         if not self._near_close(now):
             return []
         today = now.strftime("%Y-%m-%d")
         closed: list[str] = []
         for s, rec in list(state["positions"].items()):
             if rec.get("status") != "open" or rec.get("exit_checked") == today:
+                continue
+            if self._ratchet_owns(rec, state, now=now, symbol=s):
+                # an unconfirmed ratchet replace from THIS session owns the stop; an older one is released and never
+                # defers the trend / max-hold exits (R3-3, R4-1b)
+                logger.warning("[%s] breakout exit check deferred: ratchet %s unconfirmed", s,
+                               rec["ratchet"].get("status"))
                 continue
             try:
                 df = self._bars(s)
@@ -1310,6 +1648,7 @@ class SwingBreakoutManager:
             _page(f"[{symbol}] breakout exit ({reason}) deferred — stop cancel not confirmed; GTC stop still protects the lot")
             return False
         if stop_id:
+            stop_id = self._resolve_stop_id(stop_id)   # a stop moved in place leaves its old id "replaced"
             final = self._final_fill(stop_id)
             if final is None:
                 # the stop is confirmed cancelled but its fill is unreadable: never sell blind (a fired stop plus
@@ -1319,13 +1658,16 @@ class SwingBreakoutManager:
                                      f"unreadable; the lot may be UNPROTECTED — resolving each cycle")
                 _save_state(state)
                 return False
-            filled, px = final
+            filled, px = _net_fill(rec, stop_id, *final)   # never re-book what the ratchet booked (R3-2)
             qty = int(rec.get("qty") or 0)
             if filled >= qty > 0 and px > 0:   # the stop fired during the cancel
-                self._book_exit(symbol, rec, state, "protective_stop", px, filled)
+                _mark_booked(rec, stop_id, *final)        # every owner dedupes on this (R4-1a)
+                self._book_exit(symbol, rec, state, self._exit_label(rec, stop_id), px, filled)
                 return True
             if 0 < filled < qty:
-                self._book_partial(symbol, rec, state, px, filled, "protective_stop_partial", clear_key="stop_order_id")
+                _mark_booked(rec, stop_id, *final)
+                self._book_partial(symbol, rec, state, px, filled, self._exit_label(rec, stop_id, partial=True),
+                                   clear_key="stop_order_id")
             rec["stop_order_id"] = ""           # cancelled and fully accounted
             _save_state(state)
         qty = int(rec.get("qty") or 0)
@@ -1353,9 +1695,11 @@ class SwingBreakoutManager:
                     return False
                 filled, px = max(filled, r[0]), (r[1] or px)
             if filled >= qty and px > 0:
+                _mark_booked(rec, oid, filled, px)
                 self._book_exit(symbol, rec, state, reason, px, filled, **ctx)
                 return True
             if 0 < filled < qty and px > 0:
+                _mark_booked(rec, oid, filled, px)
                 self._book_partial(symbol, rec, state, px, filled, f"{reason}_partial", clear_key="close_order_id")
             rec["close_order_id"] = ""
             _save_state(state)
@@ -1368,6 +1712,11 @@ class SwingBreakoutManager:
         """Book a PARTIAL sale of this lot: its P&L is added to the lot's running realized P&L (so the final
         exit never books only the remainder) and the lot's qty shrinks by what sold. `clear_key` (the order-id
         field that produced the fill) is cleared in the SAME save, so a crash can never re-book the leg."""
+        lot_q = int(rec.get("qty") or 0)
+        if int(filled) > lot_q:
+            _page(f"CRITICAL [{symbol}] lot {rec.get('coid')}: partial fill of {filled} sh exceeds the lot's {lot_q} — "
+                  f"only {lot_q} booked (R10-3)")
+            filled = lot_q
         entry = float(rec.get("entry_px") or 0.0)
         # an ESTIMATED entry price never produces a P&L number (never fabricate — booked unknown instead)
         pnl = (round((px - entry) * filled, 2) if entry > 0 and px > 0 and not rec.get("entry_px_estimated")
@@ -1376,6 +1725,16 @@ class SwingBreakoutManager:
             rec["partial_pnl"] = round(float(rec.get("partial_pnl") or 0.0) + pnl, 2)
         else:
             rec["partial_pnl_unknown"] = True
+        if reason.removesuffix("_partial") in _STOP_FAMILY:     # every stop-family leg, *_unprotected_partial too
+            # SWING-RATCHET-1105 R3-1: every stop leg's gap excess (the stop level at that moment vs this leg's fill),
+            # qty-weighted, so a deep gap on an early leg is never lost when a later leg fills at its stop
+            legs = rec.setdefault("stop_legs", {"qty": 0, "mult_qty": 0.0})
+            m = _gap_mult(rec.get("stop_px"), px, _entry_risk_ps(rec))
+            if m is None:
+                legs["unknown"] = True
+            else:
+                legs["qty"] = int(legs.get("qty") or 0) + int(filled)
+                legs["mult_qty"] = round(float(legs.get("mult_qty") or 0.0) + int(filled) * m, 6)
         rec["qty"] = max(int(rec.get("qty") or 0) - int(filled), 0)
         if clear_key:
             rec[clear_key] = ""
@@ -1384,7 +1743,13 @@ class SwingBreakoutManager:
              trade_id=rec.get("coid"), entry_px_estimated=bool(rec.get("entry_px_estimated")))
 
     def _book_exit(self, symbol: str, rec: dict, state: dict, reason: str, px: float, qty: int, **ctx) -> None:
-        """Final exit. realized_pnl = this fill's P&L + every partial booked earlier (None if any part is unknown)."""
+        """Final exit. realized_pnl = this fill's P&L + every partial booked earlier (None if any part is unknown).
+        R10-3: never more shares than the lot holds — any excess is paged CRITICAL and never booked to the lot."""
+        lot_q = int(rec.get("qty") or 0)
+        if lot_q > 0 and int(qty) > lot_q:
+            _page(f"CRITICAL [{symbol}] lot {rec.get('coid')}: exit fill of {qty} sh exceeds the lot's {lot_q} — only "
+                  f"{lot_q} booked to the lot; check the other {int(qty) - lot_q}")
+            qty = lot_q
         entry = float(rec.get("entry_px") or 0.0)
         leg = (round((px - entry) * qty, 2) if entry > 0 and px > 0 and not rec.get("entry_px_estimated")
                else None)
@@ -1415,11 +1780,21 @@ class SwingBreakoutManager:
                                      f"confirmed cancelled — a resting sell stop on a flat symbol; retrying each cycle")
                 _save_state(state)
                 return
-            final = self._final_fill(stop_id)
             qty = int(rec.get("qty") or 0)
-            if final is not None and final[0] >= qty > 0 and final[1] > 0:
-                self._book_exit(symbol, rec, state, "protective_stop", final[1], final[0])
-                return
+            # the stop actually in force (a moved stop's old id reads "replaced"), then the ratchet's own new order
+            for fid in dict.fromkeys([self._resolve_stop_id(stop_id), stop_id,
+                                      str((rec.get("ratchet") or {}).get("new_order_id") or "")]):
+                raw = self._final_fill(fid) if fid else None
+                final = _net_fill(rec, fid, *raw) if raw is not None else None
+                if raw is not None and final is not None and final[0] >= qty > 0 and final[1] > 0:
+                    _mark_booked(rec, fid, *raw)                  # every owner dedupes on this (R4-1a)
+                    self._book_exit(symbol, rec, state, self._exit_label(rec, fid), final[1], final[0])
+                    return
+        if rec.get("owner_stop_ids") or rec.get("owner_partial_ids"):
+            # R7-1: the owner's stop protecting this lot may be what sold it — book its fill, never "unknown"
+            got = self._book_owner_fills(symbol, rec, state)
+            if got is None or got or rec.get("status") == "closed":
+                return                               # booked, or an owner fill unreadable: stays unverified, paged
         close_id = str(rec.get("close_order_id") or "")
         if close_id:
             # a restart between our close submit and its booking: book the REAL close fill, not "unknown"
@@ -1427,10 +1802,13 @@ class SwingBreakoutManager:
             r = self._settle(close_id)
             if r is not None and r[2] and r[0] > 0 and r[1] > 0:
                 reason = str(rec.get("exit_reason_pending") or "close")
-                if r[0] >= int(rec.get("qty") or 0):
-                    self._book_exit(symbol, rec, state, reason, r[1], r[0])
-                    return
-                self._book_partial(symbol, rec, state, r[1], r[0], f"{reason}_partial", clear_key="close_order_id")
+                nq, npx = _net_fill(rec, close_id, r[0], r[1])
+                if nq > 0 and npx > 0:
+                    _mark_booked(rec, close_id, r[0], r[1])
+                    if nq >= int(rec.get("qty") or 0):
+                        self._book_exit(symbol, rec, state, reason, npx, nq)
+                        return
+                    self._book_partial(symbol, rec, state, npx, nq, f"{reason}_partial", clear_key="close_order_id")
         _page(f"[{symbol}] breakout lot of {rec.get('qty')} sh is GONE at the broker without a stop fill — "
               f"booked as an unverified external close (P&L unknown); check fills")
         rec.update(status="closed", exit_reason="external_close_unverified", realized_pnl=None, stop_order_id="",
@@ -1456,26 +1834,47 @@ class SwingBreakoutManager:
                     continue
                 if st != "open":
                     continue
+                if self._ratchet_owns(rec, state, symbol=s):
+                    continue                       # the ratchet's reconcile owns this lot's stop and its fills
+                if rec.get("owner_stop_ids") or rec.get("owner_partial_ids"):
+                    # R7-1 / R8-4: an owner stop's fill is booked to the lot only for lot shares that actually left
+                    # (R8-1b); an unreadable owner order books nothing (paged) and protection still runs below
+                    got = self._book_owner_fills(s, rec, state)
+                    if got or rec.get("status") == "closed":
+                        continue
                 qty = int(rec.get("qty") or 0)
                 stop_id = str(rec.get("stop_order_id") or "")
                 if not stop_id or rec.get("unprotected"):
                     self._reprotect(s, rec, state, qty)
                     continue
-                r = self._read_order(stop_id)
+                # R5-1: read the stop actually in force — a stop moved in place leaves its old id "replaced" (filled 0,
+                # never terminal), which would hide the new order's fills and leave the shares without a stop
+                stop_id, so = self._resolve_lot_stop(s, rec, state)
+                if so is not None and _ord_status(so) == "replaced":
+                    self._unresolved_chain(s, rec, state, qty)
+                    continue
+                r = self._order_fill(so) if so is not None else self._read_order(stop_id)
                 if r is None:
                     continue                       # unreadable this cycle: no action (stop presumed resting)
-                filled, px, terminal = r
+                cum_filled, cum_px, terminal = r
+                filled, px = _net_fill(rec, stop_id, cum_filled, cum_px)   # never re-book a ratchet-booked fill (R3-2)
                 if filled >= qty > 0 and px > 0:
-                    self._book_exit(s, rec, state, "protective_stop", px, filled)
+                    _mark_booked(rec, stop_id, cum_filled, cum_px)   # every owner dedupes on this (R4-1a)
+                    # R10-3: never more than the lot (an excess is paged by _book_exit)
+                    self._book_exit(s, rec, state, self._exit_label(rec, stop_id), px, filled)
                     continue
                 if terminal:
                     # the stop ended without covering the lot (cancelled by another path, expired, rejected)
                     if 0 < filled < qty and px > 0:
-                        self._book_partial(s, rec, state, px, filled, "protective_stop_partial", clear_key="stop_order_id")
+                        _mark_booked(rec, stop_id, cum_filled, cum_px)
+                        self._book_partial(s, rec, state, px, filled, self._exit_label(rec, stop_id, partial=True),
+                                           clear_key="stop_order_id")
                     rec["stop_order_id"] = ""
                     _page_throttled(rec, f"[{s}] breakout stop {stop_id} ENDED with {filled}/{qty} filled — re-protecting")
                     self._reprotect(s, rec, state, int(rec.get("qty") or 0))
                     continue
+                if so is not None:
+                    self._topup_cover(s, rec, state, so)      # R9-1: a part-size own stop re-checks its cover
                 if 0 < filled < qty and not rec.get("partial_stop_paged"):
                     # a resting stop that partly filled still covers the rest; flag once for review
                     rec["partial_stop_paged"] = True
@@ -1494,20 +1893,1179 @@ class SwingBreakoutManager:
             oid = str(rec.get(key) or "")
             if not oid:
                 continue
+            if key == "stop_order_id":
+                oid = self._resolve_stop_id(oid)         # follow a moved stop to the order in force
+                label = self._exit_label(rec, oid)
             r = self._settle(oid)
             if r is None or not r[2]:
                 return                                   # still unreadable / working: retry next cycle
-            filled, px, _ = r
+            filled, px = _net_fill(rec, oid, r[0], r[1])
             qty = int(rec.get("qty") or 0)
             if filled >= qty > 0 and px > 0:
+                _mark_booked(rec, oid, r[0], r[1])           # every owner dedupes on this (R4-1a)
                 self._book_exit(symbol, rec, state, label, px, filled)
                 return
             if 0 < filled < qty and px > 0:
+                _mark_booked(rec, oid, r[0], r[1])
                 self._book_partial(symbol, rec, state, px, filled, f"{label}_partial", clear_key=key)
             rec[key] = ""
             _save_state(state)
         if self._reprotect(symbol, rec, state, int(rec.get("qty") or 0), depth=1):
             _page(f"[{symbol}] breakout lot re-protected ({rec.get('qty')} sh, GTC stop {rec.get('stop_px')}) after an unverified exit")
+
+    # ── SWING-RATCHET-1105: profit-lock stop (regular hours, every cycle) ───────
+    @staticmethod
+    def _resolve_stop_id(order_id: str) -> str:
+        """The id of the order in force at the end of `order_id`'s replaced_by chain; `order_id` itself when the chain
+        cannot be read (the caller then reads that id, as before this change)."""
+        from execution import broker
+        fn = getattr(broker, "resolve_live_order", None)
+        if not order_id or fn is None:
+            return order_id
+        try:
+            o, oid = fn(order_id)
+            return str(oid or order_id) if o is not None else order_id
+        except Exception as e:
+            logger.warning("swing_breakout: replaced-chain read for %s failed: %s", order_id, e)
+            return order_id
+
+    def _resolve_lot_stop(self, s: str, rec: dict, state: Optional[dict]) -> tuple[str, Any]:
+        """(id, order) of the lot's stop actually in force: its replaced_by chain followed to the end (R5-1). A moved
+        id is persisted to stop_order_id together with that order's stop level (broker truth). (state id, None) when
+        the chain cannot be read or the broker module has no chain reader — the caller then reads the id as before."""
+        from execution import broker
+        sid = str(rec.get("stop_order_id") or "")
+        fn = getattr(broker, "resolve_live_order", None)
+        if not sid or fn is None:
+            return sid, None
+        try:
+            o, oid = fn(sid)
+        except Exception as e:
+            logger.warning("[%s] breakout stop chain read for %s failed: %s", s, sid, e)
+            return sid, None
+        if o is None:
+            return sid, None
+        oid = str(oid or sid)
+        if oid != sid:
+            rec["stop_order_id"] = oid
+            px = float(getattr(o, "stop_price", 0) or 0)
+            if _finite(px) and px > 0:
+                rec["stop_px"] = round(px, 2)
+            if state is not None:
+                _save_state(state)
+            logger.info("[%s] breakout stop %s was moved in place — now reading %s (%s)", s, sid, oid, _ord_status(o))
+        return oid, o
+
+    @staticmethod
+    def _order_fill(o: Any) -> Optional[tuple[int, float, bool]]:
+        """(filled_qty, avg_price, is_terminal) from an order already read; None when it is unparseable."""
+        try:
+            return (int(float(getattr(o, "filled_qty", 0) or 0)), float(getattr(o, "filled_avg_price", 0) or 0),
+                    _is_terminal(getattr(o, "status", "")))
+        except (TypeError, ValueError):
+            return None
+
+    def _unresolved_chain(self, s: str, rec: dict, state: dict, qty: int) -> None:
+        """The stop chain ends at a "replaced" order whose successor cannot be read (R5-1). Never left silently
+        unprotected: shares held and no live own stop → re-protect now (allow_cancel_blocking=False inside _reprotect);
+        exactly one live own stop for the qty → adopted; anything else → paged, re-checked next cycle."""
+        held = self._broker_qty(s)
+        ls = self._lot_stops(s, rec)
+        if held is None or ls is None:
+            _page_throttled(rec, f"[{s}] breakout stop chain unreadable and the position / orders too — re-checking")
+            _save_state(state)
+            return
+        if held == 0:
+            if self._confirmed_gone(s, rec):
+                self._book_gone(s, rec, state)
+            return
+        want = self._tier_held(s, rec, held)
+        trans = ls["own_trans"] + ls["owner_trans"]
+        if trans:
+            _page_throttled(rec, f"[{s}] breakout stop chain unreadable; a sell stop is {_ord_status(trans[0])} — waiting")
+            _save_state(state)
+            return
+        own = ls["own"]
+        if own:
+            # R8-3: this lot's own stop may be the partial-cover size (what the owner stop leaves uncovered)
+            ok_qty = {want}
+            if ls["owner"]:
+                ok_qty.add(self._owner_cover(s, ls["owner"], held, want, rec)[1])
+            if len(own) == 1 and int(float(getattr(own[0], "qty", 0) or 0)) in ok_qty:
+                px = float(getattr(own[0], "stop_price", 0) or 0)
+                rec.update(stop_order_id=str(getattr(own[0], "id", "")), unprotected=False,
+                           stop_px=round(px, 2) if px > 0 else rec.get("stop_px"))
+                _save_state(state)
+                return
+            _page_throttled(rec, f"[{s}] breakout stop chain unreadable; {len(own)} own sell stop(s) not matching "
+                                 f"{want} sh — review")
+            _save_state(state)
+            return
+        if ls["owner"] and self._owner_cover(s, ls["owner"], held, want, rec)[0]:
+            self._owner_protects(s, rec, state, ls["owner"], held)
+            return
+        lot_q = int(rec.get("qty") or 0)
+        maybe = [o for o in ls["other"] if int(float(getattr(o, "qty", 0) or 0)) == lot_q]
+        if maybe:
+            # R6-4: with the chain unresolved, an IN- stop for exactly the lot's qty may be this lot's own successor —
+            # never place a second stop over it
+            _page_throttled(rec, f"[{s}] lot {rec.get('coid')}: stop chain unreadable; IN- stop "
+                                 f"{getattr(maybe[0], 'id', '?')} for {lot_q} sh may be this lot's — no second stop placed")
+            _save_state(state)
+            return
+        # an owner stop that covers only the owner's own shares leaves this lot's shares to this lot's stop (R7-2):
+        # _reprotect sizes it to the uncovered qty
+        _page_throttled(rec, f"[{s}] lot {rec.get('coid')}: stop chain unreadable and NO live stop for {want} sh — "
+                             f"re-protecting now")
+        rec.update(stop_order_id="", unprotected=True)
+        _save_state(state)
+        self._reprotect(s, rec, state, want, depth=1)  # depth 1: never a market close from an unresolved chain (R6-3)
+
+    @staticmethod
+    def _rt_status(rt: dict, status: str, reason: str = "") -> None:
+        """Move the lot's ratchet state; any transition resets the per-(lot, status) page dedupe (rev 8 item 3)."""
+        if rt.get("status") != status:
+            rt.pop("page_key", None)
+            rt.pop("page_session", None)
+        rt["status"] = status
+        if reason:
+            rt["reason"] = reason
+
+    @staticmethod
+    def _rt_page(rec: dict, key: str, msg: str, today: str) -> None:
+        """Page once per (lot, key) per session; repeats inside the session go to the log only."""
+        rt = rec.setdefault("ratchet", {})
+        if rt.get("page_key") == key and rt.get("page_session") == today:
+            logger.critical(msg)
+            return
+        rt["page_key"], rt["page_session"] = key, today
+        _page(msg)
+
+    @staticmethod
+    def _rt_log(symbol: str, rec: dict, action: str, reason: str, **kw) -> None:
+        """Decision record (rev 2 item 8, rev 9 item 3): every input of a ratchet decision to trade_events.jsonl."""
+        rt = rec.get("ratchet") or {}
+        price = kw.pop("price", None)
+        _log("stop_ratchet", symbol, price=float(price) if _finite(price) else 0.0, size=int(rec.get("qty") or 0),
+             change=RATCHET_CHANGE, action=action, reason=reason, trade_id=rec.get("coid"),
+             entry_px=rec.get("entry_px"), init_stop_px=rec.get("init_stop_px"), init_risk_ps=rec.get("init_risk_ps"),
+             state_stop_px=rec.get("stop_px"), stop_order_id=rec.get("stop_order_id"),
+             ratchet_status=rt.get("status"), armed_session=rt.get("armed_session"), armed_close=rt.get("armed_close"),
+             trigger_px=rt.get("trigger_px"), target_px=rt.get("target_px"), lock_px=rt.get("lock_px"),
+             old_order_id=rt.get("old_order_id"), old_stop_px=rt.get("old_stop_px"),
+             new_order_id=rt.get("new_order_id"), reprotect_seq=rt.get("reprotect_seq"),
+             reprotect_coid=rt.get("reprotect_coid"), reprotect_px=rt.get("reprotect_px"), **kw)
+
+    def _fresh_bid(self, symbol: str) -> tuple[Optional[float], dict]:
+        """(bid or None, quote facts). Valid only if positive, finite, not crossed, and its own timestamp is within the
+        price-age bound the Swing tier already uses for its last trade (no new number)."""
+        from data.alpaca_data import get_latest_quote
+        facts: dict[str, Any] = {}
+        try:
+            q = get_latest_quote(symbol)
+            if not isinstance(q, dict):
+                return None, {"quote": "unreadable"}
+            bid, ask = float(q.get("bid") or 0), float(q.get("ask") or 0)
+            facts.update(bid=bid, ask=ask, quote_ts=q.get("ts"))
+            if not (_finite(bid, ask) and 0 < bid <= ask):
+                return None, dict(facts, quote="crossed or non-positive")
+            _px, max_age = self._last_trade_and_age(symbol)
+            from datetime import timezone
+            # Alpaca stamps nanoseconds ("...:00.123456789Z"); Python 3.10 parses at most 6 fractional digits
+            raw_ts = re.sub(r"(\.\d{6})\d+", r"\1", str(q.get("ts") or "")).replace("Z", "+00:00")
+            ts = datetime.fromisoformat(raw_ts)
+            if ts.tzinfo is None:
+                return None, dict(facts, quote="timestamp without zone")
+            age = (datetime.now(timezone.utc) - ts).total_seconds()
+            facts.update(quote_age_s=round(age, 1), max_age_s=max_age)
+            if not (_finite(age, max_age) and abs(age) <= max_age):
+                return None, dict(facts, quote="stale")
+            return bid, facts
+        except Exception as e:
+            return None, dict(facts, quote=f"unreadable ({e!r})")
+
+    @staticmethod
+    def _entry_event(symbol: str, coid: str) -> Optional[tuple[float, float]]:
+        """(entry price, entry stop) from this lot's own entry event in trade_events.jsonl; None when absent."""
+        if not coid:
+            return None
+        found = None
+        try:
+            with open(_TRADE_EVENTS, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    if coid not in line or '"entry"' not in line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    if ev.get("event") == "entry" and ev.get("trade_id") == coid and ev.get("symbol") == symbol \
+                            and _finite(ev.get("price"), ev.get("stop")):
+                        found = (float(ev["price"]), float(ev["stop"]))
+        except OSError as e:
+            logger.warning("[%s] swing ratchet: trade events unreadable (%s)", symbol, e)
+            return None
+        return found
+
+    def _init_risk(self, symbol: str, rec: dict, state: dict, today: str) -> Optional[float]:
+        """The lot's immutable entry risk per share. Written at the fill for new lots; an older lot's is rebuilt from
+        its entry event (price and stop only, never the current qty) and must agree with state; else None (no ratchet,
+        paged once per session) — rev 4 item 2, rev 5 item 3."""
+        v = rec.get("init_risk_ps")
+        if v is not None and _finite(v) and float(v) > 0:
+            return float(v)
+        rps = _risk_usd_ps(rec)                      # entry-time $ risk / the unchanged entry qty (cold review M2)
+        if rps is not None:
+            rec["init_risk_ps"] = round(rps, 6)
+            _save_state(state)
+            self._rt_log(symbol, rec, "init_risk", "rebuilt from risk_usd / entry qty", price=rps)
+            return float(rec["init_risk_ps"])
+        rt = rec.setdefault("ratchet", {"status": "idle"})
+        if rt.get("risk_unknown") == today:
+            return None                              # one rebuild attempt per session (the event log is large)
+        rt["risk_unknown"] = today
+        ev = self._entry_event(symbol, str(rec.get("coid") or ""))
+        if ev is None:
+            self._rt_page(rec, "no_entry_record", f"[{symbol}] swing ratchet: entry risk unknown (no entry record for "
+                                                   f"{rec.get('coid')}) — no profit-lock for this lot", today)
+            _save_state(state)
+            return None
+        price, stop = ev
+        ids = (rec.get("ratchet") or {}).get("order_ids") or []
+        stop_state = rec.get("init_stop_px") if rec.get("init_stop_px") is not None else (None if ids else rec.get("stop_px"))
+        if round(price, 2) != round(float(rec.get("entry_px") or 0), 2) or \
+                (stop_state is not None and round(stop, 2) != round(float(stop_state), 2)) or not price > stop:
+            self._rt_page(rec, "entry_record_disagrees",
+                          f"[{symbol}] swing ratchet: entry record (price {price:.2f}, stop {stop:.2f}) disagrees with "
+                          f"state (entry {rec.get('entry_px')}, stop {stop_state}) — no profit-lock until resolved", today)
+            _save_state(state)
+            return None
+        rec.update(init_risk_ps=round(price - stop, 6), init_stop_px=round(stop, 2))
+        rt.pop("risk_unknown", None)
+        _save_state(state)
+        self._rt_log(symbol, rec, "init_risk", "rebuilt from the entry event", price=stop)
+        return float(rec["init_risk_ps"])
+
+    def _ratchet(self, state: dict, now: datetime) -> None:
+        """Regular hours only (Alpaca clock is_open). Missing / invalid parameters (no last valid version) → no ratchet,
+        paged once per session."""
+        if not any(isinstance(r, dict) and r.get("status") == "open" for r in state.get("positions", {}).values()):
+            return
+        if not self._market_open():
+            return
+        today = now.strftime("%Y-%m-%d")
+        params, src = load_ratchet_params()
+        if params is None:
+            if state.get("ratchet_params_paged") != today:
+                state["ratchet_params_paged"] = today
+                _save_state(state)
+                _page(f"swing ratchet OFF this session — {src}; Swing stops keep their current levels")
+            return
+        for s, rec in list(state["positions"].items()):
+            if not isinstance(rec, dict) or rec.get("status") != "open":
+                continue
+            try:
+                self._ratchet_lot(s, rec, state, params, src, today, now)
+            except Exception as e:
+                _page_throttled(rec, f"[{s}] swing ratchet raised (stop unchanged): {e!r}")
+                _save_state(state)
+
+    def _ratchet_lot(self, s: str, rec: dict, state: dict, params: dict, src: str, today: str, now: datetime) -> None:
+        from execution import broker
+        rt = rec.get("ratchet")
+        if not isinstance(rt, dict):
+            rt = rec["ratchet"] = {"status": "idle"}
+        status = rt.get("status") or "idle"
+        if status in ("pending", "reprotect_pending") and not self._ratchet_owns(rec, state, now=now, symbol=s):
+            status = rt.get("status") or "idle"     # released as stale (R4-1b): never reconciled by the ratchet again
+        if status == "pending":
+            self._ratchet_reconcile(s, rec, state, rt, params, today)
+            return
+        if status == "reprotect_pending":
+            self._ratchet_reprotect_check(s, rec, state, rt, params, today, allow_submit=True)
+            return
+        if status == "done":
+            return
+        if status == "stale_released":
+            # once-a-session reminder; the lot is under the normal reconcile / exits, and the ratchet may start a NEW
+            # replace (its own fresh episode) once the stop at the broker reads replaceable again
+            due = rt.get("page_key") != "stale_reminder" or rt.get("page_session") != today
+            self._rt_page(rec, "stale_reminder", f"[{s}] lot {rec.get('coid')}: swing ratchet still released after a "
+                                                 f"stale {rt.get('released_from')} since {rt.get('attempt_ts')} — "
+                                                 f"check the stop at the broker", today)
+            if due:
+                _save_state(state)                   # persist the once-a-session dedupe key
+        if rec.get("close_order_id") or rec.get("exit_reason_pending") or rec.get("unprotected") \
+                or rec.get("partial_stop_paged"):
+            return                                   # an exit / repair owns the lot this cycle
+        qty = int(rec.get("qty") or 0)
+        if qty < 1:
+            return
+        if rec.get("entry_px_estimated"):
+            self._rt_page(rec, "entry_estimated", f"[{s}] swing ratchet: entry price is estimated — no profit-lock", today)
+            _save_state(state)
+            return
+        entry = float(rec.get("entry_px") or 0)
+        if not (_finite(entry) and entry >= 1):
+            return                                   # sub-$1 lots: no sub-penny stops (rev 4 item 7)
+        risk_ps = self._init_risk(s, rec, state, today)
+        if risk_ps is None:
+            return
+        if not rt.get("armed_session"):
+            if rt.get("checked") == today:
+                return                               # one completed-bar check per session
+            a = ratchet_armed(self._bars(s), str(rec.get("entry_date") or ""), entry, risk_ps, params["trigger_r"],
+                              params["tick_usd"])
+            if a is None:
+                return                               # bars unreadable: retried next cycle, never armed blind
+            rt["checked"] = today
+            rt["trigger_px"] = round(a["trigger_px"], 4)
+            if not a["armed"]:
+                _save_state(state)
+                self._rt_log(s, rec, "not_armed", "no completed close at the trigger", price=a["max_close"],
+                             max_close=a["max_close"], last_session=a["last_session"], trigger_r=params["trigger_r"],
+                             params_source=src)
+                return
+            rt.update(armed_session=a["armed_session"], armed_close=a["max_close"])
+            _save_state(state)
+            self._rt_log(s, rec, "armed", "completed close reached the trigger", price=a["max_close"],
+                         trigger_r=params["trigger_r"], params_source=src)
+        tick = params["tick_usd"]
+        orders = broker.get_open_orders(s)
+        if orders is None:
+            logger.warning("[%s] swing ratchet: open orders unreadable — stop unchanged this cycle", s)
+            return
+        stops = [o for o in orders if _is_sell_stop(o)]
+        lock_px = tick_ceil(entry + params["lock_r"] * risk_ps, tick)
+        foreign = [o for o in stops if not str(getattr(o, "client_order_id", "") or "").startswith("IN-")]
+        if foreign:
+            # an owner (untagged) or other-tier stop is never touched (rev 3 item 4)
+            hi = max((float(getattr(o, "stop_price", 0) or 0) for o in foreign), default=0.0)
+            rt["lock_px"] = lock_px
+            if hi >= lock_px:
+                if rt.get("foreign_logged") != today:
+                    rt["foreign_logged"] = today
+                    _save_state(state)
+                    self._rt_log(s, rec, "no_op", "a higher stop not placed by this tier rests — left alone", price=hi,
+                                 foreign_stop_px=hi, foreign_ids=[str(getattr(o, "id", "")) for o in foreign])
+            else:
+                self._rt_page(rec, "foreign_stop", f"[{s}] swing ratchet: a stop not placed by this tier rests at "
+                                                   f"${hi:.2f}, below the ${lock_px:.2f} lock — left alone; review", today)
+                _save_state(state)
+            return
+        qty_ok = [o for o in stops if int(float(getattr(o, "qty", 0) or 0)) == qty]
+        sid = str(rec.get("stop_order_id") or "")
+        live_id = self._resolve_stop_id(sid) if sid else ""
+        live = next((o for o in qty_ok if str(getattr(o, "id", "")) == live_id), None)
+        if live is None:
+            if len(qty_ok) != 1 or len(stops) != 1:
+                self._rt_page(rec, "stop_candidates", f"[{s}] swing ratchet: {len(qty_ok)} IN- sell stop(s) for "
+                                                      f"{qty} sh ({len(stops)} sell stops) — stop unchanged; review", today)
+                _save_state(state)
+                return
+            live = qty_ok[0]
+            rec["stop_order_id"] = str(getattr(live, "id", ""))   # resolved by tag, saved before any replace (rev 3 #11)
+            _save_state(state)
+        live_id = str(getattr(live, "id", ""))
+        ost = _ord_status(live)
+        if ost not in _REPLACEABLE or int(float(getattr(live, "filled_qty", 0) or 0)) != 0:
+            logger.info("[%s] swing ratchet: stop %s is %s — not replaceable this cycle", s, live_id, ost)
+            return
+        cur = float(getattr(live, "stop_price", 0) or 0)
+        if not (_finite(cur) and cur > 0):
+            return
+        if round(cur, 2) != round(float(rec.get("stop_px") or 0), 2):
+            # broker is truth for reading; never lowered (rev 4 item 6)
+            self._rt_page(rec, "stop_mismatch", f"[{s}] swing ratchet: broker stop ${cur:.2f} differs from state "
+                                                f"${float(rec.get('stop_px') or 0):.2f} — broker level used", today)
+        bid, qf = self._fresh_bid(s)
+        if bid is None:
+            logger.info("[%s] swing ratchet: no valid bid (%s) — stop unchanged this cycle", s, qf.get("quote"))
+            return
+        t = ratchet_target(entry, risk_ps, cur, bid, params["lock_r"], tick)
+        rt["lock_px"] = t["lock_px"]
+        if not t["raise_"]:
+            if cur >= t["lock_px"]:
+                self._rt_status(rt, "done", "stop already at or above the lock")
+                _save_state(state)
+                self._rt_log(s, rec, "no_op", "stop already at or above the lock", price=cur, cur_stop=cur, **qf)
+            else:
+                logger.info("[%s] swing ratchet: target %.2f not above the stop %.2f (bid %.2f) — unchanged", s,
+                            t["target"], cur, bid)
+            return
+        if not t["target"] > 0:
+            self._rt_page(rec, "bad_target", f"[{s}] swing ratchet: target ${t['target']} is not positive — no order",
+                          today)
+            _save_state(state)
+            return
+        held = self._broker_qty(s)
+        rt.update(target_px=t["target"], old_order_id=live_id, old_stop_px=cur, new_order_id="",
+                  attempt_ts=now.isoformat(), attempts=int(rt.get("attempts") or 0) + 1)
+        self._rt_status(rt, "pending", "replace sent")
+        if not _save_state(state):
+            self._rt_status(rt, "idle", "state write failed before the replace")
+            _page(f"[{s}] swing ratchet: state not saved — no replace sent (stop unchanged)")
+            return
+        new = broker.replace_stop_order(s, live_id, t["target"])
+        rt["new_order_id"] = str(getattr(new, "id", "") or "") if new is not None else ""
+        _save_state(state)
+        self._rt_log(s, rec, "replace_sent", "completed close reached the trigger", price=t["target"],
+                     cur_stop=cur, under_bid_px=t["under_bid_px"], old_status=ost,
+                     old_qty=int(float(getattr(live, "qty", 0) or 0)), position_qty=held,
+                     new_status=_ord_status(new) if new is not None else None, trigger_r=params["trigger_r"],
+                     lock_r=params["lock_r"], tick=tick, params_source=src, **qf)
+        self._ratchet_reconcile(s, rec, state, rt, params, today)
+
+    @staticmethod
+    def _session_opens(start: date, end: date) -> Optional[list]:
+        """Alpaca-calendar session opens (ET) from `start` to `end`; None when the calendar cannot be read. Cached per
+        (start, end) for the current end date."""
+        key = (start, end)
+        if key in _SESSION_CACHE:
+            hit = _SESSION_CACHE[key]
+            if not (isinstance(hit, tuple) and hit and hit[0] == "fail"):
+                return hit
+            if time.monotonic() - hit[-1] < _PAGE_EVERY_S:
+                return None              # a failed read is cached too: never re-called per lot on the trading thread
+        if any(k[1] != end for k in _SESSION_CACHE):
+            _SESSION_CACHE.clear()
+        try:
+            from execution.swing_overnight import TNBroker
+            opens = [op for _d, op, _c in TNBroker().calendar(start, end)]
+        except Exception as e:
+            logger.warning("swing ratchet: Alpaca calendar unreadable (%s) — ET-date fallback", e)
+            _SESSION_CACHE[key] = ("fail", time.monotonic())
+            return None
+        _SESSION_CACHE[key] = opens
+        return opens
+
+    def _pending_stale(self, rt: dict, now: Optional[datetime] = None) -> bool:
+        """True when the pending state began BEFORE the open of the current session — a session open from the Alpaca
+        calendar lies between attempt_ts and now (R3-3). Unknown age → True (never left unmanaged); an unreadable
+        calendar falls back to the ET date."""
+        now = now or datetime.now(ET)
+        try:
+            t = datetime.fromisoformat(str(rt.get("attempt_ts") or ""))
+            t = t.replace(tzinfo=ET) if t.tzinfo is None else t
+        except ValueError:
+            return True
+        opens = self._session_opens(t.astimezone(ET).date(), now.astimezone(ET).date())
+        if opens is None:
+            return t.astimezone(ET).date() < now.astimezone(ET).date()
+        return any(t < o <= now for o in opens)
+
+    def _ratchet_owns(self, rec: dict, state: Optional[dict] = None, now: Optional[datetime] = None,
+                      symbol: str = "") -> bool:
+        """True while an unconfirmed ratchet replace / re-protection from the CURRENT session owns the lot's stop
+        (_reconcile, _reprotect and the near-close exits stand aside). One from an earlier session is RELEASED the first
+        time it is seen (R4-1b): status → "stale_released", which _ratchet_lot never reconciles, so only the normal
+        paths book this lot's fills from then on. One CRITICAL page per stale episode; _ratchet_lot repeats it once a
+        session while the lot stays released."""
+        rt = rec.get("ratchet") or {}
+        if rt.get("status") not in ("pending", "reprotect_pending"):
+            return False
+        now = now or datetime.now(ET)
+        if not self._pending_stale(rt, now):
+            return True
+        was = rt.get("status")
+        try:
+            self._resolve_lot_stop(symbol, rec, None)  # hand the normal paths the stop actually in force (R5-1)
+        except Exception as e:
+            logger.warning("[%s] swing ratchet: stop chain read at release failed (%s)", symbol, e)
+        self._rt_status(rt, "stale_released", f"{was} since {rt.get('attempt_ts')} — before the current session")
+        rt.update(released_from=was, released_ts=now.isoformat(), page_key="stale_reminder",
+                  page_session=now.strftime("%Y-%m-%d"))
+        if state is not None:
+            _save_state(state)
+        self._rt_log(symbol, rec, "stale_released", f"{was} since {rt.get('attempt_ts')}", price=rec.get("stop_px"))
+        _page(f"[{symbol or '?'}] lot {rec.get('coid')}: swing ratchet {was} since {rt.get('attempt_ts')} (before the "
+              f"current session) — RELEASED to the normal reconcile / exits; check the stop at the broker")
+        return False
+
+    @staticmethod
+    def _own_stop_ids(rec: dict) -> set:
+        rt = rec.get("ratchet") or {}
+        ids = {str(rec.get("stop_order_id") or ""), str(rt.get("old_order_id") or ""), str(rt.get("new_order_id") or "")}
+        ids |= {str(x) for x in (rt.get("order_ids") or [])} | {str(x) for x in (rt.get("chain_ids") or [])}
+        ids.discard("")
+        return ids
+
+    def _chain_ids(self, start_id: str) -> list[str]:
+        """Ids AFTER `start_id` along its replaced_by chain (each read once; a repeated id ends the walk), capped at
+        resolve_live_order's own hop limit."""
+        import inspect
+        from execution import broker
+        try:
+            cap = inspect.signature(broker.resolve_live_order).parameters["max_hops"].default
+            cap = cap if isinstance(cap, int) and not isinstance(cap, bool) else None
+        except Exception:
+            cap = None
+        out: list[str] = []
+        seen, oid = {start_id}, start_id
+        while oid and (cap is None or len(out) < cap):
+            o = broker.get_order(oid)
+            nxt = str(getattr(o, "replaced_by", "") or "") if o is not None and _ord_status(o) == "replaced" else ""
+            if not nxt or nxt in seen:
+                break
+            out.append(nxt)
+            seen.add(nxt)
+            oid = nxt
+        return out
+
+    def _exit_label(self, rec: dict, order_id: str, partial: bool = False) -> str:
+        """Provenance label (cold review L3): ratchet_stop when the filled order is the ratchet's new order, any order
+        in the replaced_by chain from the ratchet's old order, or an order the ratchet placed; else protective_stop.
+        The loss multiple counts every stop-family fill by its gap excess, so a label can never up-size (M1)."""
+        label = _stop_exit_label(rec, order_id, partial)
+        old = str((rec.get("ratchet") or {}).get("old_order_id") or "")
+        if label.startswith("ratchet_stop") or not (order_id and old):
+            return label
+        try:
+            if order_id in self._chain_ids(old):
+                return "ratchet_stop_partial" if partial else "ratchet_stop"
+        except Exception as e:
+            logger.warning("swing ratchet: chain read for %s failed (%s) — labelled protective", old, e)
+        return label
+
+    def _lot_stops(self, s: str, rec: dict) -> Optional[dict]:
+        """The sell stops on `s`, by who they belong to (R3-3, R6-1): "own" — this lot's own / the ratchet's order ids,
+        their successors (`replaces`) and the IN-rp- re-protection prefix (the only stops ever ADOPTED); "owner" —
+        untagged (the owner's): protection, never adopted, never cancelled; "other" — another tier's or another IN-
+        system's. "*_trans" = own / owner stops in a transitional status (pending_cancel / pending_replace). None
+        when the open orders are unreadable."""
+        from execution import broker
+        from execution.ownership_guard import tier_of_coid
+        orders = broker.get_open_orders(s)
+        if orders is None:
+            return None
+        own_ids = self._own_stop_ids(rec)
+        out: dict[str, list] = {"own": [], "own_trans": [], "owner": [], "owner_trans": [], "other": []}
+        for o in orders:
+            if not _is_sell_stop(o):
+                continue
+            coid = str(getattr(o, "client_order_id", "") or "")
+            if (str(getattr(o, "id", "")) in own_ids or str(getattr(o, "replaces", "") or "") in own_ids
+                    or coid.startswith("IN-rp-")):
+                key = "own"
+            elif tier_of_coid(coid) is None:
+                key = "owner"
+            else:
+                key = "other"
+            if _ord_status(o) not in _LIVE_STOP:
+                if key == "other":
+                    continue
+                key += "_trans"
+            out[key].append(o)
+        return out
+
+    def _only_live_stop(self, s: str, rec: dict, oid: str) -> Optional[bool]:
+        """True only when exactly ONE live sell stop of this lot rests on `s`, it is `oid`, and no owner stop also
+        rests on the shares (rev 8); None when unreadable."""
+        ls = self._lot_stops(s, rec)
+        if ls is None:
+            return None
+        one = (not ls["own_trans"] and not ls["owner_trans"] and len(ls["own"]) == 1
+               and str(getattr(ls["own"][0], "id", "")) == oid)
+        if not one:
+            return False
+        if not ls["owner"]:
+            return True
+        if (rec.get("ratchet") or {}).get("reprotect_qty_cap") is None:
+            return False
+        # R8-2: a partial-cover re-protection confirms when this lot's one stop plus the owner stops cover the need
+        held = self._broker_qty(s)
+        if held is None:
+            return None
+        need = int(held) - int(self._other_tiers_qty(s))
+        return self._stops_qty(ls["own"]) + self._stops_qty(ls["owner"]) >= need
+
+    @staticmethod
+    def _stops_qty(orders: list) -> int:
+        try:
+            return sum(int(float(getattr(o, "qty", 0) or 0)) for o in orders)
+        except (TypeError, ValueError):
+            return 0
+
+    def _owner_protects(self, s: str, rec: dict, state: dict, owner: list, held: Optional[int] = None) -> None:
+        """An owner (untagged) stop already covers the lot's shares (R6-1): counted as protection, NEVER saved as the
+        lot's stop_order_id (so no exit path ever cancels it) and never re-protected over; paged once per stop set.
+        R9-3: the first cover snapshots the broker qty and the owner's own shares (held − other tiers − lot qty)."""
+        ids = sorted(str(getattr(o, "id", "")) for o in owner)
+        keys = ("unprotected", "stop_order_id", "owner_stop_ids", "owner_stop_paged", "owner_cover_held",
+                "owner_qty_at_cover")
+        before = [rec.get(k) for k in keys]
+        if (rec.get("owner_stop_ids") or []) != ids:
+            self._clear_owner_snapshot(rec)          # R10-4: a different owner stop set — a fresh snapshot below
+        rec.update(unprotected=False, stop_order_id="", owner_stop_ids=ids)
+        if held is not None and rec.get("owner_cover_held") is None:
+            rec["owner_cover_held"] = int(held)
+            rec["owner_qty_at_cover"] = max(int(held) - int(self._other_tiers_qty(s)) - int(rec.get("qty") or 0), 0)
+            rec["owner_fill_owner_qty"] = 0
+        if rec.get("owner_stop_paged") != ids:
+            rec["owner_stop_paged"] = ids
+            _page(f"[{s}] lot {rec.get('coid')}: an owner (untagged) stop {', '.join(ids)} protects the shares — left "
+                  f"alone, not adopted, never cancelled by this tier; this tier places no stop over it")
+        if before != [rec.get(k) for k in keys]:
+            _save_state(state)                       # written only when something changed (R7-4)
+
+    def _book_owner_fills(self, s: str, rec: dict, state: dict) -> Optional[bool]:
+        """Book what the owner stops protecting this lot (owner_stop_ids) filled (R7-1): each read with get_order only
+        (never cancelled), its unbooked part via _net_fill / _mark_booked, labelled protective_stop and measured against
+        the lot's own stop level in force (stop_px) — so the loss stays in the Kelly sample. True when the lot closed,
+        False when nothing new, None when an owner order or the position is unreadable (paged CRITICAL; nothing booked).
+        R8-1b: an owner fill is this lot's only for the lot shares the broker NO LONGER holds — leg = min(new fill, lot
+        qty, lot qty − max(0, broker qty − other tiers' ledger shares − owner shares still behind a live owner stop)).
+        The rest of the fill was the owner's own shares: marked seen, never booked to the lot."""
+        from execution import broker
+        ids = list(dict.fromkeys(str(x) for x in (rec.get("owner_stop_ids") or []) + (rec.get("owner_partial_ids") or [])
+                                 if x))
+        if not ids:
+            return False
+        orders = []
+        for oid in ids:
+            o = broker.get_order(oid)
+            if o is None:
+                _page_throttled(rec, f"CRITICAL [{s}] lot {rec.get('coid')}: owner stop {oid} is unreadable — its "
+                                     f"fills are not booked yet; re-checking each cycle")
+                _save_state(state)
+                return None
+            orders.append((oid, o))
+        held = self._broker_qty(s)
+        if held is None:
+            _page_throttled(rec, f"CRITICAL [{s}] lot {rec.get('coid')}: position unreadable — owner stop fills not "
+                                 f"booked this cycle")
+            _save_state(state)
+            return None
+        reserved = 0
+        for _oid, o in orders:
+            if _ord_status(o) in _LIVE_STOP:
+                try:
+                    reserved += max(int(float(getattr(o, "qty", 0) or 0)) - int(float(getattr(o, "filled_qty", 0) or 0)), 0)
+                except (TypeError, ValueError):
+                    continue
+        # R9-3: the owner's still-held shares are at least those still behind a live owner stop, and at least those he
+        # held at the cover snapshot less the owner fills already attributed to him (shares he bought later without a
+        # stop never count as the lot's)
+        snap = rec.get("owner_qty_at_cover")
+        owner_still = reserved
+        if isinstance(snap, int) and not isinstance(snap, bool):
+            owner_still = max(reserved, snap - int(rec.get("owner_fill_owner_qty") or 0))
+        lot_held = max(0, int(held) - int(self._other_tiers_qty(s)) - owner_still)
+        missing = max(0, int(rec.get("qty") or 0) - lot_held)
+        drop: list[str] = []
+        for oid, o in orders:
+            cum, avg = getattr(o, "filled_qty", 0), getattr(o, "filled_avg_price", 0)
+            nq, npx = _net_fill(rec, oid, cum, avg)
+            qty = int(rec.get("qty") or 0)
+            if _is_terminal(getattr(o, "status", "")):
+                drop.append(oid)                     # R9-2: ended — never read again once its fills are seen below
+            if nq <= 0 or qty < 1:
+                continue
+            _mark_booked(rec, oid, cum, avg)
+            leg = min(nq, qty, missing)              # never more than the lot shares that actually left (R8-1b)
+            rec["owner_fill_owner_qty"] = int(rec.get("owner_fill_owner_qty") or 0) + (nq - max(leg, 0))
+            if leg < 1:
+                _save_state(state)
+                self._rt_log(s, rec, "owner_fill_not_lot", f"owner stop {oid} filled {nq} sh of the owner's own",
+                             price=npx, position_qty=held, lot_held=lot_held)
+                continue
+            missing -= leg
+            if npx <= 0:
+                rec.update(qty=max(qty - leg, 0), partial_pnl_unknown=True)
+                rec.setdefault("stop_legs", {"qty": 0, "mult_qty": 0.0})["unknown"] = True
+                _save_state(state)
+                _page(f"CRITICAL [{s}] lot {rec.get('coid')}: owner stop {oid} filled {leg} sh at an unreadable price — "
+                      f"P&L unknown, excluded from the Kelly loss multiple; check fills")
+                continue
+            if leg >= qty:
+                self._book_exit(s, rec, state, "protective_stop", npx, leg)
+                return True
+            self._book_partial(s, rec, state, npx, leg, "protective_stop_partial")
+        if drop:
+            before_full = list(rec.get("owner_stop_ids") or [])
+            for key in ("owner_stop_ids", "owner_partial_ids"):
+                if rec.get(key):
+                    rec[key] = [x for x in rec[key] if str(x) not in drop]
+            if list(rec.get("owner_stop_ids") or []) != before_full:
+                self._clear_owner_snapshot(rec)      # R10-4: the full-cover owner stop set changed
+            _save_state(state)
+        return False
+
+    @staticmethod
+    def _other_tiers_qty(s: str) -> float:
+        """Shares of `s` that OTHER tiers own per the ownership ledger (all tiers − this tier); 0.0 when unreadable."""
+        try:
+            from execution.ownership_guard import get_combined_symbol_exposure, load_ledger, tier_qty
+            led = load_ledger()
+            v = float(get_combined_symbol_exposure(led, s)) - float(tier_qty(led, s, TIER))
+            return v if _finite(v) and v > 0 else 0.0
+        except Exception as e:
+            logger.warning("[%s] breakout: ownership ledger unreadable (%s) — other tiers' shares taken as 0", s, e)
+            return 0.0
+
+    def _topup_cover(self, s: str, rec: dict, state: dict, so: Any) -> None:
+        """R9-1 / R10-1: while the lot's own live stop covers fewer shares than the lot, re-run the owner cover every
+        cycle and keep ONE own stop sized to the uncovered qty — never a second stop:
+          (a) replace the lot's own stop to that qty at the SAME stop price;
+          (b) a replace whose outcome is unknown (None) adds nothing: `topup_pending` is recorded, the next cycle re-reads
+              the chain (a successor is adopted by _resolve_lot_stop; the old stop still live at the old qty with nothing
+              in transition → the replace is retried);
+          (c) a stop Alpaca cannot replace yet (accepted / pending_new — overnight GTC stops sit in accepted for hours)
+              is NEVER cancelled (R11-1): the partial stop stays, `topup_pending` records reason not_replaceable, a
+              CRITICAL page names the uncovered qty once per change and once per session, and the replace (a) runs on
+              the first cycle the stop reads replaceable;
+          (d) a CRITICAL page while any share of the lot is uncovered."""
+        from execution import broker
+        try:
+            own_q = int(float(getattr(so, "qty", 0) or 0))
+        except (TypeError, ValueError):
+            return
+        lot = int(rec.get("qty") or 0)
+        sid = str(getattr(so, "id", "") or "")
+        tp = rec.get("topup_pending") if isinstance(rec.get("topup_pending"), dict) else None
+        if tp is not None and str(tp.get("old_id") or "") != sid:
+            rec.pop("topup_pending", None)           # (b) the chain moved: the successor is the stop in force
+            _save_state(state)
+            logger.info("[%s] breakout top-up resolved: %s → %s (%s sh)", s, tp.get("old_id"), sid, own_q)
+            tp = None
+        if own_q >= lot:
+            if tp is not None:
+                rec.pop("topup_pending", None)
+                _save_state(state)
+            return
+        held = self._broker_qty(s)
+        ls = self._lot_stops(s, rec)
+        if held is None or ls is None:
+            return
+        cap_total = min(lot, int(held))
+        covers, uncovered = self._owner_cover(s, ls["owner"], int(held), cap_total, rec)
+        if not covers:
+            self._clear_owner_snapshot(rec)          # R10-4: full cover has ended
+        target = 0 if covers else min(int(uncovered), cap_total)
+        own_total = self._stops_qty(ls["own"])
+        if own_total >= target:
+            if tp is not None:
+                rec.pop("topup_pending", None)
+                _save_state(state)
+            return
+        short = target - own_total
+        if ls["owner"]:
+            rec["owner_partial_ids"] = sorted(str(getattr(o, "id", "")) for o in ls["owner"])
+        else:
+            rec.pop("owner_partial_ids", None)
+        ost = _ord_status(so)
+        if ls["own_trans"] or ost not in _LIVE_STOP:
+            _page_throttled(rec, f"CRITICAL [{s}] lot {rec.get('coid')}: {short} sh uncovered; its stop is {ost} — "
+                                 f"waiting for broker truth")
+            _save_state(state)
+            return
+        px = float(getattr(so, "stop_price", 0) or rec.get("stop_px") or 0)
+        new_q = min(own_q + short, cap_total)
+        if ost not in _REPLACEABLE:
+            # (c) R11-1: never cancel — the partial stop keeps protecting `own_q` shares; replaced once replaceable
+            today = datetime.now(ET).strftime("%Y-%m-%d")
+            key = [sid, ost, int(short), today]
+            changed = rec.get("topup_wait_paged") != key
+            if changed:
+                rec["topup_wait_paged"] = key            # once per (stop, status, uncovered qty), then once a session
+                _page(f"CRITICAL [{s}] lot {rec.get('coid')}: {short} sh uncovered — its stop {sid} is {ost} and cannot "
+                      f"be replaced yet; it still covers {own_q} sh and is raised to {new_q} once it reads replaceable")
+            if tp is None or tp.get("reason") != "not_replaceable" or tp.get("qty") != new_q:
+                rec["topup_pending"] = {"old_id": sid, "old_qty": own_q, "qty": new_q, "reason": "not_replaceable",
+                                        "status": ost, "ts": datetime.now(ET).isoformat()}
+                changed = True
+            if changed:
+                _save_state(state)
+            return
+        new = broker.replace_stop_order(s, sid, px, qty=new_q) if px > 0 and sid else None
+        if new is not None and getattr(new, "id", None):
+            rec.pop("topup_pending", None)
+            rec.update(stop_order_id=str(getattr(new, "id", "")), stop_px=round(px, 2), unprotected=False)
+            _save_state(state)
+            _page(f"[{s}] lot {rec.get('coid')}: the owner's stop no longer covers it — own stop raised from {own_q} to "
+                  f"{new_q} sh at ${px:.2f}")
+            return
+        # (b) outcome unknown: nothing added; the next cycle reads the chain and adopts or retries
+        rec["topup_pending"] = {"old_id": sid, "old_qty": own_q, "qty": new_q, "ts": datetime.now(ET).isoformat()}
+        _page_throttled(rec, f"CRITICAL [{s}] lot {rec.get('coid')}: {short} sh uncovered — stop replace {sid} to "
+                             f"{new_q} sh unconfirmed; re-checking each cycle")
+        _save_state(state)
+
+    @staticmethod
+    def _clear_owner_snapshot(rec: dict) -> None:
+        """R10-4: forget the owner-cover snapshot (a new full cover takes a fresh one)."""
+        for k in ("owner_cover_held", "owner_qty_at_cover", "owner_fill_owner_qty", "cover_surplus_paged"):
+            rec.pop(k, None)
+
+    def _owner_cover(self, s: str, owner: list, held: int, want: int,
+                     rec: Optional[dict] = None) -> tuple[bool, int]:
+        """(owner stops cover this lot, this lot's uncovered qty). An owner stop protects this lot only when it covers
+        more than the owner's own shares: owner stop qty ≥ broker qty − other tiers' ledger shares (R7-2). Otherwise
+        this lot places its own stop for the shares the owner stop leaves uncovered. R9-3: shares the broker gained
+        after a full-cover snapshot are the owner's — paged, never counted as needing this lot's cover."""
+        oq = self._stops_qty(owner)
+        if not owner:
+            return False, int(want)
+        snap = (rec or {}).get("owner_cover_held")
+        if isinstance(snap, int) and not isinstance(snap, bool) and int(held) > snap:
+            if rec is not None and rec.get("cover_surplus_paged") != int(held):
+                rec["cover_surplus_paged"] = int(held)
+                _page(f"[{s}] lot {rec.get('coid')}: broker holds {held} sh, above the {snap} at the owner-stop cover — "
+                      f"the new shares are the owner's; no stop placed on them")
+            held = snap
+        need = int(held) - int(self._other_tiers_qty(s))
+        if oq >= need:
+            return True, 0
+        return False, max(min(int(want), need - oq), 0)
+
+    def _tier_held(self, s: str, rec: dict, held: int) -> int:
+        """Shares this lot protects: min(lot qty, broker qty) — never more than the lot (no stop on another tier's or
+        the owner's surplus shares, R6-3) and never fewer than that because of the ledger (R7-3). Paged when the broker
+        holds more than the lot, and when this tier's ledger qty reads below the lot."""
+        lot = int(rec.get("qty") or 0)
+        want = min(lot, int(held))
+        try:
+            from execution.ownership_guard import load_ledger, tier_qty
+            led = float(tier_qty(load_ledger(), s, TIER))
+            if _finite(led) and led < lot and rec.get("ledger_low_paged") != [led, lot]:
+                rec["ledger_low_paged"] = [led, lot]          # once per (ledger qty, lot qty); the caller saves
+                _page(f"[{s}] lot {rec.get('coid')}: ownership ledger shows {led:g} {TIER} sh, fewer than the lot's "
+                      f"{lot} — still protecting {want}; check the ledger")
+        except Exception as e:
+            logger.warning("[%s] breakout: ownership ledger unreadable (%s) — sized from the lot and the broker", s, e)
+        if int(held) > lot and rec.get("broker_surplus_paged") != [int(held), lot]:
+            rec["broker_surplus_paged"] = [int(held), lot]
+            _page(f"[{s}] lot {rec.get('coid')}: broker holds {held} sh, more than the lot's {lot} — protecting "
+                  f"only {want}")
+        return want
+
+    def _successor(self, s: str, old_id: str, rt: dict) -> Optional[Any]:
+        """The order that replaced `old_id`: the ratchet's saved new id (read by id, ANY status), else an open order
+        whose `replaces` is `old_id`. The design's 'list the symbol's orders since attempt_ts, all statuses' needs a
+        broker.py function that does not exist (no public all-status listing); this is the closest using public calls."""
+        from execution import broker
+        nid = str(rt.get("new_order_id") or "")
+        if nid:
+            o = broker.get_order(nid)
+            if o is not None and str(getattr(o, "replaces", "") or old_id) == old_id:
+                return o
+        orders = broker.get_open_orders(s) or []
+        hits = [o for o in orders if str(getattr(o, "replaces", "") or "") == old_id]
+        return hits[0] if len(hits) == 1 else None
+
+    def _book_order_fills(self, s: str, rec: dict, state: dict, o: Any, today: str) -> bool:
+        """Book what `o` filled that is not booked yet (cold review L2: never re-protect over an unbooked fill).
+        Full → the lot's exit (True). Part → _book_partial, the lot shrinks. A part whose price is unreadable → qty
+        shrinks, partial_pnl_unknown, paged (never fabricated). Idempotent per order id across cycles."""
+        oid = str(getattr(o, "id", "") or "")
+        cum = getattr(o, "filled_qty", 0)
+        cum_avg = getattr(o, "filled_avg_price", 0)
+        new_fill, px = _net_fill(rec, oid, cum, cum_avg)            # incremental qty and price (nit)
+        if not oid or new_fill <= 0:
+            return False
+        qty = int(rec.get("qty") or 0)
+        _mark_booked(rec, oid, cum, cum_avg)
+        # the lot's own stop order's id is cleared in the same save, so _reconcile can never re-book this fill (R3-2)
+        clear = "stop_order_id" if str(rec.get("stop_order_id") or "") == oid else ""
+        if new_fill >= qty > 0 and px > 0:
+            if new_fill > qty:
+                _page(f"CRITICAL [{s}] lot {rec.get('coid')}: order {oid} filled {new_fill} sh, more than the lot's "
+                      f"{qty} — {new_fill - qty} never booked to the lot (R10-3)")
+            self._book_exit(s, rec, state, self._exit_label(rec, oid), px, min(new_fill, qty))
+            return True
+        if px > 0:
+            self._book_partial(s, rec, state, px, min(new_fill, qty), self._exit_label(rec, oid, partial=True),
+                               clear_key=clear)
+        else:
+            rec.update(qty=max(qty - new_fill, 0), partial_pnl_unknown=True)
+            # R5-2: a stop leg without its price is unknown — the lot is left out of the loss multiple, visibly
+            rec.setdefault("stop_legs", {"qty": 0, "mult_qty": 0.0})["unknown"] = True
+            if clear:
+                rec[clear] = ""
+            _save_state(state)
+            _page(f"CRITICAL [{s}] lot {rec.get('coid')}: stop order {oid} filled {new_fill} sh at an unreadable price — "
+                  f"P&L marked unknown and the stop leg excluded from the Kelly loss multiple; check fills")
+        return False
+
+    def _ratchet_reconcile(self, s: str, rec: dict, state: dict, rt: dict, params: dict, today: str) -> None:
+        """Resolve a pending replace from broker links (rev 7 item 4). No new order of any kind while unproven."""
+        from execution import broker
+        old_id = str(rt.get("old_order_id") or "")
+        old = broker.get_order(old_id) if old_id else None
+        if old is None:
+            self._rt_page(rec, "pending_unreadable", f"[{s}] swing ratchet: replace UNCONFIRMED — old stop {old_id} "
+                                                     f"unreadable; no new order until proven", today)
+            _save_state(state)
+            return
+        ost = _ord_status(old)
+        new = None
+        if ost == "replaced":
+            chain = self._chain_ids(old_id)
+            rt["chain_ids"] = chain
+            new = broker.get_order(chain[-1]) if chain else self._successor(s, old_id, rt)
+            if new is None:
+                self._rt_page(rec, "successor_unknown", f"[{s}] swing ratchet: old stop {old_id} replaced but the new "
+                                                        f"order is unreadable — no new order until proven", today)
+                _save_state(state)
+                return
+        elif ost in _LIVE_STOP or ost == "pending_replace":
+            new = self._successor(s, old_id, rt)
+            if new is None:
+                one = self._only_live_stop(s, rec, old_id)
+                if ost == "pending_replace" or not one:
+                    self._rt_page(rec, "pending_replace", f"[{s}] swing ratchet: stop {old_id} is {ost} "
+                                                          f"({'orders unreadable' if one is None else 'not the only live stop' if not one else ''})"
+                                                          f" — waiting for broker truth", today)
+                    _save_state(state)
+                    return
+                self._rt_status(rt, "idle", "replace not applied; the old stop is the one live stop")
+                _save_state(state)
+                self._rt_log(s, rec, "idle", "replace not applied; the old stop is in force", price=rt.get("old_stop_px"),
+                             old_status=ost)
+                return
+        elif _is_terminal(ost):
+            # the old stop ended (filled, canceled, expired, rejected): book every fill FIRST, then re-protect the rest
+            if self._book_order_fills(s, rec, state, old, today) or rec.get("status") == "closed":
+                self._rt_status(rt, "done", f"old stop {ost} — lot closed")
+                _save_state(state)
+                return
+            self._ratchet_reprotect_if_naked(s, rec, state, rt, params, today, f"old stop {ost}, no successor")
+            return
+        else:
+            self._rt_page(rec, "old_not_final", f"[{s}] swing ratchet: old stop {old_id} is {ost} — waiting", today)
+            _save_state(state)
+            return
+        nid, nst = str(getattr(new, "id", "") or ""), _ord_status(new)
+        if not str(getattr(new, "client_order_id", "") or "").startswith("IN-"):
+            # the order now in force is not this tier's (the owner moved it): never adopted as the ratchet's
+            rt["foreign_stop_id"] = nid
+            self._rt_status(rt, "idle", f"the order in force {nid} is not tagged IN- — left alone")
+            _save_state(state)
+            self._rt_page(rec, "foreign_successor", f"[{s}] swing ratchet: the stop now in force ({nid}, {nst}) was not "
+                                                    f"placed by this tier — left alone; review", today)
+            return
+        if nst in _LIVE_STOP:
+            one = self._only_live_stop(s, rec, nid)
+            if not one:
+                self._rt_page(rec, "new_not_only", f"[{s}] swing ratchet: new stop {nid} live but "
+                                                   f"{'orders unreadable' if one is None else 'not the only live stop'}"
+                                                   f" — waiting for broker truth", today)
+                _save_state(state)
+                return
+            px = float(getattr(new, "stop_price", 0) or 0)
+            ids = rt.setdefault("order_ids", [])
+            if nid not in ids:
+                ids.append(nid)
+            rec.update(stop_order_id=nid, stop_px=round(px, 2) if px > 0 else rec.get("stop_px"), unprotected=False)
+            rt.update(new_order_id=nid, ratchet_stop_px=round(px, 2))
+            done = px >= float(rt.get("lock_px") or math.inf)
+            self._rt_status(rt, "done" if done else "idle", "replaced")
+            _save_state(state)
+            self._rt_log(s, rec, "replaced", "broker confirms the raised stop", price=px, new_status=nst)
+            logger.info("swing ratchet %s: stop %.2f -> %.2f (lock %.2f, %s) [change=%s]", s,
+                        float(rt.get("old_stop_px") or 0), px, float(rt.get("lock_px") or 0),
+                        "done" if done else "below lock", RATCHET_CHANGE)
+            return
+        if _is_terminal(nst):
+            ids = rt.setdefault("order_ids", [])
+            if nid not in ids:
+                ids.append(nid)
+            rt["new_order_id"] = nid
+            if float(getattr(new, "stop_price", 0) or 0) > 0:
+                rec["stop_px"] = round(float(getattr(new, "stop_price", 0) or 0), 2)   # the level that filled
+            self._rt_log(s, rec, "replaced_ended", f"new stop {nid} {nst}", price=getattr(new, "filled_avg_price", 0),
+                         new_status=nst, filled_qty=getattr(new, "filled_qty", 0))
+            if self._book_order_fills(s, rec, state, new, today) or rec.get("status") == "closed":
+                self._rt_status(rt, "done", f"the raised stop {nst}")
+                _save_state(state)
+                return
+            rec["stop_px"] = rt.get("old_stop_px") or rec.get("stop_px")          # last CONFIRMED resting level
+            _save_state(state)
+            self._ratchet_reprotect_if_naked(s, rec, state, rt, params, today, f"new order {nid} {nst}")
+            return
+        self._rt_page(rec, "new_not_final", f"[{s}] swing ratchet: new stop {nid} is {nst} — waiting for broker truth",
+                      today)
+        _save_state(state)
+
+    def _ratchet_reprotect_if_naked(self, s: str, rec: dict, state: dict, rt: dict, params: dict, today: str,
+                                    why: str, may_submit: bool = True) -> None:
+        """Shares still held and NO live sell stop → re-protect (rev 7 item 4, rev 8). Exactly one live sell stop for
+        the held qty (this tier's re-protection, or one the owner placed) → adopted as the lot's protection and the lot
+        returns to idle (an owner stop is recorded as foreign, never as the ratchet's). A stop in pending_cancel /
+        pending_replace, several stops, or a quantity mismatch → stays pending, paged (rev 5)."""
+        held = self._broker_qty(s)
+        ls = self._lot_stops(s, rec)
+        if held is None or ls is None:
+            self._rt_page(rec, "lost_unreadable", f"[{s}] swing ratchet: {why}; position/orders unreadable — no new "
+                                                  f"order until proven", today)
+            _save_state(state)
+            return
+        if held == 0:
+            rec["stop_order_id"] = ""              # an ended order: never re-read by _reconcile as a fresh fill (R3-2)
+            self._rt_status(rt, "idle", f"{why}; no shares held (booked by reconcile)")
+            _save_state(state)
+            return
+        trans = ls["own_trans"] + ls["owner_trans"]
+        if trans:
+            self._rt_page(rec, "stop_transitional", f"[{s}] swing ratchet: {why}; a sell stop is "
+                                                    f"{_ord_status(trans[0])} — waiting for broker truth", today)
+            _save_state(state)
+            return
+        want = self._tier_held(s, rec, held)
+        own = ls["own"]
+        if own:
+            o = own[0]
+            if len(own) == 1 and int(float(getattr(o, "qty", 0) or 0)) in (want, rt.get("reprotect_stop_qty")):
+                oid = str(getattr(o, "id", ""))
+                coid = str(getattr(o, "client_order_id", "") or "")
+                if coid and coid == str(rt.get("reprotect_coid") or ""):
+                    ids = rt.setdefault("order_ids", [])
+                    if oid not in ids:
+                        ids.append(oid)
+                rec.update(stop_order_id=oid, stop_px=round(float(getattr(o, "stop_price", 0) or 0), 2),
+                           qty=want, unprotected=False)
+                self._rt_status(rt, "idle", f"{why}; this lot's one live stop {oid} adopted")
+                _save_state(state)
+                self._rt_log(s, rec, "adopted", f"{why}; one live own sell stop", price=rec.get("stop_px"),
+                             adopted_coid=coid, position_qty=held)
+                return
+            self._rt_page(rec, "lost_ambiguous", f"[{s}] swing ratchet: {why}; {len(own)} own sell stop(s) not "
+                                                 f"matching {want} sh — no new order until proven", today)
+            _save_state(state)
+            return
+        covers, uncovered = self._owner_cover(s, ls["owner"], held, want, rec)
+        if covers:
+            # the owner's stop protects the shares: counted, never adopted or cancelled (R6-1)
+            rt["foreign_stop_id"] = ",".join(sorted(str(getattr(o, "id", "")) for o in ls["owner"]))
+            self._rt_status(rt, "idle", f"{why}; an owner stop protects the shares — left alone")
+            self._owner_protects(s, rec, state, ls["owner"], held)
+            self._rt_log(s, rec, "owner_protects", why, price=getattr(ls["owner"][0], "stop_price", 0),
+                         position_qty=held)
+            return
+        lot_q = int(rec.get("qty") or 0)
+        maybe = [o for o in ls["other"] if int(float(getattr(o, "qty", 0) or 0)) == lot_q]
+        if maybe:
+            # R6-4: an IN- stop for exactly the lot's qty may be this lot's own — no second stop
+            self._rt_page(rec, "lost_maybe_own", f"[{s}] swing ratchet: {why}; an IN- stop for the lot's qty may be "
+                                                 f"this lot's own — no new order; review", today)
+            _save_state(state)
+            return
+        if ls["owner"]:
+            rt["reprotect_qty_cap"] = uncovered      # R7-2: this lot's stop covers only what the owner's leaves
+            rec["owner_partial_ids"] = sorted(str(getattr(o, "id", "")) for o in ls["owner"])   # R8-1a, R8-4
+        else:
+            rt.pop("reprotect_qty_cap", None)
+        if not may_submit:
+            self._rt_page(rec, "reprotect_unconfirmed", f"[{s}] swing ratchet: {why}; no live stop seen yet — "
+                                                        f"re-checked next cycle", today)
+            _save_state(state)
+            return
+        seq = rt.get("reprotect_seq")
+        rt["reprotect_seq"] = 0 if seq is None else seq
+        self._ratchet_reprotect_submit(s, rec, state, rt, params, today, held, why)
+
+    def _ratchet_reprotect_submit(self, s: str, rec: dict, state: dict, rt: dict, params: dict, today: str,
+                                  held: int, why: str) -> None:
+        """POST a GTC stop under a deterministic client id (a retry after a timeout can never duplicate it). Level =
+        min(last confirmed stop, bid − one tick) — owner exception (c) — rounded down to the cent, > 0."""
+        from execution import broker
+        seq = rt.get("reprotect_seq")
+        cid = reprotect_coid(rec.get("coid"), seq)
+        if cid is None:
+            self._rt_page(rec, "bad_reprotect_id", f"[{s}] swing ratchet: re-protection id invalid (coid "
+                                                   f"{rec.get('coid')!r}, seq {seq!r}) — NO stop placed; set one manually",
+                          today)
+            _save_state(state)
+            return
+        tick = params["tick_usd"]
+        last = float(rt.get("old_stop_px") or rec.get("stop_px") or 0)
+        bid, qf = self._fresh_bid(s)
+        level = tick_floor(min(last, bid - tick) if bid is not None else last, tick)
+        if not (_finite(level) and level > 0):
+            self._rt_page(rec, "bad_reprotect_px", f"[{s}] swing ratchet: re-protection level ${level} not positive — "
+                                                   f"NO stop placed; set one manually", today)
+            _save_state(state)
+            return
+        qty = self._tier_held(s, rec, int(held))
+        cap = rt.get("reprotect_qty_cap")
+        stop_qty = min(qty, int(cap)) if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1 else qty
+        rt.update(reprotect_coid=cid, reprotect_px=level, reprotect_qty=qty, reprotect_stop_qty=stop_qty)
+        rt.setdefault("attempt_ts", datetime.now(ET).isoformat())   # the episode's age (R3-3)
+        self._rt_status(rt, "reprotect_pending", why)
+        rec.update(stop_order_id="", unprotected=True)
+        if not _save_state(state):
+            _page(f"[{s}] swing ratchet: state not saved — re-protection not sent; retried next cycle")
+            return
+        o = broker.submit_gtc_stop_order(s, stop_qty, "sell", level, tier=TIER, allow_cancel_blocking=False,
+                                         client_order_id=cid)
+        sentinel = o is not None and o in (getattr(broker, "PROTECTION_ALREADY_HELD", None),
+                                           getattr(broker, "PROTECTION_UNKNOWN", None))
+        self._rt_log(s, rec, "reprotect_sent", why, price=level, client_order_id=cid, submitted_qty=stop_qty,
+                     position_qty=held, response_id=str(getattr(o, "id", "") or ""),
+                     response_sentinel=repr(o) if sentinel else None, **qf)
+        self._rt_page(rec, "reprotect", f"[{s}] swing ratchet: replace lost ({why}) — re-protecting {qty} sh at "
+                                        f"${level:.2f} ({cid})", today)
+        if sentinel:
+            # held / unknown: something already holds the shares — re-check the book and adopt the live stop
+            self._ratchet_reprotect_if_naked(s, rec, state, rt, params, today, "re-protection held by a live order",
+                                             may_submit=False)
+            return
+        self._ratchet_reprotect_check(s, rec, state, rt, params, today, allow_submit=False)
+
+    def _ratchet_reprotect_check(self, s: str, rec: dict, state: dict, rt: dict, params: dict, today: str,
+                                 allow_submit: bool) -> None:
+        """Read the re-protection by its client id. Live and the one live stop → idle (the ratchet may raise it again);
+        filled / part-filled → booked first; rejected / canceled / expired → sequence + 1; not found → the book is
+        re-checked (a live stop is adopted, else the SAME id is resubmitted — Alpaca refuses a duplicate);
+        pending_cancel and other transitional statuses → stays pending (rev 5)."""
+        from execution import broker
+        cid = str(rt.get("reprotect_coid") or "")
+        o = broker.get_order_by_client_order_id(cid) if cid else None
+        if o is None:
+            self._ratchet_reprotect_if_naked(s, rec, state, rt, params, today, "re-protection not found",
+                                             may_submit=allow_submit)
+            return
+        oid, ost = str(getattr(o, "id", "") or ""), _ord_status(o)
+        ids = rt.setdefault("order_ids", [])
+        if oid and oid not in ids:
+            ids.append(oid)
+        if ost in _LIVE_STOP:
+            one = self._only_live_stop(s, rec, oid)
+            if not one:
+                self._rt_page(rec, "reprotect_not_only", f"[{s}] swing ratchet: re-protection {cid} live but "
+                                                         f"{'orders unreadable' if one is None else 'not the only live stop'}"
+                                                         f" — waiting", today)
+                _save_state(state)
+                return
+            rec.update(stop_order_id=oid, stop_px=float(rt.get("reprotect_px") or rec.get("stop_px") or 0),
+                       qty=int(rt.get("reprotect_qty") or rec.get("qty") or 0), unprotected=False)
+            self._rt_status(rt, "idle", f"re-protected ({ost})")
+            _save_state(state)
+            self._rt_log(s, rec, "reprotected", ost, price=rt.get("reprotect_px"), client_order_id=cid)
+            return
+        if _is_terminal(ost):
+            if float(rt.get("reprotect_px") or 0) > 0:
+                rec["stop_px"] = float(rt["reprotect_px"])                    # the level that filled
+            if self._book_order_fills(s, rec, state, o, today) or rec.get("status") == "closed":
+                self._rt_status(rt, "done", f"re-protection {ost} — lot closed")
+                _save_state(state)
+                return
+            seq = rt.get("reprotect_seq")
+            if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+                self._rt_page(rec, "bad_reprotect_id", f"[{s}] swing ratchet: re-protection sequence {seq!r} invalid — "
+                                                       f"NO stop placed; set one manually", today)
+                _save_state(state)
+                return
+            # the next id is recorded now, so the next lookup reads the next order, never this terminal one again
+            rt.update(reprotect_seq=seq + 1, reprotect_coid=reprotect_coid(rec.get("coid"), seq + 1) or "")
+            _save_state(state)
+            self._rt_log(s, rec, "reprotect_retry", f"re-protection {cid} {ost}", price=rt.get("reprotect_px"))
+            if allow_submit:
+                self._ratchet_reprotect_if_naked(s, rec, state, rt, params, today, f"re-protection {ost}")
+            return
+        self._rt_page(rec, "reprotect_not_final", f"[{s}] swing ratchet: re-protection {cid} is {ost} — waiting",
+                      today)
+        _save_state(state)
 
     def status(self) -> dict:
         try:
