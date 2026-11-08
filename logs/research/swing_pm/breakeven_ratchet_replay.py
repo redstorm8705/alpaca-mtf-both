@@ -1,3 +1,4 @@
+# ruff: noqa: E501  — dense research-report lines run long (project convention)
 """Swing breakout break-even ratchet replay — 2026-11-05. Owner rule under test: "once a Swing lot is well into profit, its
 stop must never sit below the entry price." Read-only research: places no orders, touches no state, restarts nothing.
 
@@ -15,10 +16,16 @@ Families (the 20-session-low exit and the 30-session time exit stay on in every 
      intraday stop stays at the initial stop. k = 2, 3. Tests whether the cost is the intraday wick, not the rule.
 Every stop change is computed from that day's close and takes effect from the next session (no same-bar look-ahead).
 Selection: best mean R on 2020-2023 only; 2024-2026 printed once after the pick is fixed.
+SWING-RATCHET-1105 (owner-approved rule R+ k=2, a risk-shape choice, not an edge pick): after the report the run writes
+logs/research/swing_pm/ratchet_params.json (trigger, lock, tick, the replay's own numbers for that variant, the trial
+count), atomically. execution/swing_breakout_manager.py reads its trigger and lock from that file only; re-run each
+quarter on the tier's universe to re-derive it. `--no-params` prints the report without writing the file.
 Usage (server, repo root, .env exported): venv/bin/python3 logs/research/swing_pm/breakeven_ratchet_replay.py"""
+import json
 import math
 import os
 import sys
+from datetime import date
 
 import numpy as np
 
@@ -27,6 +34,10 @@ sys.path.insert(0, HERE)
 from giveback_replay import COST_SIDE, ND, SPLIT, fmt, load, paired_diff, prep, stats  # noqa: E402
 
 PRIOR_LOOKS = 38   # 27 candidates (2026-11-04) + 11 (2026-11-05 give-back) on the same 2024-26 test years
+LOCK_R = 0.25      # the R+ family's cushion above entry, in R (the variant the owner chose: R+ k=2)
+OWNER_VARIANT = ("R+", 2)          # SWING-RATCHET-1105: the rule the owner approved (risk shape, not the mean-R pick)
+TICK_USD = 0.01    # SEC Rule 612: stop prices for stocks >= $1 are quoted in whole cents
+PARAMS_PATH = os.path.join(HERE, "ratchet_params.json")
 
 
 def trades(p, fam=None, k=None):
@@ -35,24 +46,44 @@ def trades(p, fam=None, k=None):
     while i < len(c) - 1:
         lvl = c[i - 55:i].max()
         if not (c[i] > lvl and c[i] > sma[i] and np.isfinite(atr[i]) and atr[i] > 0):
-            i += 1; continue
-        e_i = i + 1; entry = o[e_i]; A = atr[i]; risk = 2.5 * A
-        stop0 = entry - risk; stop = stop0; hi_close = entry; exit_px = None; j = e_i; reason = None
-        armed = False; armed_day = None
-        lock = entry + (0.25 * risk if fam == "R+" else 0.0)
+            i += 1
+            continue
+        e_i = i + 1
+        entry = o[e_i]
+        A = atr[i]
+        risk = 2.5 * A
+        stop0 = entry - risk
+        stop = stop0
+        hi_close = entry
+        exit_px = None
+        j = e_i
+        reason = None
+        armed = False
+        armed_day = None
+        lock = entry + (LOCK_R * risk if fam == "R+" else 0.0)
         for j in range(e_i, min(len(c), e_i + 31)):
             if j > e_i and o[j] <= stop:
-                exit_px = o[j]; reason = "ratchet" if stop > stop0 else "stop"; break
+                exit_px = o[j]
+                reason = "ratchet" if stop > stop0 else "stop"
+                break
             if lo[j] <= stop:
-                exit_px = min(o[j], stop); reason = "ratchet" if stop > stop0 else "stop"; break
+                exit_px = min(o[j], stop)
+                reason = "ratchet" if stop > stop0 else "stop"
+                break
             low20 = lo[j - 20:j].min()
             if fam == "C" and armed and c[j] < entry:
-                exit_px = c[j]; reason = "ratchet"; break
+                exit_px = c[j]
+                reason = "ratchet"
+                break
             if c[j] < low20 or j - e_i + 1 >= 30:
-                exit_px = c[j]; hi_close = max(hi_close, c[j]); reason = "low20" if c[j] < low20 else "time"; break
+                exit_px = c[j]
+                hi_close = max(hi_close, c[j])
+                reason = "low20" if c[j] < low20 else "time"
+                break
             hi_close = max(hi_close, c[j])
             if fam in ("R", "R+", "C") and not armed and hi_close >= entry + k * risk:
-                armed = True; armed_day = days[j]
+                armed = True
+                armed_day = days[j]
             if fam in ("R", "R+") and armed:
                 stop = max(stop, lock)
         if exit_px is None:
@@ -178,11 +209,16 @@ def main():
         b = kb.get((t["sym"], t["ed"]))
         if not b or t["why"] != "ratchet" or b["R"] <= 2:
             continue
-        d = raw[t["sym"]]; dd = [ix.tz_convert("America/New_York").date() for ix in d.index]
+        d = raw[t["sym"]]
+        dd = [ix.tz_convert("America/New_York").date() for ix in d.index]
         o, h, lo, c = (d[x].to_numpy(float) for x in ("open", "high", "low", "close"))
-        e = dd.index(t["ed"]); s = e - 1
-        pc = np.r_[np.nan, c[:-1]]; tr = np.nanmax(np.c_[h - lo, np.abs(h - pc), np.abs(lo - pc)], axis=1)
-        A = tr[s - 14:s].mean(); R1 = 2.5 * A; entry = o[e]
+        e = dd.index(t["ed"])
+        s = e - 1
+        pc = np.r_[np.nan, c[:-1]]
+        tr = np.nanmax(np.c_[h - lo, np.abs(h - pc), np.abs(lo - pc)], axis=1)
+        A = tr[s - 14:s].mean()
+        R1 = 2.5 * A
+        entry = o[e]
         arm = next(j for j in range(e, e + 31) if c[e:j + 1].max() >= entry + 2 * R1)
         hit = next(j for j in range(arm + 1, e + 31) if lo[j] <= entry)
         px = min(o[hit], entry)
@@ -196,10 +232,13 @@ def main():
     p = P.get("BRK.B")
     if p and p["partial"] is not None:
         print(f"today's partial-session last price (not used): {p['partial']:.2f}")
-    live_entry, live_R, live_peak = 544.60, 16.39, 579.09
+    # the live lot's own entry stop distance (state file: entry 544.60, entry stop 527.81); rev 1 used 16.39 from the
+    # replay's ATR — corrected (design record rev 1)
+    live_entry, live_R, live_peak = 544.60, 16.79, 579.09
     live_stop0 = live_entry - live_R
     if p:
-        dd = p["days"]; idx = [t for t, d in enumerate(dd) if str(d) >= "2026-10-27"]
+        dd = p["days"]
+        idx = [t for t, d in enumerate(dd) if str(d) >= "2026-10-27"]
         if idx:
             pk = max(p["c"][t] for t in idx)
             print(f"bars check: highest close since 2026-10-27 = {pk:.2f}; last close {p['c'][-1]:.2f} on {dd[-1]}; "
@@ -216,7 +255,7 @@ def main():
                 note = (f"armed: exit at the close if a close < {live_entry:.2f}; intraday stop {s:.2f}" if armed
                         else f"not armed (needs close >= {live_entry + k * live_R:.2f})")
             else:
-                lockp = live_entry + (0.25 * live_R if fam == "R+" else 0.0)
+                lockp = live_entry + (LOCK_R * live_R if fam == "R+" else 0.0)
                 s = max(live_stop0, lockp) if armed else live_stop0
                 note = "armed" if armed else f"not armed (needs close >= {live_entry + k * live_R:.2f})"
         print(f"  {n:10s} stop {s:8.2f} ({(s - live_entry) / live_R:+.2f}R)  {note}")
@@ -224,11 +263,55 @@ def main():
     for n, v in res.items():
         ot = v[4].get("BRK.B")
         if not ot:
-            print(f"  {n:10s} no open replay trade"); continue
+            print(f"  {n:10s} no open replay trade")
+            continue
         r = ot["risk"]
         print(f"  {n:10s} entry {ot['entry_day']} @ {ot['entry']:.2f} R$={r:.2f} peak {ot['hi_close']:.2f} "
               f"({(ot['hi_close'] - ot['entry']) / r:+.2f}R) stop {ot['stop']:.2f} ({(ot['stop'] - ot['entry']) / r:+.2f}R)"
               f"{' armed ' + str(ot['armed_day']) if ot['armed'] else ''}")
+    if "--no-params" not in sys.argv:
+        write_params(res, sd, st, ntr, src)
+
+
+def params_record(res, sd, st, ntr, src):
+    """The parameter record for the owner's variant, built from this run's own results."""
+    fam, k = OWNER_VARIANT
+    name = f"{fam} k={k}"
+    if name not in res:
+        raise SystemExit(f"owner variant {name} missing from the grid — params not written")
+    dm, dt, dn = paired_diff(res[name][3], res["base"][3])
+    return {
+        "version": 1,
+        "change": "swing-ratchet-1105",
+        "variant": name,
+        "trigger_r": float(k),
+        "lock_r": float(LOCK_R),
+        "tick_usd": TICK_USD,
+        "produced": date.today().isoformat(),
+        "replay": "logs/research/swing_pm/breakeven_ratchet_replay.py",
+        "data": str(src),
+        "trial_count": PRIOR_LOOKS + ntr,
+        "selection": "owner risk-shape choice (no +2R winner becomes a loss); not the best-mean-R pick",
+        "discovery": {"n": int(sd[name]["n"]), "mean_r": round(float(sd[name]["mean"]), 4),
+                      "base_mean_r": round(float(sd["base"]["mean"]), 4)},
+        "test": {"n": int(st[name]["n"]), "mean_r": round(float(st[name]["mean"]), 4),
+                 "base_mean_r": round(float(st["base"]["mean"]), 4), "paired_dr": round(float(dm), 4),
+                 "paired_t": round(float(dt), 2), "paired_n": int(dn)},
+        "rederive": "quarterly, on the Swing tier's universe",
+    }
+
+
+def write_params(res, sd, st, ntr, src, path=PARAMS_PATH):
+    """Write the record atomically (tmp -> fsync -> replace)."""
+    rec = params_record(res, sd, st, ntr, src)
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(rec, f, indent=1)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    print(f"\nwrote {path}: trigger {rec['trigger_r']}R, lock {rec['lock_r']}R, trials {rec['trial_count']}")
 
 
 if __name__ == "__main__":
