@@ -55,13 +55,14 @@ class WeeklyPostmortemTruth(unittest.TestCase):
                  "earnings_cnt": 0, "positive_friday_diagnostics": 1}
         sent = []
         with mock.patch.object(wtp, "SLACK_WEBHOOK", "test"), \
-             mock.patch.object(wtp, "_slack_raw", side_effect=sent.append):
+             mock.patch.object(wtp, "_slack_raw", side_effect=sent.append), \
+             mock.patch.object(wtp, "_account_equity", return_value=None):
             wtp._post_slack(
                 "AAPL    +$4.00", stats, Path("wtp_2026-09-25.md"),
                 "2026-09-21 → 2026-09-25",
             )
         self.assertEqual(len(sent), 1)
-        self.assertIn("Fri-positive diagnostics `1`", sent[0])
+        self.assertIn("+$4.00", sent[0])
         self.assertNotIn("left on table", sent[0])
 
     def _rt(self, *, tier="intraday", entry_id="IN-1", pnl=5.0,
@@ -151,11 +152,12 @@ class WeeklyPostmortemTruth(unittest.TestCase):
         self.assertEqual(stats["manual"]["completed_pnl"], 58.27)
         sent = []
         with mock.patch.object(wtp, "SLACK_WEBHOOK", "test"), \
-             mock.patch.object(wtp, "_slack_raw", side_effect=sent.append):
+             mock.patch.object(wtp, "_slack_raw", side_effect=sent.append), \
+             mock.patch.object(wtp, "_account_equity", return_value=None):
             wtp._post_slack(slack, stats, Path("wtp_2026-10-09.md"),
                             "2026-10-05 → 2026-10-09")
-        self.assertIn("Manual / unattributed `+58.27` · 2 lifecycle(s) · GE", sent[0])
-        self.assertIn("Swing `-2.00`", sent[0])
+        self.assertIn("✋ *Your GE trades* +$58.27", sent[0])
+        self.assertIn("🔻 *Swing* −$2.00", sent[0])
         prompt = wtp._build_gemini_prompt(
             "2026-10-05 → 2026-10-09", table, trades, stats
         )
@@ -188,7 +190,8 @@ class WeeklyPostmortemTruth(unittest.TestCase):
                  "manual": {"pnl": 0.0, "count": 0, "symbols": []}}
         sent = []
         with mock.patch.object(wtp, "SLACK_WEBHOOK", "test"), \
-             mock.patch.object(wtp, "_slack_raw", side_effect=sent.append):
+             mock.patch.object(wtp, "_slack_raw", side_effect=sent.append), \
+             mock.patch.object(wtp, "_account_equity", return_value=None):
             wtp._post_slack("", stats, Path("wtp.md"), "w")
         self.assertNotIn("Manual", sent[0])
 
