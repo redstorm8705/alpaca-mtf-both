@@ -1128,47 +1128,153 @@ def _manual_summary(stats: dict, always: bool = False) -> str:
             "(untagged orders, not any tier's trade)")
 
 
+_SLACK_TOP_N = 3   # WTP-SLACK-1108: best / worst trades shown on the phone view (display count, not a threshold)
+
+
+def _usd(v: float) -> str:
+    """+$1.23 / −$1.23 (a real minus sign, so a loss never reads as a dash)."""
+    return f"+${v:,.2f}" if v >= 0 else f"−${abs(v):,.2f}"
+
+
+def _week_label(monday: date, friday: date) -> str:
+    """'Nov 2–6', or 'Oct 30–Nov 3' across a month end."""
+    if monday.month == friday.month:
+        return f"{monday:%b} {monday.day}–{friday.day}"
+    return f"{monday:%b} {monday.day}–{friday:%b} {friday.day}"
+
+
+def _trade_phrase(t: dict) -> str:
+    """'MU short +$41.13', with the tier named when it is not Day."""
+    tier = _bucket_of(t.get("tier"))
+    side = "short" if t.get("direction") == "short" else "long"
+    tag = "" if tier == "day" else f" ({_bucket_label(tier, short=True)})"
+    return f"{t['symbol']} {side}{tag} {_usd(float(t['pnl']))}"
+
+
+def _account_equity() -> "float | None":
+    """Current account equity from Alpaca (T1, reporting.pnl_ledger.fetch_account); None when unreadable."""
+    try:
+        from reporting.pnl_ledger import fetch_account
+        eq = float((fetch_account() or {}).get("equity") or "nan")
+        return eq if math.isfinite(eq) and eq > 0 else None
+    except Exception as e:  # RC-3: logged; the goal line is simply left out
+        logger.warning("WTP Slack: account equity unavailable (%s) — goal line omitted", e)
+        return None
+
+
+def _compose_slack(stats: dict, trades: list, report_path: Path, monday: date, friday: date,
+                   fallback_note: str = "", equity: "float | None" = None) -> str:
+    """WTP-SLACK-1108: the phone-first weekly message, built only from the report's own figures.
+
+    Headline total, a P&L-check line in words, one line per tier (✅ made money / 🔻 lost / ➖ no trades / ? unknown),
+    the owner's manual trades on their own line, the best and worst completed bot trades, one watch line, the account
+    against the goal, and the report file. A tier-lines-vs-total mismatch is flagged under the headline."""
+    total = float(stats["total_pnl"])
+    lines: list = []
+    if fallback_note:
+        lines.append(":warning: *Fills fetch was incomplete — these figures are an estimate, not the Alpaca record. "
+                     "Investigate before using them.*")
+    _head = "✅" if round(total, 2) > 0 else "🔻" if round(total, 2) < 0 else "➖"
+    lines.append(f"📊 *Week of {_week_label(monday, friday)}: {_usd(total)}* {_head}")
+    check = str(stats.get("pnl_check") or "")
+    lines.append({"OK": "_Checked against Alpaca twice; both counts match._",
+                  "MISMATCH": "⚠️ _The two independent P&L counts disagree; see the report before trusting the total._",
+                  }.get(check, "⚠️ _The second P&L count was unavailable, so the total is not double-checked._"))
+
+    by_tier = stats.get("weekly_by_tier") or {}
+    manual = stats.get("manual") or {}
+    # Classify on displayed cents (a −0.004 never prints as a loss); copies, so the caller's rows are untouched.
+    bot = [dict(t, pnl=round(float(t["pnl"]), 2)) for t in trades
+           if _bucket_of(t.get("tier")) != MANUAL_BUCKET and t.get("pnl") is not None]
+    tier_lines, summed, unknown = [], 0.0, False
+    for tier in TIER_IDS:
+        rows = [t for t in bot if _bucket_of(t.get("tier")) == tier]
+        raw = by_tier.get(tier)
+        try:
+            val = float(raw) if raw is not None else None   # missing is unknown, never "no trades"
+        except (TypeError, ValueError):
+            val = None
+        if val is None or not math.isfinite(val):
+            unknown = True
+            tier_lines.append(f"? *{tier_label(tier)}* unknown")
+            continue
+        summed += val
+        if not rows and val == 0.0:
+            tier_lines.append(f"➖ *{tier_label(tier)}* no trades")
+            continue
+        won = sum(1 for t in rows if float(t["pnl"]) > 0)
+        mark = "✅" if round(val, 2) > 0 else "🔻" if round(val, 2) < 0 else "➖"
+        line = f"{mark} *{tier_label(tier)}* {_usd(val)}"
+        if rows:
+            line += f" · won {won} of {len(rows)}"
+        goal = next((g for g in (stats.get("tier_goals") or []) if g.get("tier") == tier), None)
+        if goal and goal.get("status") == "beat":
+            line += " · beat its last 4 weeks"
+        elif goal and str(goal.get("status", "")).startswith("below range"):
+            line += " · below its 4-week range"
+        tier_lines.append(line)
+    man_pnl = float(manual.get("pnl") or 0.0)
+    if int(manual.get("count") or 0) or man_pnl:
+        summed += man_pnl
+        syms = ", ".join(manual.get("symbols") or []) or "untagged"
+        tier_lines.append(f"✋ *Your {syms} trades* {_usd(man_pnl)} (yours, not the bot's)")
+    if not unknown and round(summed, 2) != round(total, 2):
+        lines.append(f"⚠️ _Tier lines add up to {_usd(summed)}, not the total; see the full report._")
+    lines.append("")
+    lines += tier_lines
+    if stats.get("partial_open_lifecycles"):
+        lines.append(f"_Includes {_usd(float(stats.get('partial_open_weekly_pnl') or 0.0))} from "
+                     f"{stats['partial_open_lifecycles']} still-open trade(s) partly sold._")
+
+    winners = sorted((t for t in bot if float(t["pnl"]) > 0), key=lambda t: -float(t["pnl"]))[:_SLACK_TOP_N]
+    losers = sorted((t for t in bot if float(t["pnl"]) < 0), key=lambda t: float(t["pnl"]))[:_SLACK_TOP_N]
+    if winners:
+        lines += ["", "🏆 *Best*"] + [f"• {_trade_phrase(t)}" for t in winners]
+    if losers:
+        lines += ["", "💸 *Worst*"] + [f"• {_trade_phrase(t)}" for t in losers]
+
+    losing = []
+    for tid in TIER_IDS:
+        try:
+            v = float(by_tier.get(tid))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and round(v, 2) < 0:
+            losing.append((v, tid))
+    if losing:
+        loss, tier = min(losing)
+        per_sym: dict = {}
+        for t in bot:
+            if _bucket_of(t.get("tier")) == tier:
+                per_sym[t["symbol"]] = per_sym.get(t["symbol"], 0.0) + float(t["pnl"])
+        watch = f"{tier_label(tier)} lost {_usd(loss).lstrip('−')} this week"
+        if per_sym:
+            sym, sym_pnl = min(per_sym.items(), key=lambda kv: kv[1])
+            if sym_pnl < 0:
+                watch += f"; its biggest loser was {sym} at {_usd(sym_pnl)}"
+        lines += ["", f"👀 *Watch:* {watch}."]
+    elif bot and not unknown:
+        lines += ["", "👀 Nothing stood out: no tier lost money."]
+
+    if equity is not None:
+        lines += ["", f"Account ${equity:,.2f} · goal $25,000"]
+    lines.append(f"_Full table and analysis: `logs/{report_path.name}`_")
+    return "\n".join(lines)
+
+
 def _post_slack(slack_lines: str, stats: dict, report_path: Path, week_str: str,
-                fallback_note: str = "") -> None:
+                fallback_note: str = "", *, trades: "list | None" = None,
+                monday: "date | None" = None, friday: "date | None" = None) -> None:
+    """Post the weekly message (WTP-SLACK-1108 layout). `slack_lines` (the old per-trade table) is kept in the
+    signature for callers but no longer posted; the table stays in the report file."""
     if not SLACK_WEBHOOK:
         logger.warning("SLACK_WEBHOOK_URL not set — skipping Slack.")
         return
-    _pnl_disp = (f"+${stats['total_pnl']:.2f}" if stats["total_pnl"] >= 0
-                 else f"-${abs(stats['total_pnl']):.2f}")   # -$36.67, matching the per-row style
-    _unm = f"  ·  unmatched (pre-window) `{stats['unmatched']}`" if stats.get("unmatched") else ""
-    # A non-authoritative (fills-fetch-failed) run leads with a loud warning so the operator never
-    # reads the fallback tracker estimate as Alpaca-FIFO truth (data-integrity board T1).
-    _warn = (":warning: *fills fetch INCOMPLETE — figures are the trade_events estimate, NOT "
-             "authoritative Alpaca-FIFO P&L; investigate.*\n") if fallback_note else ""
-    # Earnings-adjacent only surfaces when non-zero (0 was pure noise). Per-trade rows go in a
-    # monospace code block (aligned columns, worst→best) so they never render as wrapped soup.
-    _earn_seg = f"  ·  earnings-adj `{stats['earnings_cnt']}`" if stats.get("earnings_cnt") else ""
-    _tier_bits = []
-    for _tier in TIER_IDS:
-        _value = float((stats.get("weekly_by_tier") or {}).get(_tier, 0.0))
-        _tier_bits.append(f"{tier_label(_tier)} `{_value:+.2f}`")
-    _tier_line = " · ".join(_tier_bits)
-    _manual_line = _manual_summary(stats)
-    if _manual_line:
-        _tier_line += f"\n{_manual_line}"
-    _partial = ""
-    if stats.get("partial_open_lifecycles"):
-        _partial = (
-            f"\nOpen partials `{stats['partial_open_lifecycles']}` · realized this week "
-            f"`${stats['partial_open_weekly_pnl']:+.2f}` · excluded from W/L"
-        )
-    _rows = f"_worst → best_\n```\n{slack_lines}\n```\n" if slack_lines.strip() else ""
-    msg = (
-        _warn
-        + f":bar_chart: *Weekly Post-Mortem — {week_str}*\n"
-        f"Realized cash (Alpaca-FIFO): `{_pnl_disp}` ({stats.get('pnl_check', 'unchecked')})  ·  "
-        f"completed W/L `{stats['winners']}/{stats['losers']}`  ·  "
-        f"Fri-positive diagnostics `{stats['positive_friday_diagnostics']}`{_earn_seg}{_unm}\n"
-        f"{_tier_line}{_partial}\n"
-        f"{_rows}"
-        f"_Full 16-col table + Gemini analysis: `logs/{report_path.name}`_"
-    )
+    if monday is None or friday is None:
+        monday, friday = _get_week_range()
+    msg = _compose_slack(stats, trades or [], report_path, monday, friday, fallback_note, _account_equity())
     _slack_raw(msg)
+    logger.info("change=wtp-slack-1108 Slack layout v2 posted (%d lines) for %s", msg.count("\n") + 1, week_str)
 
 # ── RULES-1018: two-source P&L, tier goals, belief tests ──────────────────────
 # Design record: logs/design_records/article_rules_2026-10-18.md (owner approval RULES-1018, 2026-10-18).
@@ -1336,7 +1442,9 @@ def _rules_sections(figures, monday: date, friday: date, canonical: float) -> "t
                  (" · ".join(f"{k} `{v:+.2f}`" for k, v in sorted(cash.items())) or "none")))
     lines += ["", "## Weekly goals by tier (vs each tier's own trailing 4 weeks)"]
     try:
-        for g in _tier_goals(figures.round_trips, monday, friday):
+        _goals = _tier_goals(figures.round_trips, monday, friday)
+        check["tier_goals"] = _goals   # WTP-SLACK-1108: the Slack line reuses the same result
+        for g in _goals:
             if g["status"] == "insufficient trades":
                 lines.append(f"- **{tier_label(g['tier'])}:** insufficient trades "
                              f"({g['week_n']} this week, {g['trail_n']} trailing)")
@@ -1455,6 +1563,7 @@ def main() -> None:
     logger.info("RULES-1018: two-source P&L check, tier goals, belief tests...")
     rules_lines, pnl_check = _rules_sections(figures, monday, friday, float(stats["total_pnl"]))
     stats["pnl_check"] = pnl_check["status"]
+    stats["tier_goals"] = pnl_check.get("tier_goals") or []
     _pnl_verdict = {"OK": "verified by an independent recount",
                     "MISMATCH": f"MISMATCH vs independent recount `{pnl_check.get('independent', 0.0):+.2f}`",
                     }.get(pnl_check["status"], "SOURCE MISSING — not independently verified")
@@ -1503,7 +1612,8 @@ def main() -> None:
     _atomic_write(report_path, report)
     logger.info(f"WTP written → {report_path}")
 
-    _post_slack(slack_lines, stats, report_path, week_str, fallback_note)
+    _post_slack(slack_lines, stats, report_path, week_str, fallback_note,
+                trades=trades, monday=monday, friday=friday)
     logger.info("Done.")
 
 

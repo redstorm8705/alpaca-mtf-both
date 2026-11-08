@@ -1,0 +1,19 @@
+{
+  "change": "wtp-slack-1108",
+  "tier": 1,
+  "paths": [
+    "weekly_postmortem.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/wtp_cron.log",
+      "pattern": "change=wtp-slack-1108 Slack layout v2 posted"
+    }
+  ],
+  "expected_rate": "once on every weekly post-mortem run that publishes figures (Saturday or Sunday morning)",
+  "window_sessions": 2,
+  "window_reason": "The report runs only on weekend mornings; nine calendar days from the ship date always include one full weekend.",
+  "window_days": 9,
+  "reversal": "a dollar figure in the Slack post differs from logs/wtp_<date>.md, the tier lines do not add up to the headline without the mismatch warning, or a loss shows without a minus sign and 🔻",
+  "verification": "tests/test_weekly_postmortem_slack.py"
+}
