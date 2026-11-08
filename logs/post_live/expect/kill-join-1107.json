@@ -1,0 +1,37 @@
+{
+  "change": "kill-join-1107",
+  "tier": 2,
+  "paths": [
+    "execution/risk_manager.py",
+    "execution/entry_logic.py",
+    "run_ledger_sync.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "kill-switch exact join unresolved \\(.*\\) — rebuild requested \\[change=kill-join-1107\\]"
+    },
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "ledger_sync on request: .*\\[change=kill-join-1107\\]"
+    },
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "kill-switch exact join resolved [0-9.]+ min after the first rebuild request .*\\[change=kill-join-1107\\]"
+    }
+  ],
+  "expected_rate": "one unresolved-join line per distinct reason after a protected-tier (QHM/F6) fill or stop, then one on-request rebuild line and one 'exact join resolved' line within about 1-2 minutes; sessions with no protected fill have none",
+  "window_sessions": 5,
+  "window_reason": "QHM buys or stops on most weeks (11-05 NVDA stop, 11-06 NVDA and GE buys); five sessions normally include at least one protected fill",
+  "reversal": "a pause after a fill that lasts longer than two rebuild runs with no refusal logged, or any change in a replayed kill measure; also any 'Loop error' traceback through can_open_position()/check_kill_switch()",
+  "metrics": [
+    {
+      "name": "minutes of RTH with entries paused by an unresolved join per protected fill",
+      "source": "logs/mtf_bot.log 'exact join resolved N min after the first rebuild request [change=kill-join-1107]' lines",
+      "direction": "down",
+      "bound": "at most 2 minutes per protected fill when no refusal is logged (11-06 baseline: 46 minutes)"
+    }
+  ],
+  "verification": "tests/test_kill_switch_join.py",
+  "baseline_exempt_reason": "every proof line carries [change=kill-join-1107], which is new in this change, so a match can only come from the new code"
+}

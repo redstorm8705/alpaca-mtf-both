@@ -5,6 +5,7 @@ Position sizing, daily loss limits, and kill switch logic.
 The most important file in the bot — protects capital above everything else.
 """
 
+import hashlib
 import json
 import logging
 import math
@@ -12,6 +13,8 @@ import os
 import requests  # type: ignore[import-untyped]
 import tempfile
 import threading
+import time
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -428,6 +431,157 @@ _INTRADAY_PNL_TTL_S = 120
 _intraday_cache: dict = {"ts": 0.0, "pt_date": "", "fills": (), "ok": False}
 _intraday_order_tier_cache: dict = {"pt_date": "", "tiers": {}}
 _UNRESOLVED_FILL_TIER = "__unresolved_fill_tier__"
+
+# ── KILL-JOIN-1107 (owner-approved rev 4 + 4.1; logs/design_records/kill_join_2026-11-07.md) ──
+# When the guard-enforced exact join fails, the kill check asks the cron runner (`run_ledger_sync.py --if-requested`)
+# for a full ledger rebuild by writing this small local file. The 7% measure and its latch are unchanged.
+_LEDGER_REBUILD_REQUEST_FILE = (
+    Path(__file__).resolve().parent.parent / "data" / "state" / "ledger_rebuild_request.json"
+)
+# Plumbing, not a trading threshold: the request-file write rate per process (one small local write per minute,
+# matching the every-minute `--if-requested` cron line). It changes no measure, limit, latch, size or entry rule.
+_REBUILD_REQUEST_WRITE_SECONDS = 60
+# One unresolved-join episode per process: reasons already logged, the first and latest request, the last write.
+_KILL_JOIN_STATE: dict = {
+    "logged": set(),
+    "first_request_wall": None,
+    "last_request_wall": None,
+    "last_write_mono": None,
+    "generation": None,
+}
+
+
+def _kill_join_fingerprint(fills: tuple, positions: "list | None") -> str:
+    """Digest of today's fills and the broker net per symbol seen by this check. The rebuild runner backs off after a
+    refused rebuild only while this is unchanged (no new fill or position change). Never raises."""
+    try:
+        net = sorted(
+            f"{str(p.get('symbol') or '').upper()}={p.get('qty')}"
+            for p in (positions or [])
+            if isinstance(p, dict)
+        )
+        body = json.dumps(
+            {"fills": sorted(json.dumps(list(f), default=str) for f in fills), "net": net},
+            sort_keys=True,
+        )
+        return hashlib.sha256(body.encode("utf-8")).hexdigest()
+    except Exception as e:  # noqa: BLE001 — an unhashable input must not break the kill check
+        logger.warning("kill-switch join fingerprint failed (%s) [change=kill-join-1107]", e)
+        return ""
+
+
+def _request_ledger_rebuild(fingerprint: str, reason: str) -> None:
+    """Ask for a full ownership-ledger rebuild (rev 4.1 item 3).
+
+    Local file only (no network). Atomic: a unique temporary name in the same directory, then os.replace. At most one
+    write per _REBUILD_REQUEST_WRITE_SECONDS per process. Each request carries a fresh generation id (UTC time plus a
+    random token) so the runner can mark exactly the generation it rebuilt from as done. A write failure is logged and
+    changes nothing else: new entries stay paused, exactly as before this change. Never raises."""
+    state = _KILL_JOIN_STATE
+    now_mono = time.monotonic()
+    now_wall = time.time()
+    if state["first_request_wall"] is None:
+        state["first_request_wall"] = now_wall
+    last_write = state["last_write_mono"]
+    if last_write is not None and now_mono - last_write < _REBUILD_REQUEST_WRITE_SECONDS:
+        return
+    # Stamped before the write so a failing disk is retried at the same rate, not on every check.
+    state["last_write_mono"] = now_mono
+    tmp: "Path | None" = None
+    try:
+        now_utc = datetime.now(timezone.utc)
+        generation = f"{now_utc.strftime('%Y%m%dT%H%M%S%fZ')}-{uuid.uuid4().hex}"
+        payload = {
+            "generation": generation,
+            "requested_utc": now_utc.isoformat(),
+            "fingerprint": fingerprint,
+            "reason": reason,
+            "pid": os.getpid(),
+        }
+        target = _LEDGER_REBUILD_REQUEST_FILE
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp = Path(handle.name)
+            json.dump(payload, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+        tmp = None
+        state["generation"] = generation
+        state["last_request_wall"] = now_wall
+        logger.info(
+            "kill-switch ledger rebuild requested (generation %s) [change=kill-join-1107]",
+            generation,
+        )
+    except Exception as e:  # noqa: BLE001 — RC-3: logged; the entries pause continues unchanged
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as unlink_err:
+                logger.debug("rebuild request temp cleanup failed: %s", unlink_err)
+        logger.warning(
+            "kill-switch ledger rebuild request write failed (%s) — new entries stay paused until the next "
+            "rebuild [change=kill-join-1107]",
+            e,
+        )
+
+
+def _kill_join_unresolved(
+    check: str,
+    symbol: str,
+    ledger_qty: Any,
+    broker_qty: Any,
+    fills: tuple,
+    positions: "list | None",
+) -> None:
+    """Log one unresolved-join reason (once per distinct reason per episode), then request a rebuild. Never raises."""
+    try:
+        detail = json.dumps(
+            {"symbol": symbol, "check": check, "ledger_qty": ledger_qty, "broker_qty": broker_qty},
+            sort_keys=True,
+            default=str,
+        )
+        logged = _KILL_JOIN_STATE["logged"]
+        if detail not in logged:
+            logged.add(detail)
+            logger.warning(
+                "kill-switch exact join unresolved (%s) — rebuild requested [change=kill-join-1107]",
+                detail,
+            )
+        _request_ledger_rebuild(_kill_join_fingerprint(fills, positions), detail)
+    except Exception as e:  # noqa: BLE001 — RC-3: logging must never break the kill check
+        logger.warning("kill-switch join reason log failed (%s) [change=kill-join-1107]", e)
+
+
+def _kill_join_resolved() -> None:
+    """The exact join holds again: log the minutes since the episode's first and latest rebuild request (the Q40
+    metric), then reset the episode so the next failure logs its reasons and requests at once. Never raises."""
+    state = _KILL_JOIN_STATE
+    first_wall = state["first_request_wall"]
+    if first_wall is None:
+        return
+    try:
+        now_wall = time.time()
+        waited_seconds = now_wall - first_wall
+        latest_gap_seconds = now_wall - (state["last_request_wall"] or first_wall)
+        logger.info(
+            "kill-switch exact join resolved %.1f min after the first rebuild request (%.1f min after the latest, "
+            "generation %s) [change=kill-join-1107]",
+            waited_seconds / 60,
+            latest_gap_seconds / 60,
+            state["generation"],
+        )
+    except Exception as e:  # noqa: BLE001 — RC-3
+        logger.warning("kill-switch join resolved log failed (%s) [change=kill-join-1107]", e)
+    state["logged"].clear()
+    state.update(first_request_wall=None, last_request_wall=None, last_write_mono=None, generation=None)
 
 
 def _tier_for_fill_order(
@@ -852,6 +1006,9 @@ class RiskManager:
         self.last_kill_measure  = 0.0
         # KILL-ATTR-1023: per-check attribution detail (exact flag, unproven symbols, ledger_unreadable)
         self._kill_attr: dict = {}
+        # KILL-JOIN-1107: the kill check's error as recorded by can_open_position(); cleared at the start of every
+        # check_kill_switch(). The entry loop reads it instead of evaluating the kill a second time.
+        self.kill_check_fault: Optional[str] = None
         # BUG-ADV-1: restore killed=True if same calendar day (survives os.execv)
         _ks = _load_kill_state()
         _today_et = datetime.now(_ET).strftime("%Y-%m-%d")
@@ -1343,6 +1500,8 @@ class RiskManager:
             exact_protected = getattr(config, "OWNERSHIP_GUARD_ENFORCE", False)
             if exact_protected:
                 if protected_qty is None:
+                    # _protected_held_qty() already logged which row; KILL-JOIN-1107 asks for a rebuild too.
+                    _kill_join_unresolved("ledger_rows_unresolved", "", None, None, fills, None)
                     return 0.0, False
                 excluded = set(protected_qty)
             else:
@@ -1374,6 +1533,7 @@ class RiskManager:
             prior_close: dict = {}
             open_pnl = 0.0
             seen_ledger: set[str] = set()
+            broker_net_by_sym: dict[str, float] = {}   # KILL-JOIN-1107 reason logging only
             for p in positions:
                 sym = str(p.get("symbol") or "").upper()
                 if not sym:
@@ -1389,6 +1549,7 @@ class RiskManager:
                         or not broker_qty.is_integer()
                     ):
                         return 0.0, False
+                    broker_net_by_sym[sym] = broker_qty
                     ld = p.get("lastday_price")
                     if ld is not None:
                         parsed_prior = float(ld)
@@ -1402,6 +1563,10 @@ class RiskManager:
                             broker_net = broker_qty
                             from execution.ownership_guard import _QTY_EPS
                             if abs(broker_net - ledger_net) > _QTY_EPS:
+                                _kill_join_unresolved(
+                                    "ledger_net_differs_from_broker", sym, ledger_net, broker_net,
+                                    fills, positions,
+                                )
                                 return 0.0, False
                         else:
                             protected = 0.0
@@ -1428,6 +1593,11 @@ class RiskManager:
                     # one unparseable position must not silently drop a leg → degrade (more sensitive)
                     return 0.0, False
             if exact_protected and set(protected_qty or {}) != seen_ledger:
+                for missing in sorted(set(protected_qty or {}) - seen_ledger):
+                    _kill_join_unresolved(
+                        "ledger_row_without_broker_position", missing,
+                        (protected_qty or {})[missing][1], 0.0, fills, positions,
+                    )
                 return 0.0, False
             # FILL terms: per traded symbol, reprice each today-transacted share from its fill
             # price back to prior close. Aggregate cash and qty by side first.
@@ -1445,6 +1615,10 @@ class RiskManager:
                 # Unknown/unreadable ownership is included, never excluded.
                 if exact_protected and fill_tier in {"qhm", "forever6"}:
                     if sym not in (protected_qty or {}):
+                        _kill_join_unresolved(
+                            "protected_fill_on_ledger_flat_symbol", sym, 0.0,
+                            broker_net_by_sym.get(sym, 0.0), fills, positions,
+                        )
                         return 0.0, False
                     continue
                 traded.add(sym)
@@ -1482,6 +1656,7 @@ class RiskManager:
                 "ledger_unreadable": False,
                 "unproven": {},
             }
+            _kill_join_resolved()
             return round(result, 2), True
         except Exception as e:  # RC-3
             logger.warning("kill-switch intraday P&L fetch failed (%s) — degrading to equity measure "
@@ -1493,6 +1668,8 @@ class RiskManager:
         Measure is Alpaca-EQUITY based (phantom-proof) minus QHM unrealized, OR-guarded
         with raw account equity — see the inline note below. daily_pnl is NOT used in
         the kill decision (it false-tripped at -73.86% on 2026-07-07 via phantom fills)."""
+        # KILL-JOIN-1107: a fault recorded by an earlier can_open_position() never outlives the next evaluation.
+        self.kill_check_fault = None
         if self.killed:
             return True
         if self.daily_start_value <= 0:
@@ -1603,8 +1780,21 @@ class RiskManager:
         return self.killed
 
     def can_open_position(self) -> bool:
-        """Returns True if we're allowed to open another position."""
-        if self.check_kill_switch():
+        """Returns True if we're allowed to open another position.
+
+        KILL-JOIN-1107: a kill check that raises (for example "exact tier attribution is unresolved") blocks this
+        entry attempt instead of aborting the caller's cycle (2026-11-06 10:16 ET "Loop error"). The fault is recorded
+        on ``kill_check_fault`` so the entry loop treats it as "kill active" without evaluating the kill again."""
+        try:
+            killed = self.check_kill_switch()
+        except Exception as e:  # noqa: BLE001 — any kill-evaluation error fails closed for new entries only
+            self.kill_check_fault = f"{type(e).__name__}: {e}"
+            logger.error(
+                "kill-switch check failed (%s) — no new entry this attempt (fail-closed) [change=kill-join-1107]",
+                self.kill_check_fault,
+            )
+            return False
+        if killed:
             return False
         if self.open_positions >= config.MAX_OPEN_POSITIONS:
             logger.info(
@@ -1612,6 +1802,11 @@ class RiskManager:
             )
             return False
         return True
+
+    def kill_blocks_entries(self) -> bool:
+        """True when the most recent kill evaluation blocks new entries: the kill is latched, or the last
+        can_open_position() recorded a kill-check fault. Reads state only; it never evaluates the kill again."""
+        return bool(self.killed or self.kill_check_fault is not None)
 
     def check_buying_power_for_order(self, shares: int, entry_price: float) -> bool:
         """Live Alpaca buying-power pre-flight before submitting an order (2026-07-14,
