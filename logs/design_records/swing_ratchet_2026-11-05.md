@@ -1,7 +1,7 @@
 # SWING-RATCHET-1105 — a Swing lot well in profit never keeps a stop below entry (signed: Claude, 2026-11-05)
 
 Approval-ID: SWING-RATCHET-1105
-Status: rev 9 — confirming pass pending. Awaiting owner approval. No code written.
+Status: rev 9 — Codex confirmation returned APPROVE 2026-11-07 (rev 9.1 notes below); board + masked-loss seat + GAI on record earlier. Awaiting owner approval. No code written.
 Covers: execution/swing_breakout_manager.py, generate_dashboard.py, logs/research/swing_pm/ratchet_params.json (new), logs/research/swing_pm/breakeven_ratchet_replay.py, tests/test_swing_ratchet.py (new)
 
 ## Owner direction (2026-11-05, verbatim)
@@ -229,6 +229,14 @@ Rev 8 overrides the re-protect bullet of Rev 7 item 4.
 2. Every stop price (raise or re-protection) is rounded to $0.01 (down for a level set under the bid) and must be
    > $0; otherwise no order and paged.
 3. Decision records add the sequence, client id, submitted qty and the live position qty.
+
+## Rev 9.1 — Codex confirmation on rev 9 (2026-11-07, signed: Claude)
+Codex returned APPROVE on rev 9 with two notes, both folded:
+1. Length arithmetic: `IN-rp-` (6) + 24 hex + `-` (1) + `9999` (4) = **35** characters, not 33. Still inside 48.
+2. The build validates `sequence` as a non-negative integer and refuses (no order, paged) any constructed id longer
+   than 48 characters; a test covers an abnormal sequence.
+Live check 2026-11-07: BRK.B 2 sh at $544.60, last $570.89, owner stop $561.85 resting (above the rule's $548.80, so
+the rule leaves it unchanged — the owner-stop exception of rev 7).
 
 ## Required questions
 Q1: Risk shape for data collection: no +2R winner turns into a loss; the cost is measured (≈0.02R/trade on test) and small against the account goal; it keeps winners running (no profit target added).

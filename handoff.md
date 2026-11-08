@@ -8,7 +8,42 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-06 night, Claude signed) — two designs aligned and with the owner; pick up here
+## ⏩ LATEST (2026-11-08 Sun early, Claude signed) — pick up here
+
+- **Shipped 11-07:**
+  - POST-LIVE Diff A (PR 869): per-signature issues. The 10 dated NEW_ERRORS issues are closed and mapped to #879-#903.
+  - Weekly post-mortem manual bucket (PR 904): the owner's untagged app trades are reported as "Manual" instead of
+    aborting the report. The week of 11-02 was re-run and posted: +$101.98 realized.
+- **KILL-JOIN-1107 (approved):** PR 906 is open, and every gate has passed: cold-2nd round 2 PASS, masked-loss APPROVE,
+  preship Gro + GAI APPROVE.
+  - After merge, on OCI: `git pull --ff-only` and restart.
+  - Then add the cron line `* 13-21 * * 1-5 cd /home/ubuntu/mtf-bot && venv/bin/python3 run_ledger_sync.py
+    --if-requested >> logs/ledger_sync_cron.log 2>&1`.
+  - Close #901/#903 after the first live session shows the heal.
+- **SWING-RATCHET-1105 (approved):** revision 4 is being built in the scratchpad worktree `wt-ratchet` (branch
+  `claude/swing-ratchet-1105`).
+  - Round 3 was rejected by both reviewers for the same flaw: a stale pending lets `_reconcile` and the ratchet both
+    book one stop fill.
+  - Fix: `_mark_booked` at every booking site, release ownership once the pending is stale, and drop the guessed 1.0
+    gap fallback.
+  - Then fresh reviews, preship, ship. `logs/research/swing_pm/ratchet_params.json` needs `git add -f`.
+- **MORNING-1029 (not approved yet):** design v9.2, `logs/design_records/morning_rundown_2026-10-29.md`. It is waiting
+  for Codex's round-2 confirmation (`bgg_call.py <prompt> --gro-only`). After that: approval_ready, then the owner
+  package with six owner questions.
+- **Post-mortem Slack UX redesign (owner asked 11-07):** phone-first.
+  - A headline, one line per tier with ✅/🔻, top 3 and worst 3 trades in plain words, one "watch" line, and the
+    table behind the report link.
+  - Post a test version to the owner first.
+- **Monday VIX latency probe:** `research/vix_latency_probe.py` (committed with this handoff). It needs the one-day
+  OCI cron `20 14 9 11 * cd /home/ubuntu/mtf-bot && venv/bin/python3 research/vix_latency_probe.py >>
+  logs/research/vix_latency_cron.log 2>&1`.
+- **Then:**
+  - the REGIME-SIZE slice 1 rebuild on rev 3.14;
+  - the approval reader fix, so "kill switch join 1107" records (extra words broke ID matching; gated, needs its own
+    approval);
+  - the main-checkout stash a4711f97 holds a superseded F6 record edit; owner to decide whether to drop it.
+
+## ⏩ EARLIER (2026-11-06 night, Claude signed) — two designs aligned and with the owner
 
 - **Both designs aligned (no reject from board, GAI or Codex in the last round) and brought to the owner:**
   REGIME-SIZE-1104 rev 3.14 (VIX: per-consumer selection table, `run_vix_snapshot.py` every 2 min per the owner's
