@@ -1,0 +1,27 @@
+{
+  "change": "morning-1029",
+  "tier": 1,
+  "paths": [
+    "scripts/morning_rundown.py",
+    "scripts/morning_watch.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/morning_rundown_cron.log",
+      "pattern": "morning_rundown: Slack blocks sent \\(send=0600\\)"
+    },
+    {
+      "log": "logs/morning_rundown_cron.log",
+      "pattern": "morning_rundown: Slack blocks sent \\(send=0646\\)"
+    },
+    {
+      "log": "logs/morning_watch_cron.log",
+      "pattern": "morning_watch: Slack sent: 🧾 Morning watch summary"
+    }
+  ],
+  "expected_rate": "the rundown twice (06:00 and 06:46 PT) and the watcher end-of-watch summary once on every trading day",
+  "window_sessions": 2,
+  "window_reason": "the rundown and the watcher run every trading day, so the first two sessions after the ship exercise every path (the weekly GEX schedule has its own record, gex-monday-1029)",
+  "reversal": "a rundown or watcher heartbeat with ok=false or a non-zero violations count; any shown ask above $1.25; a TRIGGERED — ACTIONABLE alert without a sell-stop below the bid; a TRIGGERED alert whose rebuild bars do not match the IEX tape",
+  "verification": "tests/test_morning_rundown.py, tests/test_morning_watch.py"
+}
