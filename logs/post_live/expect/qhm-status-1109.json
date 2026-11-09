@@ -1,0 +1,13 @@
+{
+  "change": "qhm-status-1109",
+  "tier": 1,
+  "paths": ["execution/quarterly_hold_manager.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "QuarterlyHoldManager: NVDA GTC stop @ \\$[0-9.]+ submitted"}],
+  "expected_rate": "once, on the first QHM cycle after deploy (NVDA's stuck stop recovery finishes); later only when a QHM hold loses its stop",
+  "window_sessions": 1,
+  "window_reason": "NVDA is stuck now, so the recovery should run on the first cycle after deploy.",
+  "reversal": "after deploy, the log still shows 'canceled stop ... is not terminal/readable' for an order the broker reports canceled, or a QHM hold stays PENDING_STOP_REPLACE with a terminal cancelled stop for more than two cycles, or a second QH- stop appears for the same hold",
+  "metrics": [{"name": "QHM holds without a broker stop", "source": "Alpaca open orders vs data/state/quarterly_holds.json", "direction": "down", "bound": "zero after the first cycle"}],
+  "verification": "tests/test_qhm_status_1109.py",
+  "baseline_exempt_reason": "The same 'GTC stop @ ... submitted' line is printed by every QHM stop placement, including NVDA's own stop on 11-06; the evidence of this change is that it appears for NVDA after deploy while NVDA has been stuck since 11-09 15:05 UTC."
+}
