@@ -8,7 +8,29 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-08 Sun evening, Claude signed) — pick up here
+## ⏩ LATEST (2026-11-09 Mon, Claude signed) — pick up here
+
+- **Shipped and live 11-09:**
+  - QHM-STATUS-1109 (PR 916): stop-order status reads unwrap the enum. NVDA's QHM share got its GTC stop at $163.07
+    (15:44 UTC). The second NVDA share (the dip-add buy, booked intraday, unmanaged) still has no stop; the owner was told
+    to place one. Post-live not recorded yet: the expectation's proof pattern does not match the real "resubmitted" line,
+    so record it by hand.
+  - MORNING-1029 crons armed on OCI (step-0 dry run passed; owner reviewed): 0600, 0646, watcher 09:47 ET, heartbeat
+    every 5 min (13-20 UTC), weekly performance Sat/Sun 09:20 ET. One-day dry-run and VIX-probe lines removed (backup
+    `logs/crontab_backup_2026-11-09_morning.txt`). First live send: Tue 11-10 06:00 PT.
+- **Owner answers 11-09:** keep the Slack webhook. The rundown's info is clear but not Slack-optimized and redundant. He is
+  unsure ThinkOrSwim/Robinhood fill options before 06:30 PT, so 06:00 stays reference only. He has no stock-triggered
+  option orders; he uses price alerts.
+- **QHM-REENTRY-1108 + NEWS-1109 (owner-approved):** staged in branch `claude/qhm-reentry-1108` (main worktree); every
+  marker recorded except the qhm GAI preship (GAI free quota exhausted 07:36 PT 11-09; resets midnight PT). Next: rerun
+  `preship_audit.py` on the QHM file with its context, then commit, PR, CI, merge, deploy.
+- **SLACK-UX-1109 (in review):** phone-first message standard; morning rundown cut to three short messages. Draft in the
+  session scratchpad (`slack_ux_2026-11-09.md`). Round 1: UX seat + alerting seat APPROVE-WITH-CHANGES, folded in. Codex
+  running; GAI waits for the quota. Then owner approval, then build.
+- **Then:** NVDA second-share tier misbooking + dip-add stop ordering; the raw order-status sweep in five more trading
+  files; post-live triage #894-#903; REGIME-SIZE slice 1 rebuild.
+
+## ⏩ EARLIER (2026-11-08 Sun evening, Claude signed) — pick up here
 
 - **Shipped and live on OCI 11-08:**
   - KILL-JOIN-1107 (PR 906): kill-switch on-demand ledger rebuild, with an every-minute `run_ledger_sync.py --if-requested`
