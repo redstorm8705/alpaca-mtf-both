@@ -7,13 +7,13 @@
   "proof": [
     {
       "log": "logs/gex_weekend_report_cron.log",
-      "pattern": "gex_weekend_report: weekly marker written",
-      "baseline_exempt_reason": "the weekly-marker line is new in this diff (the ISO-week marker did not exist before), so no earlier run can match it"
+      "pattern": "gex_weekend_report: weekly marker written"
     }
   ],
   "expected_rate": "once per ISO week on its first trading day at 06:00 PT (Monday, or Tuesday after a Monday holiday or a failed Monday send)",
   "window_sessions": 2,
   "window_reason": "the report runs on the first trading day of the week; two sessions from a Sunday ship always include that Monday and the Tuesday fallback",
   "reversal": "the weekly GEX report is sent twice in one ISO week, is still sent on Saturday, or is not sent by Tuesday 06:00 PT in a week with a Monday or Tuesday session",
-  "verification": "tests/test_gex_weekend_report_schedule.py"
+  "verification": "tests/test_gex_weekend_report_schedule.py",
+  "baseline_exempt_reason": "the weekly-marker line is new in this diff (the ISO-week marker did not exist before), so no earlier run can match it"
 }
