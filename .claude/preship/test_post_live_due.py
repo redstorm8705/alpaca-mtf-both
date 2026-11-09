@@ -7,7 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest import mock
 from zoneinfo import ZoneInfo
 
@@ -60,13 +60,40 @@ class Status(unittest.TestCase):
     def test_hook_prints_only_when_overdue(self):
         rows_over = [(531, "OVERDUE", datetime(2026, 10, 9, 16, 0, tzinfo=ET), ["run_day_tier.py"])]
         with mock.patch.object(pld, "status", return_value=rows_over), mock.patch.object(sys, "argv", ["x", "--hook"]), \
-                mock.patch("builtins.print") as pr:
+                mock.patch.object(pld, "open_findings", return_value=[]), mock.patch("builtins.print") as pr:
             self.assertEqual(pld.main(), 0)
         self.assertIn("post-live audit OVERDUE", pr.call_args[0][0])
         with mock.patch.object(pld, "status", return_value=[]), mock.patch.object(sys, "argv", ["x", "--hook"]), \
-                mock.patch("builtins.print") as pr:
+                mock.patch.object(pld, "open_findings", return_value=[]), mock.patch("builtins.print") as pr:
             self.assertEqual(pld.main(), 0)
         pr.assert_not_called()
+
+    def test_hook_line_stays_short_with_many_overdue(self):
+        """TOKEN-CUTS-1108: 70 overdue PRs and 10 findings print as two short lines naming the oldest 5 and first 3."""
+        base = datetime(2026, 10, 1, 16, 0, tzinfo=ET)
+        rows = [(600 + i, "OVERDUE", base + timedelta(days=i), ["execution/x.py", "main.py"]) for i in range(70)][::-1]
+        found = [(800 + i, "post-live error " + "x" * 200) for i in range(10)]
+        with mock.patch.object(pld, "status", return_value=rows), mock.patch.object(pld, "open_findings",
+                                                                                     return_value=found), \
+                mock.patch.object(sys, "argv", ["x", "--hook"]), mock.patch("builtins.print") as pr:
+            self.assertEqual(pld.main(), 0)
+        text = " ".join(c[0][0] for c in pr.call_args_list)
+        self.assertLess(len(text), 1024)
+        self.assertIn("OVERDUE: 70 PRs", text)
+        self.assertIn("#600, #601, #602, #603, #604.", text)
+        self.assertNotIn("#605", text)
+        self.assertIn("findings OPEN: 10]", text)
+        self.assertNotIn("#803", text)
+
+    def test_full_page_of_findings_is_shown_as_at_least(self):
+        """A full gh page (FINDINGS_FETCH_LIMIT rows) may hide more issues, so the count reads '50+', not '50'."""
+        found = [(800 + i, "post-live error") for i in range(pld.FINDINGS_FETCH_LIMIT)]
+        with mock.patch.object(pld, "status", return_value=[]), mock.patch.object(pld, "open_findings",
+                                                                                    return_value=found), \
+                mock.patch.object(sys, "argv", ["x", "--hook"]), mock.patch("builtins.print") as pr:
+            self.assertEqual(pld.main(), 0)
+        text = " ".join(c[0][0] for c in pr.call_args_list)
+        self.assertIn(f"findings OPEN: {pld.FINDINGS_FETCH_LIMIT}+]", text)
 
 
 class Records(unittest.TestCase):
