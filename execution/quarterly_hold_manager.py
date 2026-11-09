@@ -340,6 +340,10 @@ class HoldState(str, Enum):
 # outside-the-bot sale goes back to the operator-confirm path; the flat-hold hand-off and page dedupe stay.
 _OWNER_SALE_AUTOHEAL_ENABLED = True
 _OWNER_EXIT_REASONS = ("owner_app_sale", "owner_confirmed")
+# GE-REBUY-1108: exits QHM never buys back automatically. An unexplained close (not our own filled stop and not a proven
+# owner sale) is treated like an owner sale for re-adds — only the bot's stop or the owner sells a QHM hold, and an
+# unproven owner sale must not fail OPEN into a buy-back (GE: owner sold 11-04 at $330.50, QHM re-bought 11-06).
+_NO_REBUY_EXIT_REASONS = _OWNER_EXIT_REASONS + ("external_close_detected",)
 
 
 # ---------------------------------------------------------------------------
@@ -1240,9 +1244,10 @@ class QuarterlyHoldManager:
             return
         _prev = self._positions.get(symbol)
         if (_prev is not None and _prev.state == HoldState.CLOSED
-                and _prev.closed_reason in _OWNER_EXIT_REASONS):
-            # The OWNER sold this hold (owner-sale auto-heal 2026-10-17): that is his exit decision, so the bot
-            # does not buy it back. Re-dating the pick's not_before_date past the sale re-enables it.
+                and _prev.closed_reason in _NO_REBUY_EXIT_REASONS):
+            # The OWNER sold this hold (owner-sale auto-heal 2026-10-17), or it left the account without QHM's own
+            # stop firing (GE-REBUY-1108): that is an exit decision the bot did not make, so it does not buy it back.
+            # Re-dating the pick's not_before_date past the sale re-enables it.
             _nbf = str((self._thesis_config.get(symbol) or {}).get("not_before_date") or "")
             try:
                 _closed_on = datetime.fromisoformat(str(_prev.updated_at)).date()
@@ -1251,7 +1256,7 @@ class QuarterlyHoldManager:
                 _redated = False
             if not _redated:
                 logger.info(
-                    "QuarterlyHoldManager: %s was sold by the owner (%s, %s) — not re-adding; move its "
+                    "QuarterlyHoldManager: %s was sold outside QHM's own stop (%s, %s) — not re-adding; move its "
                     "not_before_date past that date to buy it again", symbol, _prev.closed_reason, _prev.updated_at,
                 )
                 return
@@ -2127,7 +2132,8 @@ class QuarterlyHoldManager:
                         logger.warning("QHM %s owner-sale check failed: %s", pos.symbol, _op_e)
                         _owner_proof = None
                 if (not _stop_filled and _owner_proof is not None
-                        and _owner_proof.reason == "order history unreadable"):
+                        and (_owner_proof.reason == "order history unreadable"
+                             or getattr(_owner_proof, "retry", False))):   # GE-REBUY-1108: transient read
                     # Could not read the order history this cycle: keep the hold open and retry next cycle, so
                     # an owner sale is not mislabelled (and later bought back) because of one failed read.
                     _today = self._now_et().strftime("%Y-%m-%d")
