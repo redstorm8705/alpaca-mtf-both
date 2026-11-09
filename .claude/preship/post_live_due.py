@@ -33,6 +33,9 @@ RECORDS = "logs/post_live_audits.jsonl"
 FIRST_PR = 531          # the mandate applies from the first PR shipped after it (Track A ETF routing)
 _MERGE_RE = re.compile(r"Merge pull request #(\d+)")
 _NOT_BOT = ("tests/", ".claude/", ".github/", "research/", "logs/", "docs/")
+HOOK_FINDINGS_SHOWN = 3     # display only (TOKEN-CUTS-1108): open post-live issues named in the per-message line
+HOOK_OVERDUE_SHOWN = 5      # display only: oldest overdue PRs named in the per-message line
+HOOK_TITLE_CHARS = 60       # display only: issue-title characters shown
 
 
 def _git(*args: str) -> "str | None":
@@ -115,13 +118,16 @@ def status(now: "datetime | None" = None) -> list:
     return out
 
 
+FINDINGS_FETCH_LIMIT = 50   # gh page size; a full page means the true count may be higher, shown as "50+"
+
+
 def open_findings() -> "list | None":
     """Open GitHub issues labelled post-live — the OCI evaluator's findings (post-live engine, 2026-10-11). The issue
     tracker is the transport from the server to the session (a tracked file written on OCI would break its
     `git pull --ff-only`). None when gh is unavailable. Never raises."""
     try:
         r = subprocess.run(["gh", "issue", "list", "--label", "post-live", "--state", "open", "--json",
-                            "number,title", "--limit", "50"], capture_output=True, timeout=10, cwd=REPO)
+                            "number,title", "--limit", str(FINDINGS_FETCH_LIMIT)], capture_output=True, timeout=10, cwd=REPO)
         if r.returncode != 0:
             return None
         return [(int(i["number"]), str(i["title"])) for i in json.loads(r.stdout.decode() or "[]")]
@@ -132,17 +138,23 @@ def open_findings() -> "list | None":
 def main() -> int:
     rows = status()
     if "--hook" in sys.argv:
+        # TOKEN-CUTS-1108: this prints into EVERY owner message, so it carries counts and a short sample only; the
+        # full lists stay one command away (measured 11-08: the old full list was ~8.6 KB per message).
         found = open_findings() or []
         if found:
-            print("[post-live findings OPEN] " + "; ".join(f"#{n} {t}" for n, t in found[:10])
-                  + ". Root-cause each from the logs, fix through the full gate, then close the issue.")
+            sample = "; ".join(f"#{n} {t[:HOOK_TITLE_CHARS]}" for n, t in found[:HOOK_FINDINGS_SHOWN])
+            more = " …" if len(found) > HOOK_FINDINGS_SHOWN else ""
+            count = f"{len(found)}+" if len(found) >= FINDINGS_FETCH_LIMIT else str(len(found))
+            print(f"[post-live findings OPEN: {count}] {sample}{more}. Full list: gh issue list --label post-live. "
+                  f"Root-cause each from the logs, fix through the full gate, then close the issue.")
         over = [r for r in rows if r[1] == "OVERDUE"]
         if over:
-            items = "; ".join(f"PR #{pr} ({', '.join(files[:3])}) — live since a full session ended {due:%Y-%m-%d}"
-                              for pr, _s, due, files in over)
-            print(f"[post-live audit OVERDUE] {items}. Audit + replay each against that session's real logs/fills, "
-                  f"fix any bug found, then: python3 .claude/preship/record_post_live.py <pr> --session YYYY-MM-DD "
-                  f"--verdict PASS|BUGS_FIXED|BUGS_OPEN --notes \"...\" (Rafael mandate 2026-10-08).")
+            oldest = sorted(over, key=lambda r: r[2])[:HOOK_OVERDUE_SHOWN]
+            print(f"[post-live audit OVERDUE: {len(over)} PRs] oldest: "
+                  + ", ".join(f"#{pr}" for pr, _s, _d, _f in oldest)
+                  + ". Full list: python3 .claude/preship/post_live_due.py. Audit + replay each against that session's "
+                  "real logs/fills, fix any bug found, then: python3 .claude/preship/record_post_live.py <pr> --session "
+                  "YYYY-MM-DD --verdict PASS|BUGS_FIXED|BUGS_OPEN --notes \"...\" (Rafael mandate 2026-10-08).")
         return 0
     for pr, state, due, files in rows:
         print(f"PR #{pr}: {state} (due after {due:%Y-%m-%d %H:%M} ET) — {', '.join(files)}")
