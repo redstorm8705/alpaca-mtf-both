@@ -2,20 +2,27 @@
 """
 scripts/gex_weekend_report.py — WEEKLY GEX support/resistance report (Rafael request 2026-09-06).
 
+SCHEDULE (MORNING-1029, owner-approved 2026-11-08): the report moved from Saturday to the FIRST TRADING DAY OF
+THE WEEK at 09:00 ET (06:00 PT). Cron fires Monday and Tuesday; the run sends only when today is a trading day
+(Alpaca calendar) AND this ISO week's marker logs/gex_weekly_sent_<ISO-year>-W<week>.json is absent. The marker is
+written only after a successful Slack send, so a Monday holiday OR a failed Monday send both lead to a Tuesday send
+(logged "Monday send missing"), and a successful Monday send stops Tuesday. Spot is the latest pre-market IEX bar
+(price + time + source), replacing "Friday close as spot".
+
 Delivers, in plain English, the support & resistance levels to watch Mon–Fri of the UPCOMING week
-for **SPY and QQQ only** (Rafael 2026-09-06 — index-level, not single-name), from Friday's dealer-
+for **SPY and QQQ only** (Rafael 2026-09-06 — index-level, not single-name), from prior-close dealer-
 gamma. Per the board+Gro+GAI design (2026-09-06, unanimous), each name shows AT MOST 3 levels:
   🔴 Resistance = call wall · 🟢 Support = put wall · ⚖️ Pivot = gamma flip,
 with a regime-colored one-line read (positive gamma → walls are brakes/mean-revert; negative gamma →
-walls are breakout/acceleration; near-flip → coin-flip) and the honest "Friday-snapshot re-forms
+walls are breakout/acceleration; near-flip → coin-flip) and the honest "snapshot re-forms
 daily" caveat. Also carries the regime label, pin/centroid, net GEX, confidence as supporting detail.
 
 WHY A SEPARATE PATH (not refresh_gex): the live GEX writer computes spot from the real-time
 last-trade + an NBBO spot-consistency GUARD (board+Gro+GAI 2026-07-26). On a weekend, single-name
 quotes are missing or wide, so that guard (correctly) refuses them and every single name fails to
-UNKNOWN — a live-safety behaviour we must NOT weaken. For a REPORT the authoritative weekend spot is
-simply FRIDAY'S CLOSE, which is clean. This module therefore reuses data.gex's vetted compute
-internals (_fetch_contracts / _fetch_snapshots / _compute_gex) with a Friday bar-close spot, and
+UNKNOWN — a live-safety behaviour we must NOT weaken. For a REPORT the spot is the latest IEX bar
+(a pre-market bar at 06:00 PT on the first trading day; MORNING-1029). This module therefore reuses data.gex's vetted compute
+internals (_fetch_contracts / _fetch_snapshots / _compute_gex) with a latest-IEX-bar spot, and
 NEVER touches the live gex_snapshot.json cache, the live guard, or any execution path.
 
 SAFETY: READ-ONLY. No orders, no execution imports, no writes to data/state or the GEX cache. It
@@ -27,8 +34,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
-from datetime import datetime
+import tempfile
+from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -53,27 +62,121 @@ import data.gex as gex                                  # noqa: E402  (read-only
 from alerts import send_slack, send_slack_blocks        # noqa: E402
 
 _HEARTBEAT = _ROOT / "logs" / "gex_weekend_report_heartbeat.json"
+_LOGS = _ROOT / "logs"
+ET = ZoneInfo("America/New_York")
+_WRAPPER_TARGET_ET = "09:00"   # the cron_tz_wrapper target this job is scheduled at (logged for DST checks)
+_REQUEST_TIMEOUT_SECONDS = 6.0
 
 
-def _friday_close(symbol: str) -> float | None:
-    """Friday's last price = spot for the weekend report. Alpaca latest bar (T1 REST, IEX feed);
-    over a weekend this returns Friday's final bar. None on any failure — NEVER raises."""
+def _atomic_write_text(path: Path, text: str) -> None:
+    """tmp -> fsync -> replace, in the target directory (atomic on POSIX)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError as e:
+            logger.warning("gex_weekend_report: tmp cleanup failed (%s)", e)
+        raise
+
+
+def _iso_week_marker(day: date) -> Path:
+    """logs/gex_weekly_sent_<ISO-year>-W<week>.json for the ISO week containing `day`."""
+    iso = day.isocalendar()
+    return _LOGS / f"gex_weekly_sent_{iso[0]}-W{iso[1]:02d}.json"
+
+
+def _calendar_days(start: date, end: date) -> list | None:
+    """Trading days in [start, end] from the Alpaca calendar (trading API, read-only), or None on any failure."""
+    try:
+        resp = requests.get(f"{gex._BASE_TRADING}/v2/calendar", headers=gex._headers(),
+                            params={"start": start.isoformat(), "end": end.isoformat()},
+                            timeout=_REQUEST_TIMEOUT_SECONDS)
+        if resp.status_code != 200:
+            logger.warning("gex_weekend_report: calendar HTTP %s", resp.status_code)
+            return None
+        body = resp.json()
+        if not isinstance(body, list):
+            return None
+        return [str(d.get("date")) for d in body if isinstance(d, dict) and d.get("date")]
+    except Exception as e:
+        logger.warning("gex_weekend_report: calendar fetch failed (%s)", e)
+        return None
+
+
+def _clock_record(now_utc: datetime) -> dict:
+    """The clock this run detected (DST check): now_utc, now_et, the ET UTC offset and the wrapper target."""
+    now_et = now_utc.astimezone(ET)
+    return {"now_utc": now_utc.isoformat().replace("+00:00", "Z"), "now_et": now_et.isoformat(),
+            "detected_et_offset": _utc_offset_text(now_et), "wrapper_target_et": _WRAPPER_TARGET_ET}
+
+
+def _utc_offset_text(dt: datetime) -> str:
+    """'-04:00' (EDT) / '-05:00' (EST): the '+HH:MM' tail of the ISO string."""
+    return str(dt.isoformat(timespec="seconds"))[-6:]
+
+
+def send_gate(now_utc: datetime) -> tuple[bool, str]:
+    """(send?, reason). Send only on a trading day whose ISO week has no successful-send marker yet.
+    A Tuesday run reads Monday's marker: absent -> 'Monday send missing' -> send; present -> exit."""
+    today = now_utc.astimezone(ET).date()
+    marker = _iso_week_marker(today)
+    if marker.exists():
+        return False, f"marker present ({marker.name}) — this week's report already sent"
+    days = _calendar_days(today, today)
+    if days is None:
+        return False, "calendar unavailable — cannot confirm a trading day"
+    if today.isoformat() not in days:
+        return False, "market closed today (Alpaca calendar)"
+    if today.weekday() >= 1:   # Tuesday (or later): the Monday send did not happen this week
+        return True, "Monday send missing"
+    return True, "first trading day of the week"
+
+
+def _write_marker(now_utc: datetime) -> None:
+    today = now_utc.astimezone(ET).date()
+    _atomic_write_text(_iso_week_marker(today), json.dumps({
+        "sent_utc": now_utc.isoformat().replace("+00:00", "Z"),
+        "sent_local": now_utc.astimezone(PT).isoformat(), "tz": "America/Los_Angeles",
+        "trading_day": today.isoformat()}))
+
+
+def _latest_spot(symbol: str) -> tuple[float, str] | None:
+    """Latest pre-market price = spot for the report, with its bar time. Alpaca latest bar (T1 REST, IEX feed,
+    real time); at 06:00 PT on a trading day this is a pre-market bar (verified 2026-10-29). Returns
+    (price, bar time ISO UTC) or None on any failure — NEVER raises."""
     try:
         resp = requests.get(
             f"{gex._BASE_DATA}/v2/stocks/{symbol}/bars/latest",
-            headers=gex._headers(), params={"feed": "iex"}, timeout=6.0,
+            headers=gex._headers(), params={"feed": "iex"}, timeout=_REQUEST_TIMEOUT_SECONDS,
         )
         if resp.status_code == 200:
             data = resp.json()
             bar = data.get("bar") if isinstance(data, dict) else None
             c = bar.get("c") if isinstance(bar, dict) else None
+            t = bar.get("t") if isinstance(bar, dict) else None
             if isinstance(c, (int, float)) and c > 0:
-                return float(c)
+                return float(c), str(t or "")
             return None
         logger.warning("gex_weekend_report: bar HTTP %s for %s", resp.status_code, symbol)
     except Exception as e:
         logger.warning("gex_weekend_report: bar fetch failed for %s (%s)", symbol, e)
     return None
+
+
+def _fmt_bar_time_pt(ts: str) -> str:
+    """'2026-11-09T13:59:00Z' -> '05:59 AM PT'; '' -> 'time n/a'."""
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return dt.astimezone(PT).strftime("%I:%M %p PT")
+    except (TypeError, ValueError):
+        return "time n/a"
 
 
 def _universe() -> list[str]:
@@ -83,12 +186,13 @@ def _universe() -> list[str]:
 
 
 def _compute_symbol(symbol: str, date_gte: str, date_lte: str) -> dict:
-    """Compute Friday-close-spot GEX for one symbol. Returns a normalized row dict; on any miss/error
+    """Compute latest-pre-market-spot GEX for one symbol. Returns a normalized row dict; on any miss/error
     returns {'symbol', 'label': 'UNKNOWN', 'reason': ...}. NEVER raises (per-symbol isolation)."""
     try:
-        spot = _friday_close(symbol)
-        if not spot:
-            return {"symbol": symbol, "label": "UNKNOWN", "reason": "no_close"}
+        got = _latest_spot(symbol)
+        if not got:
+            return {"symbol": symbol, "label": "UNKNOWN", "reason": "no_spot"}
+        spot, spot_ts = got
         oi_map = gex._fetch_contracts(symbol, date_gte, date_lte)
         if not oi_map:
             return {"symbol": symbol, "label": "UNKNOWN", "reason": "no_contracts", "spot": spot}
@@ -101,6 +205,8 @@ def _compute_symbol(symbol: str, date_gte: str, date_lte: str) -> dict:
             "symbol": symbol,
             "label": gx.get("label", "UNKNOWN"),
             "spot": round(spot, 2),
+            "spot_time_pt": _fmt_bar_time_pt(spot_ts),
+            "spot_source": "IEX latest bar (Alpaca T1)",
             "centroid": pin.get("centroid"),
             "call_wall": pin.get("call_wall"),
             "put_wall": pin.get("put_wall"),
@@ -231,7 +337,7 @@ def build_report() -> tuple[str, list, str]:
     # ── Slack (Block Kit) — S/R levels to watch this week ──
     blocks: list = [_hdr(f"GEX Weekly Levels · {today_iso}")]
     blocks.append(_ctx(f"Support/resistance to watch Mon–Fri (this week's expiry {date_lte}) · "
-                       f"Friday close as spot · {len(ok)}/{len(rows)} names\n"
+                       f"spot = latest pre-market IEX bar · {len(ok)}/{len(rows)} names\n"
                        f"🔴 resistance (call wall) · 🟢 support (put wall) · ⚖️ pivot (gamma flip)\n"
                        f"regime: 🧲 calm/mean-revert · ⚡ volatile/trending · 🔀 coin-flip"))
     for r in rows:
@@ -250,12 +356,13 @@ def build_report() -> tuple[str, list, str]:
             lvl_lines = (f"🔴 Resistance (call wall): *{_fmt_lvl(cw)}*\n"
                          f"🟢 Support (put wall): *{_fmt_lvl(pw)}*\n"
                          f"⚖️ Pivot (gamma flip): *{_fmt_lvl(flip)}*")
-        blocks.append(_sec(f"{g} *{sym}* — {_regime_plain(r.get('label'))} · spot {_fmt_lvl(spot)}\n{lvl_lines}"))
+        blocks.append(_sec(f"{g} *{sym}* — {_regime_plain(r.get('label'))} · spot {_fmt_lvl(spot)} "
+                           f"({r.get('spot_time_pt', 'time n/a')}, IEX)\n{lvl_lines}"))
         blocks.append(_sec(f"_Watch M–F:_ {_sr_read(r.get('label'), cw, pw, flip, spot)}"))
         blocks.append(_ctx(f"pin {_num(r.get('centroid'))} · net GEX {_gex_m(r.get('raw_gex_m'))} · "
                            f"confidence {_num(r.get('confidence'))}"))
     blocks.append(_DIV)
-    blocks.append(_ctx("Friday's snapshot for this week's expiry — sharpest Mon–Tue, re-forms daily as "
+    blocks.append(_ctx("This morning's snapshot (prior-close open interest) for this week's expiry — sharpest early in the week, re-forms daily as "
                        "options trade. Weight by confidence; re-check midweek. Read-only report; not the "
                        "live RTH GEX signal (which uses a guarded real-time spot)."))
 
@@ -274,7 +381,7 @@ def build_report() -> tuple[str, list, str]:
     # ── Markdown archive (S/R-led; Slack uses Block Kit) ──
     md_lines = [
         f"# GEX Weekly Levels — {today_iso}",
-        f"_Support/resistance to watch Mon–Fri · this week's expiry {date_lte} · Friday close as spot · "
+        f"_Support/resistance to watch Mon–Fri · this week's expiry {date_lte} · spot = latest pre-market IEX bar · "
         f"{len(ok)}/{len(rows)} names · read-only_",
         "",
     ]
@@ -293,38 +400,50 @@ def build_report() -> tuple[str, list, str]:
                       f"- 🟢 **Support (put wall):** {_fmt_lvl(pw)}",
                       f"- ⚖️ **Pivot (gamma flip):** {_fmt_lvl(flip)}"]
         md_lines += [
-            f"## {sym} — {r.get('label')} ({_regime_plain(r.get('label'))}) · spot {_fmt_lvl(spot)}",
+            f"## {sym} — {r.get('label')} ({_regime_plain(r.get('label'))}) · spot {_fmt_lvl(spot)} "
+            f"({r.get('spot_time_pt', 'time n/a')}, {r.get('spot_source', '')})",
             *lvl_md,
             f"- pin {_num(r.get('centroid'))} · net GEX {_gex_m(r.get('raw_gex_m'))} · "
             f"confidence {_num(r.get('confidence'))}",
             f"- **Watch M–F:** {_sr_read(r.get('label'), cw, pw, flip, spot)}",
             "",
         ]
-    md_lines += ["> Friday's snapshot for this week's expiry — sharpest Mon–Tue, re-forms daily as options "
+    md_lines += ["> This morning's snapshot (prior-close open interest) for this week's expiry — sharpest early in the week, re-forms daily as options "
                  "trade. Weight by confidence; re-check midweek.",
                  "> Read-only report; not the live RTH GEX signal (which uses a guarded real-time spot).", ""]
     md = "\n".join(md_lines) + "\n"
     return md, blocks, fallback
 
 
-def _write_heartbeat(ok: bool, note: str) -> None:
+def _write_heartbeat(ok: bool, note: str, clock: dict | None = None) -> None:
     try:
-        _HEARTBEAT.write_text(json.dumps({"last_run_pt": datetime.now(PT).isoformat(), "ok": ok, "note": note}))
+        _atomic_write_text(_HEARTBEAT, json.dumps({"last_run_pt": datetime.now(PT).isoformat(), "ok": ok,
+                                                   "note": note, **(clock or {})}))
     except Exception as e:
         logger.warning("gex_weekend_report: heartbeat write failed (%s)", e)
 
 
-def main() -> int:
+def main(now_utc: datetime | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    now_utc = now_utc or datetime.now(timezone.utc)
+    clock = _clock_record(now_utc)
+    logger.info("gex_weekend_report: clock now_utc=%s now_et=%s et_offset=%s wrapper_target_et=%s",
+                clock["now_utc"], clock["now_et"], clock["detected_et_offset"], clock["wrapper_target_et"])
+    send, why = send_gate(now_utc)
+    if not send:
+        logger.info("gex_weekend_report: no send — %s", why)
+        _write_heartbeat(not why.startswith("calendar unavailable"), f"skipped: {why}", clock)
+        return 0
+    logger.info("gex_weekend_report: sending — %s", why)
     try:
         md, blocks, fallback = build_report()
     except Exception as e:
         logger.error("gex_weekend_report: build failed (%s)", e, exc_info=True)
         try:
             send_slack(f":warning: GEX weekend report FAILED to build: {e}")
-        except Exception:
-            pass
-        _write_heartbeat(False, f"build failed: {e}")
+        except Exception as _se:
+            logger.warning("gex_weekend_report: failure alert not sent (%s)", _se)
+        _write_heartbeat(False, f"build failed: {e}", clock)
         return 1
 
     # Slack-first (delivery decoupled from the file write). send_slack_blocks returns real status.
@@ -335,21 +454,24 @@ def main() -> int:
         logger.warning("gex_weekend_report: Slack send raised unexpectedly (%s)", e)
     if slack_ok:
         logger.info("gex_weekend_report: Slack blocks sent")
+        try:
+            _write_marker(now_utc)   # only after a successful send (a failed send leaves Tuesday to retry)
+            logger.info("gex_weekend_report: weekly marker written (%s)", _iso_week_marker(now_utc.astimezone(ET).date()).name)
+        except Exception as e:
+            logger.warning("gex_weekend_report: weekly marker write failed (%s) — Tuesday run may resend", e)
     else:
         logger.warning("gex_weekend_report: Slack delivery FAILED or not configured (see alerts warnings above)")
 
     md_ok = False
-    out = _ROOT / "logs" / f"gex_weekend_report_{datetime.now(PT).strftime('%Y-%m-%d')}.md"
+    out = _LOGS / f"gex_weekend_report_{now_utc.astimezone(PT).strftime('%Y-%m-%d')}.md"
     try:
-        tmp = out.with_suffix(".md.tmp")
-        tmp.write_text(md, encoding="utf-8")
-        tmp.replace(out)
+        _atomic_write_text(out, md)
         md_ok = True
         logger.info("gex_weekend_report: wrote %s", out)
     except Exception as e:
         logger.warning("gex_weekend_report: md write failed (%s)", e)
 
-    _write_heartbeat(slack_ok or md_ok, f"slack={'ok' if slack_ok else 'FAIL'} md={'ok' if md_ok else 'FAIL'}")
+    _write_heartbeat(slack_ok or md_ok, f"slack={'ok' if slack_ok else 'FAIL'} md={'ok' if md_ok else 'FAIL'} ({why})", clock)
     return 0 if (slack_ok or md_ok) else 1
 
 
