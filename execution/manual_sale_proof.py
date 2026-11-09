@@ -37,6 +37,7 @@ class SaleProof:
     reason: str
     sold_qty: int = 0
     order_ids: list = field(default_factory=list)
+    retry: bool = False     # GE-REBUY-1108: a transient read (e.g. a fill not yet time-stamped) — re-check next cycle
 
 
 @dataclass
@@ -77,9 +78,18 @@ def _is_bot_identity(client_order_id: str) -> bool:
         return True
 
 
+_FRACTION = re.compile(r"\.(\d+)(?=[+-]\d\d:\d\d$)")
+
+
 def _parse_ts(value) -> Optional[datetime]:
+    """Alpaca drops trailing zeros from fractional seconds ('...36.47355Z'); Python 3.10's fromisoformat accepts only
+    3 or 6 digits, so the fraction is padded / trimmed to microseconds first (GE-REBUY-1108)."""
+    if value is None:
+        return None
+    text = str(value).replace("Z", "+00:00")
+    text = _FRACTION.sub(lambda m: "." + m.group(1)[:6].ljust(6, "0"), text)
     try:
-        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        ts = datetime.fromisoformat(text)
     except (TypeError, ValueError):
         return None
     return ts if ts.tzinfo is not None else None
@@ -120,7 +130,7 @@ def evaluate_owner_sale(orders: Optional[list], held_qty: int, broker_qty: int, 
             continue
         filled_at = _parse_ts(o.get("filled_at"))
         if filled_at is None:
-            return SaleProof(False, f"order {oid} has fills but no fill time")
+            return SaleProof(False, f"order {oid} has fills but no fill time", retry=True)
         if filled_at <= since:
             continue
         side = str(o.get("side") or "").lower()
