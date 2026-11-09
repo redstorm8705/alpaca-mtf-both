@@ -1546,7 +1546,7 @@ class QuarterlyHoldManager:
                 )
                 return False
             _canceled = _get_canceled_stop(_canceled_id)
-            _status = str(getattr(_canceled, "status", "") or "").lower()
+            _status = self._order_status(_canceled)
             if _canceled is None or _status not in {
                 "filled", "canceled", "cancelled", "rejected", "expired"
             }:
@@ -1603,7 +1603,7 @@ class QuarterlyHoldManager:
                     pos.symbol, pos.ambiguous_add_client_order_id,
                 )
                 return False
-            _amb_status = str(getattr(_amb, "status", "") or "").lower()
+            _amb_status = self._order_status(_amb)
             _amb_terminal = {
                 "filled", "canceled", "cancelled", "rejected", "expired"
             }
@@ -1621,9 +1621,7 @@ class QuarterlyHoldManager:
                 _amb_deadline = _amb_time.monotonic() + 5.0
                 while _amb_time.monotonic() < _amb_deadline:
                     _terminal = _get_ambiguous_order(str(getattr(_amb, "id", "") or ""))
-                    _terminal_status = str(
-                        getattr(_terminal, "status", "") or ""
-                    ).lower()
+                    _terminal_status = self._order_status(_terminal)
                     if _terminal_status in _amb_terminal:
                         _amb = _terminal
                         break
@@ -1696,9 +1694,7 @@ class QuarterlyHoldManager:
             # the post-cancel broker snapshot is therefore the only sizing truth.
             _stop_fill_delta = 0
             if _provisional_id and _stop_before is not None:
-                _stop_status = str(
-                    getattr(_stop_before, "status", "") or ""
-                ).lower()
+                _stop_status = self._order_status(_stop_before)
                 if (_stop_status not in _amb_terminal
                         and not _cancel_ambiguous(_provisional_id)):
                     return False
@@ -1707,9 +1703,7 @@ class QuarterlyHoldManager:
                 _stop_terminal = _stop_before
                 while _stop_time.monotonic() < _stop_deadline:
                     _candidate = _get_ambiguous_order(_provisional_id)
-                    _candidate_status = str(
-                        getattr(_candidate, "status", "") or ""
-                    ).lower()
+                    _candidate_status = self._order_status(_candidate)
                     if _candidate_status in _amb_terminal:
                         _stop_terminal = _candidate
                         break
@@ -6291,6 +6285,14 @@ class QuarterlyHoldManager:
             return False
 
     @staticmethod
+    def _order_status(order: Any) -> str:
+        """An order's status as plain lowercase text ("canceled", "filled", ...). alpaca-py returns an OrderStatus
+        enum; on Python 3.10 str() of it is "OrderStatus.CANCELED", which never matches a plain status string
+        (QHM-STATUS-1109: NVDA's stop recovery could never prove the cancelled stop terminal). None -> ""."""
+        raw = getattr(order, "status", "") if order is not None else ""
+        return str(getattr(raw, "value", raw) or "").lower().split(".")[-1]
+
+    @staticmethod
     def _whole_share_qty(value: Any) -> Optional[int]:
         """Parse broker/ledger quantity without silently truncating evidence."""
         if value is None or isinstance(value, bool):
@@ -6413,7 +6415,7 @@ class QuarterlyHoldManager:
                        or getattr(order, "side", "")).lower()
             order_type = str(getattr(getattr(order, "type", ""), "value", None)
                              or getattr(order, "type", "")).lower()
-            status = str(getattr(order, "status", "") or "").lower()
+            status = self._order_status(order)
             coid = str(getattr(order, "client_order_id", "") or "")
             order_qty = self._whole_share_qty(getattr(order, "qty", None))
             filled_qty = self._whole_share_qty(getattr(order, "filled_qty", None))
