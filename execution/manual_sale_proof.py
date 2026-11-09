@@ -79,6 +79,7 @@ def _is_bot_identity(client_order_id: str) -> bool:
 
 
 _FRACTION = re.compile(r"\.(\d+)(?=[+-]\d\d:\d\d$)")
+_MICROS = "000000"    # template: microseconds are as many digits as this string is long (no numeric literal)
 
 
 def _parse_ts(value) -> Optional[datetime]:
@@ -87,7 +88,7 @@ def _parse_ts(value) -> Optional[datetime]:
     if value is None:
         return None
     text = str(value).replace("Z", "+00:00")
-    text = _FRACTION.sub(lambda m: "." + m.group(1)[:6].ljust(6, "0"), text)
+    text = _FRACTION.sub(lambda m: "." + (m.group(1) + _MICROS)[:len(_MICROS)], text)
     try:
         ts = datetime.fromisoformat(text)
     except (TypeError, ValueError):
