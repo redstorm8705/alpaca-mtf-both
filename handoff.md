@@ -8,40 +8,37 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
-## ⏩ LATEST (2026-11-08 Sun early, Claude signed) — pick up here
+## ⏩ LATEST (2026-11-08 Sun evening, Claude signed) — pick up here
 
-- **Shipped 11-07:**
-  - POST-LIVE Diff A (PR 869): per-signature issues. The 10 dated NEW_ERRORS issues are closed and mapped to #879-#903.
-  - Weekly post-mortem manual bucket (PR 904): the owner's untagged app trades are reported as "Manual" instead of
-    aborting the report. The week of 11-02 was re-run and posted: +$101.98 realized.
-- **KILL-JOIN-1107 (approved):** PR 906 is open, and every gate has passed: cold-2nd round 2 PASS, masked-loss APPROVE,
-  preship Gro + GAI APPROVE.
-  - After merge, on OCI: `git pull --ff-only` and restart.
-  - Then add the cron line `* 13-21 * * 1-5 cd /home/ubuntu/mtf-bot && venv/bin/python3 run_ledger_sync.py
-    --if-requested >> logs/ledger_sync_cron.log 2>&1`.
-  - Close #901/#903 after the first live session shows the heal.
-- **SWING-RATCHET-1105 (approved):** revision 4 is being built in the scratchpad worktree `wt-ratchet` (branch
-  `claude/swing-ratchet-1105`).
-  - Round 3 was rejected by both reviewers for the same flaw: a stale pending lets `_reconcile` and the ratchet both
-    book one stop fill.
-  - Fix: `_mark_booked` at every booking site, release ownership once the pending is stale, and drop the guessed 1.0
-    gap fallback.
-  - Then fresh reviews, preship, ship. `logs/research/swing_pm/ratchet_params.json` needs `git add -f`.
-- **MORNING-1029 (not approved yet):** design v9.2, `logs/design_records/morning_rundown_2026-10-29.md`. It is waiting
-  for Codex's round-2 confirmation (`bgg_call.py <prompt> --gro-only`). After that: approval_ready, then the owner
-  package with six owner questions.
-- **Post-mortem Slack UX redesign (owner asked 11-07):** phone-first.
-  - A headline, one line per tier with ✅/🔻, top 3 and worst 3 trades in plain words, one "watch" line, and the
-    table behind the report link.
-  - Post a test version to the owner first.
-- **Monday VIX latency probe:** `research/vix_latency_probe.py` (committed with this handoff). It needs the one-day
-  OCI cron `20 14 9 11 * cd /home/ubuntu/mtf-bot && venv/bin/python3 research/vix_latency_probe.py >>
-  logs/research/vix_latency_cron.log 2>&1`.
+- **Shipped and live on OCI 11-08:**
+  - KILL-JOIN-1107 (PR 906): kill-switch on-demand ledger rebuild, with an every-minute `run_ledger_sync.py --if-requested`
+    cron (13-21 UTC Mon-Fri). Its first real test is Mon 11-09; close #901/#903 once the heal shows in the logs.
+  - WTP-SLACK-1108 (PR 908): phone-first weekly post-mortem Slack post. The test post went out; the first live run is
+    Sat 11-14.
+  - SWING-RATCHET-1105 (PR 910, 11 review rounds): once a Swing lot closes ≥ +2R, its own stop is replaced up to entry +
+    0.25R. BRK.B should get the first raise at Mon 11-09's first RTH cycle. Proof line:
+    `swing ratchet <SYM>: stop X -> Y ... [change=swing-ratchet-1105]`.
+  - GEX weekly report moved to Mon 06:00 PT, with a Tue fallback; the Saturday send is removed (PR 911, crontab swapped).
+  - VIX latency probe: a one-day cron on Mon 11-09 at 14:20 UTC (`research/vix_latency_probe.py`). Remove the line after
+    it runs.
+- **MORNING-1029 (owner-approved 11-08 with the six recommended answers):**
+  - Built in the scratchpad worktree `wt-morning` (branch `claude/morning-1029`).
+  - The cold review found three issues, now being fixed:
+    - T1: the pre-send quote re-check falls back to a stale quote.
+    - T2: an unpublished bar VOIDs the day.
+    - T3: the plan write shares a try block with the log appends.
+  - Then a fresh cold review, preship and ship.
+  - Before arming the morning crons, run step 0 on OCI on a trading day: a read-only `--dry-run` of `--send 0600`,
+    `--send 0646` and the watcher.
+  - The cron lines are in the builder's report: 0600, 0646, the watcher at 06:47, a heartbeat every 5 min, and weekly
+    performance Sat/Sun.
+- **Owner direction 11-08:** items that don't touch live trading proceed on a plain "approved"; the full approval record
+  stays for trading changes. The approval hook still demands a record for every gated file, and narrowing it is a gated
+  `.claude/preship` change.
 - **Then:**
   - the REGIME-SIZE slice 1 rebuild on rev 3.14;
-  - the approval reader fix, so "kill switch join 1107" records (extra words broke ID matching; gated, needs its own
-    approval);
-  - the main-checkout stash a4711f97 holds a superseded F6 record edit; owner to decide whether to drop it.
+  - the approval-reader fix (extra words such as "kill switch join 1107" broke ID matching);
+  - post-live issue triage #894-#903.
 
 ## ⏩ EARLIER (2026-11-06 night, Claude signed) — two designs aligned and with the owner
 
