@@ -1,0 +1,178 @@
+{
+  "audit_date": "2026-11-09",
+  "run_ts": "2026-11-09T10:30:02.436223-08:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 0,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 25,
+    "levels": {
+      "STRESSED": 20,
+      "ELEVATED": 5
+    },
+    "last_score": 30,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 64,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-09 17:06:46,091 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-09 17:06:46,094 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-09 17:09:02,113 | WARNING  | execution.unmanaged_positions | [unmanaged-position] [NVDA] still unmanaged: residual 1 (paged)",
+      "2026-11-09 17:14:34,466 | WARNING  | strategy.run_cycle | [ANOMALY-2] [MSFT] confirm_gate=4 scans but no entry \u2014 risk.open_positions=4 vs tracker=0 | ",
+      "2026-11-09 17:15:23,446 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "positions": {
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 204,
+        "lapsed_min": 0,
+        "uncovered_at_close": true,
+        "uncovered_windows_et": [
+          "10:05-13:30"
+        ],
+        "uncovered_windows_pt": [
+          "07:05-10:30"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-09",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "NVDA NAKED (broker ground truth) \u2014 STILL UNCOVERED at the window end",
+        "detail": "NVDA: no broker stop for 204m of 240m held (07:05-10:30 PT); owners qhm"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 2,
+    "symbols": [
+      "NVDA"
+    ],
+    "by_symbol": {
+      "NVDA": {
+        "buy": 2,
+        "sell": 0
+      }
+    }
+  }
+}
