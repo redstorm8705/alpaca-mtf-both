@@ -21,9 +21,50 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 - **Owner answers 11-09:** keep the Slack webhook. The rundown's info is clear but not Slack-optimized and redundant. He is
   unsure ThinkOrSwim/Robinhood fill options before 06:30 PT, so 06:00 stays reference only. He has no stock-triggered
   option orders; he uses price alerts.
-- **QHM-REENTRY-1108 + NEWS-1109 (owner-approved):** staged in branch `claude/qhm-reentry-1108` (main worktree); every
-  marker recorded except the qhm GAI preship (GAI free quota exhausted 07:36 PT 11-09; resets midnight PT). Next: rerun
-  `preship_audit.py` on the QHM file with its context, then commit, PR, CI, merge, deploy.
+- **SHIPPED overnight 11-10 (owner authorized shipping once GAI approves):**
+  - QHM-COVER-1109: PR 927, deployed 286d048 at 00:17 PT. NVDA now has a QHM GTC sell stop for 2 @ $163.07; proof line
+    08:18:36 UTC "cover recovery: proved=3 ledger_qhm=2 broker=3 stop=2 gap=1 action=sent". The 3rd share is unhedged
+    by QHM; an ACTION page went out. Post-live is due after today's RTH, then close #923, #924 and #925.
+  - REPORT-STATS-1109: PR 928, pulled to OCI f1f4e7f (the card runs from cron; no restart needed). First proof at the
+    11-10 midday card.
+  - QHM-REENTRY-1108 + NEWS-1109: PR 929, deployed 6d16a58 at 01:18 PT; startup clean. Deployed but not yet run: no
+    closed pick came up for re-add at this start. Cold-review follow-ups are in the PR body.
+  - DAY-VETO-SIZE-1109: GAI APPROVED rev 8 (after one counter-prompt round). The build was started in
+    `scratchpad/wt-dayveto`; it needs the owner's "APPROVE DAY-VETO-SIZE-1109" before commit.
+  - Push-gate quirk: preship_gate runs `git -C <main checkout>` with `@{upstream}..HEAD`, so a main checkout BEHIND
+    origin/main false-blocks pushes from other worktrees. Fix: `git merge --ff-only origin/main` in the main checkout
+    first.
+- **(superseded) Overnight plan 11-09 -> 11-10:**
+  - QHM-COVER-1109 (NVDA has 3 shares and NO stop; root cause: allocator off -> no QHM client id on the dip-add -> the
+    stop was rejected as a wash trade). Worktree `scratchpad/wt-cover`, branch `claude/qhm-cover-1109`. Every marker
+    passes; `alerts.py` preship passed. The QHM file needs only GAI: Gro rejected 4x on refuted premises, and the owner
+    waived reviewer #2 for this file (`--waive-gro`, logged in tb_audit_log). Codex is at its usage limit until 11-14.
+  - REPORT-STATS-1109 (Slack card win rate from Alpaca fills). Worktree `scratchpad/wt-stats`. `pnl_ledger.py` passed
+    on real Gemini. `audit_slack.py` passed only on the NVIDIA substitute, so it is rerun on Gemini first: the owner
+    wants the most accurate reviewer, and llama-3.2-90b caught 2/4 bugs in the bake-off.
+  - Session crons at 00:07 and 00:41 PT. After the first RTH cycle 11-10: NVDA QHM stop 2 @ $163.07 plus an ACTION page
+    for 1 share. Then close post-live #923, #924 and #925 (all NVDA wash-trade symptoms).
+- **QHM-REENTRY-1108 + NEWS-1109 (owner-approved):** staged in branch `claude/qhm-reentry-1108` (worktree
+  `.claude/worktrees/optimize-token-usage-d0b393`), based on a3eab0ad. It touches the same QHM file as QHM-COVER and
+  QHM-STATUS, so it rebases after COVER merges; the QHM markers then go stale. Next: rebase, then a fresh cold-2nd,
+  adversarial and log-evidence (catalyst_engine.py also lacks log-evidence), then GAI and reviewer #2. Owner 11-09 ~23:00
+  PT: "For gro, same waiver as nvidia fix". If Gro rejects on premises refuted at source, `--waive-gro` for the QHM file
+  (log each refutation in tb_audit_log). A REAL bug Gro finds is fixed, not waived. GAI (real Gemini) is still required.
+- **NV-REVIEW-1109 (design; gate tooling; owner asked 11-09 for the most accurate NVIDIA backup, 1-2 models):**
+  bake-off: mistral-large-4 7/8 bugs and minimax-m3.1-flash 6/8 bugs, both with 0/12 false rejects; today's llama-3.2-90b
+  caught 2/4 bugs with 3/6 false rejects. Design `scratchpad/nv_review_design_1109.md`: run both models, a REJECT from
+  either blocks, read reasoning_content, and keep the API key off the command line (a timeout error printed it on
+  11-09). The owner should make a new NVIDIA key. Owner 11-09 ~23:05: the pair stands in whenever Gemini is
+  unavailable, or Codex is out AND the diff is too big for Gro, provided the board (cold-2nd) has passed the exact
+  content. Goal: keep fixes moving. Next: board + GAI review, then owner approval, then build.
+- **DAY-VETO-SIZE-1109 (design, owner asked for it 11-09):** the Day tier skipped all 18 setups on a +2.4% SPY day (rule 1
+  TWO_SIDED, rule 3 long vs SHORT side). Design `scratchpad/day_veto_design_1109.md` rev 7, Track B only:
+  - vetoed setups trade at a fill-derived reduced size instead of being skipped;
+  - automatic pause when the live 90% CI upper bound of mean R is below 0, per direction, resetting at the next trading
+    day;
+  - Track A keeps its skips (34 logged skips since 10-05 replayed at -10R).
+  Board Thorp + Asness + Taleb approve with changes (all folded in); reviewer #2 approve-with-changes. Next: GAI review,
+  then the owner approval package (APPROVE DAY-VETO-SIZE-1109), then build.
 - **SLACK-UX-1109 (in review):** phone-first message standard; morning rundown cut to three short messages. Draft in the
   session scratchpad (`slack_ux_2026-11-09.md`). Round 1: UX seat + alerting seat APPROVE-WITH-CHANGES, folded in. Codex
   running; GAI waits for the quota. Then owner approval, then build.
