@@ -29,7 +29,7 @@ class Broker:
         return SimpleNamespace(equity=self.equity, regt_buying_power=self.bp)
 
 
-def _mgr(pos, price=235.0, room=10, fill=None, broker=None):
+def _mgr(pos, price=235.0, room=10, fill=None, broker=None, submitted=True):
     m = qm.QuarterlyHoldManager.__new__(qm.QuarterlyHoldManager)
     m.dry_run = False
     m._clock = lambda: NOW
@@ -51,7 +51,7 @@ def _mgr(pos, price=235.0, room=10, fill=None, broker=None):
         m.calls.append((p.symbol, qty, label))
         got = qty if fill is None else fill
         p.qty_filled += got
-        return got
+        return qm.AddOutcome(submitted, got)
     m._stop_safe_add = _ssa  # type: ignore[method-assign]
     return m
 
@@ -223,8 +223,9 @@ class TrancheAdds(unittest.TestCase):
         self.assertEqual(m.calls, [])
 
     def test_no_fill_retries_capped_per_day(self):
+        # Pre-submit refusals retry up to the cap; a buy that reached the broker uses the day (QHM-COVER-1109 A2).
         pos = _pos()
-        m = _mgr(pos, fill=0)
+        m = _mgr(pos, fill=0, submitted=False)
         for _ in range(5):
             m.maybe_enter_positions()
         self.assertEqual(len(m.calls), qm._TRANCHE_MAX_TRIES_PER_DAY)
@@ -254,7 +255,7 @@ class TrancheAdds(unittest.TestCase):
 
         def _ssa(p, qty, px, label, raise_stop_to=None):  # poll saw nothing, resync shows the share
             p.qty_filled += 1
-            return 0
+            return qm.AddOutcome(True, 0)
         m._stop_safe_add = _ssa  # type: ignore[method-assign]
         self.assertEqual(m.maybe_enter_positions(), ["NVDA"])
         self.assertEqual((pos.tranche, pos.tranches_filled), (3, 2))
@@ -293,7 +294,7 @@ class OnePerDayAndStopRatchet(unittest.TestCase):
         def _ssa(p, qty, px, label, raise_stop_to=None):
             got["raise"] = raise_stop_to
             p.qty_filled += qty
-            return qty
+            return qm.AddOutcome(True, qty)
         m._stop_safe_add = _ssa  # type: ignore[method-assign]
         m.maybe_enter_positions()
         q = max(int(10000 * 0.2 / 3 / 235.0), 1)
@@ -378,7 +379,7 @@ class LateFillAndFailedResync(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"execution.broker": fake,
                                           "execution.tier_capital_allocator": _fake_allocator_module()}), mock.patch("time.sleep"), \
                 mock.patch("time.monotonic", side_effect=lambda: float(next(clock))):
-            got = m._stop_safe_add(pos, 1, 235.0, "tranche-2")
+            got = m._stop_safe_add(pos, 1, 235.0, "tranche-2").filled_qty
         self.assertEqual(got, 1)
         self.assertEqual(stops, [2])
 
@@ -403,7 +404,7 @@ class RemainderCancelFailure(unittest.TestCase):
         with mock.patch.dict(sys.modules, {"execution.broker": fake,
                                           "execution.tier_capital_allocator": _fake_allocator_module()}), mock.patch("time.sleep"), \
                 mock.patch("time.monotonic", side_effect=lambda: float(next(clock))):
-            got = m._stop_safe_add(pos, 1, 235.0, "tranche-2")
+            got = m._stop_safe_add(pos, 1, 235.0, "tranche-2").filled_qty
         self.assertEqual(got, 0)
         self.assertEqual(pos.stop_order_id, "stop-2")
         self.assertEqual(len(m.alerts), 1)
