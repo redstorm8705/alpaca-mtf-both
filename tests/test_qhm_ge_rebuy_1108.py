@@ -6,7 +6,7 @@ retry, not an unproven close; Alpaca timestamps with any number of fractional di
 Every broker and network call is mocked: these tests can never reach Alpaca."""
 from datetime import datetime, timezone
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from execution import manual_sale_proof as msp
 from execution.quarterly_hold_manager import HoldState
@@ -36,12 +36,23 @@ class NoBuyBackAfterExternalClose(TestCase):
         m.add_candidate("GE", 0.2)
         self.assertEqual(m._positions["GE"].state, HoldState.PENDING_ENTRY)
 
-    def test_own_stop_out_is_still_re_added(self):
+    def test_own_stop_out_is_locked_until_earnings(self):
+        """QHM's own stop-out is NOT treated as an owner sale (no re-date-only block). Since QHM-REENTRY-1108 it is
+        locked instead: no re-add until its next earnings report has passed (or a Rung A dip release)."""
+        from datetime import date
+
+        from execution.quarterly_hold_manager import ET
         prev = _pos(symbol="GE", state=HoldState.CLOSED, closed_reason="qhm_stop_out",
                     updated_at="2026-11-04T13:17:06-05:00")
         m = self._mgr(prev, "2026-07-25")
-        m.add_candidate("GE", 0.2)
+        m._reentry_earnings = Mock(return_value=(date(2026, 12, 15), "finnhub_symbol", "amc"))  # no provider call
+        with patch("trade_logger.log_event"):
+            m.add_candidate("GE", 0.2)
+            self.assertIs(m._positions["GE"], prev)                    # locked: report not passed, no trigger
+            m._now_et.return_value = datetime(2026, 12, 16, 11, 0, tzinfo=ET)   # the session after the report
+            m.add_candidate("GE", 0.2)
         self.assertEqual(m._positions["GE"].state, HoldState.PENDING_ENTRY)
+        self.assertEqual(m._positions["GE"].reentry_release, "earnings_passed")
 
 
 class FillTimeParsing(TestCase):

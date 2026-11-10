@@ -344,6 +344,23 @@ _OWNER_EXIT_REASONS = ("owner_app_sale", "owner_confirmed")
 # owner sale) is treated like an owner sale for re-adds — only the bot's stop or the owner sells a QHM hold, and an
 # unproven owner sale must not fail OPEN into a buy-back (GE: owner sold 11-04 at $330.50, QHM re-bought 11-06).
 _NO_REBUY_EXIT_REASONS = _OWNER_EXIT_REASONS + ("external_close_detected",)
+# QHM-REENTRY-1108 (design qhm_reentry_rule_2026-11-08.md, owner-approved 2026-11-09, Release = Rung A): after QHM's
+# OWN full exit the pick is locked until its next earnings report has passed, unless a completed SIP daily close since
+# the exit is at or below exit_price x (1 + Rung A) with the catalyst state CLEAR. Owner sales and unexplained closes
+# keep the re-date-only rule above. Missing or stale data keeps the lock. Never touches open positions or stops.
+_REENTRY_LOCK_FIELDS = (
+    "reentry_exit_price", "reentry_exit_date", "reentry_exit_route", "reentry_trigger", "reentry_zone_date",
+    "reentry_earnings_date", "reentry_earnings_source", "reentry_earnings_hour", "reentry_release",
+    "reentry_news_through", "reentry_news_reread_from", "reentry_news_negative", "reentry_news_negative_type",
+)
+
+
+def _prev_weekday(d: date) -> date:
+    """The weekday before `d` (weekends skipped; holidays are not known here, which can only make a zone look staler)."""
+    p = d - timedelta(days=1)
+    while p.weekday() >= 5:
+        p -= timedelta(days=1)
+    return p
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +410,27 @@ class HoldPosition:
     coverage_page_key: Optional[str] = None    # "<ET date>|<reason>;<reason>" stop-coverage pages sent today
     cover_gap_page_key: Optional[str] = None   # QHM-COVER-1109: "<ET date>|<gap>" last uncovered-share page; None = off
     closed_reason: Optional[str] = None        # why the hold closed; "owner_app_sale"/"owner_confirmed" = owner's exit
+    # QHM-REENTRY-1108: the re-entry lock written with QHM's own close (same _save_state as the CLOSED transition),
+    # and, on a re-added hold, the release that let it back in. Defaults keep older state files loadable; a CLOSED
+    # hold from a QHM close path without these fields is treated as locked (lock-only).
+    reentry_exit_price: Optional[float] = None   # exit fill price; None -> lock-only
+    reentry_exit_date: Optional[str] = None      # ET date of the exit fill (YYYY-MM-DD)
+    reentry_exit_route: Optional[str] = None     # which QHM close path ended the hold
+    reentry_trigger: Optional[float] = None      # exit_price x (1 + Rung A at the exit date); None -> lock-only
+    reentry_zone_date: Optional[str] = None      # session of the dip-zone file used for the trigger
+    reentry_earnings_date: Optional[str] = None  # first report after the exit (re-read on every check)
+    reentry_earnings_source: Optional[str] = None
+    reentry_earnings_hour: Optional[str] = None  # "bmo" / "amc" / "" (unknown)
+    reentry_release: Optional[str] = None        # on a re-added hold: owner_redated | earnings_passed | dip_trigger
+    # QHM-REENTRY-NEWS-1109: the dip release's news read is incremental. reentry_news_through = end (ISO UTC) of the
+    # last COMPLETE read since the exit date. reentry_news_reread_from = where the next read starts: the END OF THE
+    # READ BEFORE IT, so each read re-covers the previous read's span and an article indexed late (its timestamp
+    # inside an already-read span) is still seen. reentry_news_negative latches once any negative headline is seen
+    # in the window (its type kept for the reason); from then on no news read is made.
+    reentry_news_through: Optional[str] = None
+    reentry_news_reread_from: Optional[str] = None
+    reentry_news_negative: bool = False
+    reentry_news_negative_type: Optional[str] = None
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -738,7 +776,14 @@ class QuarterlyHoldManager:
                 )
                 result.errors.append(f"{symbol}: {e}")
 
-        self._save_state()
+        _saved = self._save_state()
+        # QHM-REENTRY-1108: locks armed by _reconcile_pending_exit are recorded only once they are on disk.
+        _armed = self.__dict__.pop("_reentry_armed_pending", [])
+        if _saved:
+            for _sym in _armed:
+                _apos = self._positions.get(_sym)
+                if _apos is not None and _apos.state == HoldState.CLOSED:
+                    self._reentry_armed(_apos)
         logger.info(
             "QuarterlyHoldManager reconcile_on_startup: %d reconciled, %d errors",
             len(result.symbols_reconciled), len(result.errors),
@@ -1185,7 +1230,19 @@ class QuarterlyHoldManager:
                             )
                             continue
 
-                    if self._submit_tranche(pos, today_str):
+                    # QHM-REENTRY-1108: a dip-released re-entry re-checks the lock right before its FIRST order and
+                    # places it only as a limit at the trigger with a fresh two-sided ask at or below it.
+                    # Keyed on "nothing filled yet", NOT on entry_day: _submit_tranche sets entry_day on the first
+                    # order (an expired one clears it again via _reentry_restart_tranche_clock), so every
+                    # first-tranche retry is checked.
+                    _reentry_limit: Optional[float] = None
+                    if (pos.reentry_release == "dip_trigger" and pos.tranches_filled == 0
+                            and pos.qty_filled == 0):
+                        _go, _reentry_limit = self._reentry_pre_order(pos)
+                        if not _go:
+                            continue
+
+                    if self._submit_tranche(pos, today_str, limit_price=_reentry_limit):
                         entered.append(symbol)
 
                 elif pos.state == HoldState.AWAITING_FILL:
@@ -1326,6 +1383,16 @@ class QuarterlyHoldManager:
                     "not_before_date past that date to buy it again", symbol, _prev.closed_reason, _prev.updated_at,
                 )
                 return
+        # QHM-REENTRY-1108: QHM's own full exit (any CLOSED hold not in _NO_REBUY_EXIT_REASONS) is locked until the
+        # next earnings report has passed, a completed close reaches the trigger with catalysts CLEAR, or the owner
+        # re-dates the pick. A CLOSED hold with no lock fields (older state file / failed save) is lock-only.
+        _release: Optional[dict] = None
+        if (_prev is not None and _prev.state == HoldState.CLOSED
+                and _prev.closed_reason not in _NO_REBUY_EXIT_REASONS):
+            _release = self._reentry_decide(_prev)
+            self._reentry_record(_prev, _release, "add_candidate")
+            if not _release["released"]:
+                return
         if symbol in self._positions and self._positions[symbol].state not in (
             HoldState.CLOSED,
         ):
@@ -1340,6 +1407,15 @@ class QuarterlyHoldManager:
             target_equity_pct=target_equity_pct,
             state=HoldState.PENDING_ENTRY,
         )
+        if _release is not None and _prev is not None:
+            # The released hold carries the lock so the first order is checked again (a restart cannot skip it). It
+            # starts at tranche 1 with no entry day: no catch-up or accelerated tranches.
+            for _f in _REENTRY_LOCK_FIELDS:
+                setattr(pos, _f, getattr(_prev, _f))
+            if pos.reentry_exit_date is None:
+                _xd = self._reentry_exit_day(_prev)
+                pos.reentry_exit_date = _xd.isoformat() if _xd else None
+            pos.reentry_release = _release["kind"]
         self._positions[symbol] = pos
         self._save_state()
         logger.info(
@@ -1348,8 +1424,470 @@ class QuarterlyHoldManager:
         )
 
     # -----------------------------------------------------------------------
+    # QHM-REENTRY-1108 — re-entry lock after QHM's own full exit
+    # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _fill_price_day(order: object) -> "tuple[Optional[float], Optional[date]]":
+        """(filled_avg_price, ET date of filled_at) of a filled order; None for anything unreadable."""
+        px: Optional[float] = None
+        day: Optional[date] = None
+        try:
+            raw = getattr(order, "filled_avg_price", None)
+            if raw is not None and not isinstance(raw, bool):
+                v = float(raw)
+                if math.isfinite(v) and v > 0:
+                    px = v
+        except (TypeError, ValueError):
+            px = None
+        try:
+            ts_raw = getattr(order, "filled_at", None)
+            if isinstance(ts_raw, datetime):
+                ts: Optional[datetime] = ts_raw if ts_raw.tzinfo is not None else None
+            elif isinstance(ts_raw, str) and ts_raw:
+                from execution.manual_sale_proof import _parse_ts
+                ts = _parse_ts(ts_raw)
+            else:
+                ts = None
+            day = ts.astimezone(ET).date() if ts is not None else None
+        except (TypeError, ValueError):
+            day = None
+        return px, day
+
+    def _reentry_route(self, pos: HoldPosition, base: str) -> str:
+        """A stop fill on a stop the trailing profit-lock raised above the average is the profit-lock stop."""
+        if (base == "qhm_stop_out" and pos.last_lock_date
+                and pos.avg_entry_price > 0 and pos.stop_price > pos.avg_entry_price):
+            return "qhm_profit_lock_stop"
+        return base
+
+    def _arm_reentry_lock(self, pos: HoldPosition, route: str, exit_price: Optional[float],
+                          exit_day: Optional[date]) -> dict:
+        """Write the lock onto `pos` in memory, BEFORE the caller's _save_state of the CLOSED transition. Returns the
+        prior lock fields so a failed save can restore them. The route is set first: any later failure leaves a
+        lock-only lock. Never raises; never touches closed_reason or P&L."""
+        snap = {f: getattr(pos, f) for f in _REENTRY_LOCK_FIELDS}
+        try:
+            xd = exit_day or self._now_et().date()
+            pos.reentry_exit_route = route
+            pos.reentry_exit_date = xd.isoformat()
+            pos.reentry_exit_price = None
+            pos.reentry_trigger = None
+            pos.reentry_zone_date = None
+            pos.reentry_release = None
+            pos.reentry_earnings_date = None
+            pos.reentry_earnings_source = None
+            pos.reentry_earnings_hour = None
+            pos.reentry_news_through = None      # a new exit opens a new news window
+            pos.reentry_news_reread_from = None
+            pos.reentry_news_negative = False
+            pos.reentry_news_negative_type = None
+            if exit_price is not None and math.isfinite(float(exit_price)) and float(exit_price) > 0:
+                pos.reentry_exit_price = float(exit_price)
+            rung_a, zone_date = self._reentry_zone(pos.symbol, xd)
+            pos.reentry_zone_date = zone_date
+            if pos.reentry_exit_price is not None and rung_a is not None:
+                # pinned at exit (Thorp): it does not drift as the zones refresh
+                pos.reentry_trigger = round(pos.reentry_exit_price * (1 + rung_a), 2)
+            ed, src, hour = self._reentry_earnings(pos.symbol, xd, None, live=False)
+            pos.reentry_earnings_date = ed.isoformat() if ed else None
+            pos.reentry_earnings_source = src
+            pos.reentry_earnings_hour = hour
+        except Exception as e:  # RC-3: a partial lock is lock-only, never unlocked
+            logger.warning("QHM reentry %s: lock fields incomplete (%s) — lock-only", pos.symbol, e)
+        return snap
+
+    @staticmethod
+    def _restore_reentry_lock(pos: HoldPosition, snap: dict) -> None:
+        for k, v in snap.items():
+            setattr(pos, k, v)
+
+    def _reentry_armed(self, pos: HoldPosition) -> None:
+        """Log line + qhm_reentry event once the lock is in the saved state."""
+        d = {"released": False, "kind": None, "reason": "armed", "close": None, "ask": None,
+             "crossing_date": None, "catalyst_state": None, "catalyst_cache_age_s": None,
+             "earnings_date": pos.reentry_earnings_date, "earnings_source": pos.reentry_earnings_source,
+             "earnings_hour": pos.reentry_earnings_hour}
+        self._reentry_record(pos, d, "close")
+
+    def _reentry_exit_day(self, lock: HoldPosition) -> Optional[date]:
+        """The lock's exit date; for a CLOSED hold without lock fields, the date it was closed (updated_at)."""
+        for raw in (lock.reentry_exit_date, lock.updated_at):
+            if not raw:
+                continue
+            try:
+                return date.fromisoformat(str(raw)[:10])
+            except ValueError:
+                continue
+        return None
+
+    def _reentry_zone(self, symbol: str, exit_day: date) -> "tuple[Optional[float], Optional[str]]":
+        """(Rung A, zone session) from execution/dip_zones.py. No zone or a zone file older than the session before
+        the exit -> (None, session): lock-only."""
+        try:
+            from execution import dip_zones as _dz
+            z = _dz.zones_for(symbol)
+            if z is None:
+                return None, None
+            raw = json.loads(_dz._STATE.read_text()).get("session")
+            sd = date.fromisoformat(str(raw)[:10])
+        except Exception as e:  # RC-3: no zone -> lock-only
+            logger.warning("QHM reentry %s: dip zone unreadable (%s) — lock-only", symbol, e)
+            return None, None
+        if sd < _prev_weekday(exit_day):
+            logger.warning("QHM reentry %s: dip zone session %s is stale for exit %s — lock-only",
+                           symbol, sd, exit_day)
+            return None, sd.isoformat()
+        return float(z[0]), sd.isoformat()
+
+    @staticmethod
+    def _earnings_hours(symbol: str) -> dict:
+        """{iso date: "bmo"/"amc"/...} from the per-symbol earnings cache (Finnhub hours). {} when unknown."""
+        try:
+            from data import fmp_client as _fc
+            fn = getattr(_fc, "_cached_symbol_entry", None)
+            e = fn(symbol.upper()) if fn is not None else None
+            h = e.get("hours") if isinstance(e, dict) else None
+            return {str(k): str(v).lower() for k, v in h.items()} if isinstance(h, dict) else {}
+        except Exception as ex:  # RC-3: unknown hour -> an exit-day report is skipped; a later one passes next session
+            logger.warning("QHM reentry %s: earnings hours unreadable (%s)", symbol, ex)
+            return {}
+
+    def _reentry_earnings(self, symbol: str, exit_day: date, lock: Optional[HoldPosition],
+                          live: bool = True) -> "tuple[Optional[date], str, str]":
+        """(first report after the exit, source, hour). Re-read every check: the provider (T2: Finnhub first, FMP
+        fallback, inside data.fmp_client), else the date stored with the lock, else the pick's config date. A report
+        ON the exit day counts only when it is after the close ("amc"); before-the-open or unknown hour is the report
+        the exit happened on and is skipped. (None, "unknown", "") if none.
+        live=False (the close path): the earnings cache only, never a provider call."""
+        dates: list = []
+        src = "unknown"
+        try:
+            from data.fmp_client import (
+                get_cached_earnings_dates, get_earnings_info, EARNINGS_DATED, EARNINGS_NONE_IN_WINDOW,
+            )
+            if live:
+                info = get_earnings_info(symbol)
+                if info.get("state") in (EARNINGS_DATED, EARNINGS_NONE_IN_WINDOW):
+                    dates = [x for x in (info.get("dates") or []) if isinstance(x, date)]
+                    src = str(info.get("source") or "provider")
+            else:
+                dates = [x for x in get_cached_earnings_dates(symbol) if isinstance(x, date)]
+                src = "earnings_cache" if dates else "unknown"
+        except Exception as e:  # RC-3
+            logger.warning("QHM reentry %s: earnings info failed: %s", symbol, e)
+        hours = self._earnings_hours(symbol)
+        # A report ON the exit day counts as after the exit ONLY when it is explicitly after the close ("amc"). A
+        # before-the-open or unknown-hour report on that day is taken as the report the exit happened on (skipped),
+        # so the lock runs to the next report — never an early earnings_passed release the next morning.
+        after = sorted(x for x in dates
+                       if x > exit_day or (x == exit_day and hours.get(x.isoformat()) == "amc"))
+        if after:
+            return after[0], src, hours.get(after[0].isoformat(), "")
+        if lock is not None and lock.reentry_earnings_date:
+            try:
+                sd = date.fromisoformat(str(lock.reentry_earnings_date)[:10])
+                if sd > exit_day or (sd == exit_day and (lock.reentry_earnings_hour or "") == "amc"):
+                    return sd, "lock:%s" % (lock.reentry_earnings_source or "unknown"), lock.reentry_earnings_hour or ""
+            except ValueError:
+                pass
+        try:
+            cfg = json.loads(_CONFIG_PATH.read_text()) if _CONFIG_PATH.exists() else {}
+            raw = ((cfg.get("picks") or {}).get(symbol) or {}).get("earnings_exit_before")
+            if raw:
+                cd = date.fromisoformat(str(raw)[:10])
+                if cd > exit_day:   # the config date carries no hour: an exit-day date is not a later report
+                    return cd, "config", ""
+        except Exception as e:  # RC-3
+            logger.warning("QHM reentry %s: config earnings date unreadable: %s", symbol, e)
+        return None, "unknown", ""
+
+    @staticmethod
+    def _earnings_passed(report: date, hour: str, today: date) -> bool:
+        """Before-the-open report: the report day's own open counts. After the close or unknown: the next session."""
+        return today >= report if hour == "bmo" else today > report
+
+    def _reentry_closes(self, symbol: str, exit_day: date) -> Optional[list]:
+        """[{"day", "low", "high", "close"}] of COMPLETED SIP daily bars (T1, split-adjusted) from the exit session
+        to yesterday, oldest first. None when the bars cannot be read. Cached per symbol per ET day, failures included
+        (completed closes do not change intraday, so a failed read stays locked until the next session's check)."""
+        today = self._now_et().date()
+        cache: dict = self.__dict__.setdefault("_reentry_close_cache", {})
+        key = (symbol, today.isoformat(), exit_day.isoformat())
+        if key in cache:
+            return cache[key]
+        start = datetime(exit_day.year, exit_day.month, exit_day.day, tzinfo=ET)
+        end = datetime(today.year, today.month, today.day, tzinfo=ET)
+        rows: Optional[list] = []
+        if end > start:
+            try:
+                import config as _cfg
+                import pandas as pd
+                from data.fetcher import fetch_bars_window   # T1 Alpaca SIP
+                df = fetch_bars_window(symbol, _cfg.TF_DAILY, start.astimezone(timezone.utc),
+                                       end.astimezone(timezone.utc), feed="sip", adjustment="split")
+                if df is None or df.empty or not {"low", "high", "close"} <= set(df.columns):
+                    rows = None
+                else:
+                    got: list = []
+                    for ts, r in df.iterrows():
+                        t = pd.Timestamp(ts)
+                        t = t.tz_localize("UTC") if t.tzinfo is None else t
+                        d = t.tz_convert(ET).date()
+                        if exit_day <= d < today:
+                            got.append({"day": d, "low": float(r["low"]), "high": float(r["high"]),
+                                        "close": float(r["close"])})
+                    got.sort(key=lambda row: row["day"])
+                    rows = got
+            except Exception as e:  # RC-3: no bars -> stays locked
+                logger.warning("QHM reentry %s: daily bars unavailable (%s)", symbol, e)
+                rows = None
+        cache[key] = rows
+        return rows
+
+    @staticmethod
+    def _reentry_news_from(lock: Optional[HoldPosition], window_start: datetime) -> datetime:
+        """Where the next news read starts: the end of the complete read BEFORE the lock's last one (so each read
+        re-covers the previous read's span — late-indexed articles), else the exit-date start. An unreadable, naive
+        or pre-window value falls back to the full window (a re-read, never a skipped stretch)."""
+        raw = lock.reentry_news_reread_from if lock is not None else None
+        if not raw:
+            return window_start
+        try:
+            t = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            return window_start
+        if t.tzinfo is None or t < window_start:
+            return window_start
+        return t
+
+    def _reentry_catalyst(self, symbol: str, crossing_day: date, exit_day: date,
+                          lock: Optional[HoldPosition] = None) -> "tuple[str, Optional[int], str]":
+        """(CLEAR | NEGATIVE | UNKNOWN, read age in seconds, reason) from LIVE, COMPLETE reads of every headline for
+        the name since the start of the exit date (ET), via events.catalyst_engine.fetch_news_since (Alpaca News T1,
+        page by page — QHM-REENTRY-NEWS-1109), each classified with its _classify. NEGATIVE = any negative
+        classification in the window (newest-wins is NOT used: a downgrade followed by an upgrade is still NEGATIVE).
+        UNKNOWN whenever the read is not complete (any page error, unreadable page or article time, repeated token,
+        page cap, time budget), on an exception, or for a read not made on a day after the crossing close (Thorp).
+        With `lock` the read is INCREMENTAL and cached on the hold (it runs on the trading thread every cycle the ask
+        is at/below the trigger): it reads from lock.reentry_news_reread_from (the end of the read before the last
+        complete one, so spans overlap by one read; else the exit-date start) to now; a complete read moves
+        reentry_news_reread_from to the previous end and reentry_news_through to that read's end; an incomplete read does not advance it; any
+        negative headline seen (complete read or not) latches reentry_news_negative, after which NEGATIVE is returned
+        with no network read. A changed cache is saved. The cron cache is not used (it does not watch QHM picks).
+        Import inside this method (the module loads .env when imported)."""
+        if lock is not None and lock.reentry_news_negative:
+            return "NEGATIVE", None, "negative headline since exit (cached): %s" % (
+                lock.reentry_news_negative_type or "unknown")
+        if not (os.getenv("ALPACA_API_KEY") and os.getenv("ALPACA_SECRET_KEY")):
+            return "UNKNOWN", None, "catalyst live read: Alpaca credentials missing"
+        try:
+            import events.catalyst_engine as _cat
+            read_at = self._now_et()
+            if read_at.astimezone(ET).date() <= crossing_day:
+                return "UNKNOWN", None, "catalyst read not after the trigger close"
+            window_start = datetime(exit_day.year, exit_day.month, exit_day.day, tzinfo=ET)
+            read_from = self._reentry_news_from(lock, window_start)
+            got = _cat.fetch_news_since(symbol.upper(), read_from)
+            negatives: list = []
+            for it in got.items:
+                if not isinstance(it, dict):
+                    return "UNKNOWN", None, "news row malformed"
+                pol, ctype = _cat._classify("%s %s" % (it.get("headline") or "", it.get("summary") or ""))
+                if pol == "negative":
+                    negatives.append(ctype)
+            if negatives and lock is not None:
+                lock.reentry_news_negative = True
+                lock.reentry_news_negative_type = ",".join(str(n) for n in negatives)
+                self._save_state()
+            if negatives:
+                return "NEGATIVE", 0, "negative headline(s) since exit: %s" % ",".join(str(n) for n in negatives)
+            if not got.complete:
+                return "UNKNOWN", None, "news read incomplete: %s" % (got.error or "no reason given")
+            if lock is not None and isinstance(got.end, datetime) and got.end.tzinfo is not None:
+                lock.reentry_news_reread_from = lock.reentry_news_through or window_start.astimezone(
+                    timezone.utc).isoformat()
+                lock.reentry_news_through = got.end.astimezone(timezone.utc).isoformat()
+                self._save_state()
+        except Exception as e:  # RC-3
+            return "UNKNOWN", None, "catalyst live read failed: %s" % e
+        return "CLEAR", 0, "complete read: %d headline(s) in %d page(s) since %s, none negative" % (
+            len(got.items), got.pages, read_from.isoformat())
+
+    def _reentry_ask(self, symbol: str) -> "tuple[Optional[float], str]":
+        """A fresh two-sided ask (T1 Alpaca quote) or (None, reason). Fresh = the quote's own timestamp within the
+        live-price age limit (data/live_price.py)."""
+        try:
+            from data.alpaca_data import get_latest_quote
+            from data.live_price import _CLOCK_SKEW_S, _MAX_BAR_AGE_S
+            from execution.manual_sale_proof import _parse_ts
+            q = get_latest_quote(symbol)
+            if not q:
+                return None, "quote_missing"
+            bid = float(q.get("bid") or 0)
+            ask = float(q.get("ask") or 0)
+            if not (math.isfinite(bid) and math.isfinite(ask) and bid > 0 and ask > 0 and ask >= bid):
+                return None, "quote_not_two_sided"
+            ts = _parse_ts(q.get("ts"))
+            if ts is None:
+                return None, "quote_time_unreadable"
+            age = (self._now_et() - ts).total_seconds()
+            if not (-_CLOCK_SKEW_S <= age <= _MAX_BAR_AGE_S):
+                return None, "quote_stale"
+            return ask, "fresh"
+        except Exception as e:  # RC-3: no quote -> no order
+            logger.warning("QHM reentry %s: quote read failed: %s", symbol, e)
+            return None, "quote_error"
+
+    def _reentry_decide(self, lock: HoldPosition, check_catalyst: bool = True) -> dict:
+        """Release decision for a locked hold (the CLOSED hold, or a re-added hold carrying its lock). Order:
+        owner re-date, earnings passed, then the Rung A dip leg. Any missing input keeps the lock. Never raises.
+        check_catalyst=False (pre-order): a dip release is returned with catalyst_state None; the caller must run
+        the news read itself (after its cheaper ask check) before acting on it."""
+        d: dict = {"released": False, "kind": None, "reason": "", "close": None, "ask": None,
+                   "crossing_date": None, "catalyst_state": None, "catalyst_cache_age_s": None,
+                   "earnings_date": None, "earnings_source": None, "earnings_hour": None}
+        try:
+            today = self._now_et().date()
+            exit_day = self._reentry_exit_day(lock)
+            if exit_day is None:
+                d["reason"] = "exit_date_unknown"
+                return d
+            _nbf = str((self._thesis_config.get(lock.symbol) or {}).get("not_before_date") or "")
+            try:
+                if _nbf and date.fromisoformat(_nbf) > exit_day:
+                    d.update(released=True, kind="owner_redated", reason="not_before_date %s re-dated past exit" % _nbf)
+                    return d
+            except ValueError:
+                pass
+            ed, src, hour = self._reentry_earnings(lock.symbol, exit_day, lock)
+            d.update(earnings_date=ed.isoformat() if ed else None, earnings_source=src, earnings_hour=hour)
+            if ed is None:
+                d["reason"] = "earnings_date_unknown"
+                return d
+            if self._earnings_passed(ed, hour, today):
+                d.update(released=True, kind="earnings_passed", reason="earnings %s (%s) passed" % (ed, hour or "unknown"))
+                return d
+            trigger = lock.reentry_trigger
+            exit_price = lock.reentry_exit_price
+            if not lock.reentry_exit_route or trigger is None or exit_price is None or trigger <= 0 or exit_price <= 0:
+                d["reason"] = "lock_only"
+                return d
+            rows = self._reentry_closes(lock.symbol, exit_day)
+            if rows is None:
+                d["reason"] = "bars_unavailable"
+                return d
+            if not rows:
+                d["reason"] = "no_completed_close_since_exit"
+                return d
+            d["close"] = rows[-1]["close"]
+            exit_row = next((r for r in rows if r["day"] == exit_day), None)
+            if exit_row is None or not (exit_row["low"] <= exit_price <= exit_row["high"]):
+                # the exit fill is not inside its own session's bar: a corporate action or bad data -> stay locked
+                d["reason"] = "exit_bar_mismatch"
+                return d
+            crossed = [r for r in rows if r["close"] <= trigger]
+            if not crossed:
+                d["reason"] = "close_above_trigger"
+                return d
+            crossing = crossed[-1]
+            d.update(close=crossing["close"], crossing_date=crossing["day"].isoformat())
+            if not check_catalyst:
+                d.update(released=True, kind="dip_trigger", reason="close_at_or_below_trigger (news not yet read)")
+                return d
+            state, age_s, why = self._reentry_catalyst(lock.symbol, crossing["day"], exit_day, lock=lock)
+            d.update(catalyst_state=state, catalyst_cache_age_s=age_s)
+            if state != "CLEAR":
+                d["reason"] = "catalyst_%s: %s" % (state.lower(), why)
+                return d
+            d.update(released=True, kind="dip_trigger", reason="close_at_or_below_trigger")
+            return d
+        except Exception as e:  # RC-3: any fault keeps the lock
+            logger.warning("QHM reentry %s: evaluation failed (%s) — locked", lock.symbol, e)
+            d.update(released=False, kind=None, reason="evaluation_error")
+            return d
+
+    def _reentry_record(self, lock: HoldPosition, d: dict, stage: str) -> None:
+        """Log line + qhm_reentry event in trade_events.jsonl for every lock / release evaluation. Never raises."""
+        decision = "released" if d.get("released") else "locked"
+        logger.info("QHM reentry %s: %s reason=%s trigger=%s close=%s ask=%s", lock.symbol, decision,
+                    d.get("reason"), lock.reentry_trigger, d.get("close"), d.get("ask"))
+        if d.get("reason") == "earnings_date_unknown":
+            _k = (lock.symbol, self._now_et().date().isoformat(), "reentry_earnings_unknown")
+            if _k not in _EARNINGS_SRC_LOGGED:
+                _EARNINGS_SRC_LOGGED[_k] = True
+                self._alert(f"⚠️ QHM: {lock.symbol} was sold by QHM and stays locked from re-buying: its next "
+                            f"earnings date is unknown (no provider or config date). Check the report date.")
+        try:
+            import trade_logger
+            trade_logger.log_event(
+                "qhm_reentry", symbol=lock.symbol, price=float(d.get("close") or 0), size=0,
+                mri_level="N/A", data_source="qhm_reentry", tier="qhm", stage=stage, decision=decision,
+                kind=d.get("kind"), reason=d.get("reason"), exit_price=lock.reentry_exit_price,
+                exit_date=lock.reentry_exit_date, exit_route=lock.reentry_exit_route,
+                trigger=lock.reentry_trigger, close=d.get("close"), crossing_date=d.get("crossing_date"),
+                ask=d.get("ask"), zone_date=lock.reentry_zone_date, catalyst_state=d.get("catalyst_state"),
+                catalyst_cache_age_s=d.get("catalyst_cache_age_s"), earnings_date=d.get("earnings_date"),
+                earnings_source=d.get("earnings_source"), earnings_hour=d.get("earnings_hour"),
+                closed_reason=lock.closed_reason,
+            )
+        except Exception as e:  # RC-3
+            logger.warning("QHM reentry %s: event not logged: %s", lock.symbol, e)
+
+    def _reentry_pre_order(self, pos: HoldPosition) -> "tuple[bool, Optional[float]]":
+        """Right before the FIRST tranche order of a dip-released re-entry: re-run the lock and require a fresh
+        two-sided ask at or below the trigger. (True, trigger) -> limit at the trigger; (True, None) -> the release
+        is now earnings / owner re-date (ordinary entry path); (False, None) -> lock kept, nothing placed."""
+        d = self._reentry_decide(pos, check_catalyst=False)
+        if d["released"] and d["kind"] in ("earnings_passed", "owner_redated"):
+            pos.reentry_release = d["kind"]
+            pos.updated_at = self._now_et().isoformat()
+            self._save_state()
+            self._reentry_record(pos, d, "pre_order")
+            return True, None
+        if not d["released"]:
+            self._reentry_record(pos, d, "pre_order")
+            return False, None
+        trigger = pos.reentry_trigger
+        # cheap check first: most cycles stop at the ask and never make the news call
+        ask, why = self._reentry_ask(pos.symbol)
+        d["ask"] = ask
+        if ask is None or trigger is None:
+            d.update(released=False, kind=None, reason=why)
+        elif ask > trigger:
+            d.update(released=False, kind=None, reason="ask_above_trigger")
+        else:
+            _exit_day = self._reentry_exit_day(pos)
+            _cross = d.get("crossing_date")
+            if _exit_day is None or not _cross:
+                d.update(released=False, kind=None, reason="crossing or exit date missing")
+            else:
+                state, age_s, nwhy = self._reentry_catalyst(pos.symbol, date.fromisoformat(_cross), _exit_day,
+                                                            lock=pos)
+                d.update(catalyst_state=state, catalyst_cache_age_s=age_s)
+                if state != "CLEAR":
+                    d.update(released=False, kind=None, reason="catalyst_%s: %s" % (state.lower(), nwhy))
+                else:
+                    d["reason"] = "close_at_or_below_trigger, ask at or below trigger, news CLEAR"
+        self._reentry_record(pos, d, "pre_order")
+        if not d["released"] or trigger is None:
+            return False, None
+        return True, trigger
+
+    # -----------------------------------------------------------------------
     # Reconciliation helpers
     # -----------------------------------------------------------------------
+
+    @staticmethod
+    def _reentry_restart_tranche_clock(pos: HoldPosition) -> None:
+        """QHM-REENTRY-1108 spec item 16 (no catch-up tranches): a dip-released FIRST order that expired or was
+        cancelled with nothing filled clears entry_day, so the tranche spacing starts from the order that actually
+        fills (_submit_tranche sets entry_day again). Every other hold keeps its entry_day unchanged."""
+        if (pos.reentry_release == "dip_trigger" and pos.tranches_filled == 0 and pos.qty_filled == 0
+                and pos.entry_day is not None):
+            logger.info("QHM reentry %s: dip-released first order not filled — tranche clock restarts (entry_day %s "
+                        "cleared)", pos.symbol, pos.entry_day)
+            pos.entry_day = None
 
     def _reconcile_awaiting_fill(
         self, pos: HoldPosition, result: ReconcileResult, dry_run: bool = False
@@ -1367,6 +1905,7 @@ class QuarterlyHoldManager:
                 pos.symbol,
             )
             pos.state = HoldState.PENDING_ENTRY
+            self._reentry_restart_tranche_clock(pos)
             pos.updated_at = self._now_et().isoformat()  # RC-1
             return
 
@@ -1407,6 +1946,7 @@ class QuarterlyHoldManager:
                     )
                     pos.state = HoldState.PENDING_ENTRY
                     pos.entry_order_id = None
+                    self._reentry_restart_tranche_clock(pos)
                     pos.updated_at = self._now_et().isoformat()  # RC-1
                     result.day_orders_expired += 1
             else:
@@ -1979,7 +2519,12 @@ class QuarterlyHoldManager:
             pos.updated_at = self._now_et().isoformat()
             if pos.qty_filled <= 0:
                 pos.state = HoldState.CLOSED
+                # QHM-REENTRY-1108: the lock goes into the same save as the CLOSED transition.
+                _rx_px, _rx_day = self._fill_price_day(terminal_order)
+                _rx_snap = self._arm_reentry_lock(
+                    pos, self._reentry_route(pos, "qhm_stop_out"), _rx_px, _rx_day)
                 if not self._save_state():
+                    self._restore_reentry_lock(pos, _rx_snap)
                     pos.qty_filled = prior_qty_filled
                     pos.qty_total = prior_qty_total
                     pos.stop_order_id = prior_stop_order_id
@@ -1987,6 +2532,7 @@ class QuarterlyHoldManager:
                     pos.updated_at = prior_updated_at
                     return False
                 _deregister_symbol(pos.symbol)
+                self._reentry_armed(pos)
                 return False
             if not self._save_state():
                 if stopped_qty:
@@ -2578,9 +3124,22 @@ class QuarterlyHoldManager:
         try:
             alpaca_pos = self.broker.get_position(pos.symbol)
             if alpaca_pos is None:
+                # QHM-REENTRY-1108: QHM's own exit order (max-hold exit or the earnings Tier-2 full exit) filled. The
+                # lock is set with the CLOSED state and saved by reconcile_on_startup's _save_state. The exit fill
+                # price is not read here, so this lock is lock-only (released when earnings pass).
+                _rx_route = "qhm_exit_order"
+                try:
+                    _ts2 = self._load_earnings_trim_state().get(pos.symbol, {})
+                    if isinstance(_ts2, dict) and _ts2.get("tier2") in ("reserved", "done"):
+                        _rx_route = "qhm_earnings_trim_exit"
+                except Exception as _rx_e:  # RC-3: route label only
+                    logger.warning("QHM reentry %s: earnings-trim state unreadable (%s)", pos.symbol, _rx_e)
                 pos.state = HoldState.CLOSED
                 pos.updated_at = self._now_et().isoformat()  # RC-1
+                self._arm_reentry_lock(pos, _rx_route, None, None)
                 _deregister_symbol(pos.symbol)
+                # the armed record is written by reconcile_on_startup after its save succeeds
+                self.__dict__.setdefault("_reentry_armed_pending", []).append(pos.symbol)
                 result.positions_closed_externally += 1
                 logger.info(
                     "QuarterlyHoldManager: %s confirmed CLOSED on restart",
@@ -2616,6 +3175,7 @@ class QuarterlyHoldManager:
                 # operator confirm (breach protection UNCHANGED). PURE-qhm only: the helper's own
                 # pure-tier guard refuses a co-held symbol → operator confirm remains (no regression).
                 _stop_filled = False
+                _so = None
                 if pos.stop_order_id:
                     try:
                         from execution.broker import get_order as _get_order
@@ -2673,6 +3233,11 @@ class QuarterlyHoldManager:
                 pos.state = HoldState.CLOSED
                 pos.closed_reason = _exit_reason
                 pos.updated_at = self._now_et().isoformat()  # RC-1
+                if _stop_filled:
+                    # QHM-REENTRY-1108: QHM's own stop (or its trailing profit-lock stop) filled — lock it, saved in
+                    # this branch's _save_state below. Owner sales / unexplained closes keep the re-date-only rule.
+                    _rx_px, _rx_day = self._fill_price_day(_so)
+                    self._arm_reentry_lock(pos, self._reentry_route(pos, "qhm_stop_out"), _rx_px, _rx_day)
                 _deregister_symbol(pos.symbol)
                 result.positions_closed_externally += 1
                 logger.info(
@@ -2785,7 +3350,9 @@ class QuarterlyHoldManager:
                         f"confirm with: python3 confirm_ledger_heal.py {pos.symbol} qhm 0 (on the server, in "
                         f"/home/ubuntu/mtf-bot). If you did NOT sell, do not confirm — tell Claude."
                     )
-                self._save_state()
+                _rx_saved = self._save_state()
+                if _stop_filled and _rx_saved:
+                    self._reentry_armed(pos)
                 return True
         except Exception as e:  # RC-3
             logger.warning(
@@ -4999,8 +5566,10 @@ class QuarterlyHoldManager:
         except Exception as e:  # RC-3
             logger.warning("QHM trail-lock error for %s: %s", pos.symbol, e)
 
-    def _submit_tranche(self, pos: HoldPosition, today_str: str) -> bool:
-        """Submit DAY limit order for current tranche. RC-7: max(int(), 1) guard."""
+    def _submit_tranche(self, pos: HoldPosition, today_str: str,
+                        limit_price: Optional[float] = None) -> bool:
+        """Submit DAY limit order for current tranche. RC-7: max(int(), 1) guard.
+        limit_price (QHM-REENTRY-1108): a dip-released re-entry's first order is a limit AT the stored trigger."""
         if self.dry_run:
             return False
 
@@ -5060,8 +5629,9 @@ class QuarterlyHoldManager:
                     pos.symbol, pos.tranche, qty, _room)
                 return False
 
-            # Limit price: 0.1% above current (fills quickly on liquid large-caps)
-            limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
+            # Limit price: 0.1% above current (fills quickly on liquid large-caps), or the re-entry trigger.
+            if limit_price is None:
+                limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
 
             from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
             _gf_notional = self._grandfathered_notional_for_allocator()
@@ -6259,6 +6829,27 @@ class QuarterlyHoldManager:
         pos.state = HoldState.PENDING_STOP_REPLACE if broker_qty > 0 else HoldState.CLOSED
         pos.closed_reason = None if broker_qty > 0 else "qhm_stop_out"
         pos.updated_at = self._now_et().isoformat()
+        if broker_qty <= 0:
+            # QHM-REENTRY-1108: QHM's stop sold the whole hold — lock it in the same save (a failed save restores
+            # `previous`, which predates the lock). Exit price = fill-weighted average of the terminal stop fills.
+            _rx_qty = 0
+            _rx_val = 0.0
+            _rx_day: Optional[date] = None
+            _rx_ok = True
+            for _rx_o in candidates:
+                _rx_f = self._whole_share_qty(getattr(_rx_o, "filled_qty", None)) or 0
+                if _rx_f <= 0:
+                    continue
+                _rx_p, _rx_d = self._fill_price_day(_rx_o)
+                if _rx_p is None:
+                    _rx_ok = False
+                    continue
+                _rx_qty += _rx_f
+                _rx_val += _rx_p * _rx_f
+                if _rx_d is not None and (_rx_day is None or _rx_d > _rx_day):
+                    _rx_day = _rx_d
+            _rx_px = _rx_val / _rx_qty if (_rx_ok and _rx_qty > 0) else None
+            self._arm_reentry_lock(pos, self._reentry_route(pos, "qhm_stop_out"), _rx_px, _rx_day)
         if not self._save_state():
             restored = HoldPosition.from_dict(previous)
             self._positions[pos.symbol] = restored
@@ -6266,6 +6857,7 @@ class QuarterlyHoldManager:
             return False
         if broker_qty <= 0:
             _deregister_symbol(pos.symbol)
+            self._reentry_armed(pos)
             try:
                 hold_days = 0
                 if pos.entry_day:
