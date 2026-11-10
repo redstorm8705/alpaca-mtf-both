@@ -335,11 +335,21 @@ class NoBuyBackTests(TestCase):
         m.add_candidate("LLY", 0.2)
         self.assertEqual(m._positions["LLY"].state, HoldState.PENDING_ENTRY)
 
-    def test_stop_out_close_is_still_re_added(self):
+    def test_stop_out_close_is_locked_not_owner_blocked(self):
+        """A QHM stop-out is not an owner sale, so the owner re-date-only block does not apply to it. Since
+        QHM-REENTRY-1108 it is locked instead: not re-added until its next earnings report has passed (or a Rung A
+        dip release)."""
+        from datetime import date
         prev = _pos(state=HoldState.CLOSED, closed_reason="qhm_stop_out", updated_at="2026-10-16T14:07:00-04:00")
         m = self._mgr(prev, "2026-08-07")
-        m.add_candidate("LLY", 0.2)
+        m._reentry_earnings = Mock(return_value=(date(2026, 10, 30), "finnhub_symbol", "bmo"))  # no provider call
+        with patch("trade_logger.log_event"):
+            m.add_candidate("LLY", 0.2)
+            self.assertIs(m._positions["LLY"], prev)                   # locked until the 10-30 report
+            m._now_et.return_value = datetime(2026, 10, 30, 10, 0, tzinfo=qhm_mod.ET)   # report-day open (bmo)
+            m.add_candidate("LLY", 0.2)
         self.assertEqual(m._positions["LLY"].state, HoldState.PENDING_ENTRY)
+        self.assertEqual(m._positions["LLY"].reentry_release, "earnings_passed")
 
 
 class AlreadyConfirmedTests(FlatHoldTests):
