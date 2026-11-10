@@ -29,8 +29,15 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
     11-10 midday card.
   - QHM-REENTRY-1108 + NEWS-1109: PR 929, deployed 6d16a58 at 01:18 PT; startup clean. Deployed but not yet run: no
     closed pick came up for re-add at this start. Cold-review follow-ups are in the PR body.
-  - DAY-VETO-SIZE-1109: GAI APPROVED rev 8 (after one counter-prompt round). The build was started in
-    `scratchpad/wt-dayveto`; it needs the owner's "APPROVE DAY-VETO-SIZE-1109" before commit.
+  - DAY-VETO-SIZE-1109 SHIPPED 11-10 11:19 PT (owner APPROVE recorded; PRs 932/933/931, deployed 8f3feea, flag on).
+    Track B setups skipped only by daily side TWO_SIDED / long-vs-SHORT now trade at fill-derived size (minimum
+    order today); per-direction pause after ~12-16 consecutive -1R losses, resets next trading day. Deployed,
+    unexercised: first proof = "[change=day-veto-size-1109]" in logs/day_tier_runner_cron.log. Post-live after its
+    first full session. Reviewer #2 waived by the owner on day_veto_sizing.py and day_trade_manager.py (tb_audit_log).
+  - NEXT: NV-REVIEW-1109. Owner 11-10: "use mistral vs groq for reviews". Design in
+    `scratchpad/nv_review_design_1109.md`: Mistral Large 4 + MiniMax M3.1 as reviewer #2 when Codex is out; a REJECT
+    from either blocks. Needs board + GAI review, owner approval, build.
+  - CI quirk: the preship CI truncates large diffs and false-rejects them. Split big PRs (DAY-VETO shipped in 3 parts).
   - Push-gate quirk: preship_gate runs `git -C <main checkout>` with `@{upstream}..HEAD`, so a main checkout BEHIND
     origin/main false-blocks pushes from other worktrees. Fix: `git merge --ff-only origin/main` in the main checkout
     first.
