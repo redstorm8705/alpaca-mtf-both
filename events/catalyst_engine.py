@@ -33,9 +33,13 @@ from __future__ import annotations
 import os
 import sys
 import json
+import math
+import time
 import logging
+import urllib.parse
 import urllib.request
 import urllib.error
+from typing import NamedTuple
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -165,6 +169,160 @@ def _fetch_alpaca_news(symbols: list[str], limit: int = 25) -> list[dict]:
     return out
 
 
+class NewsFetch(NamedTuple):
+    """A complete-or-not read of one symbol's news since a moment (QHM-REENTRY-NEWS-1109)."""
+    items: list
+    complete: bool
+    error: str
+    pages: int
+    # The end of the window asked for (aware UTC, floored to the second the API was sent); None when no request was
+    # made. A caller reading incrementally starts its next read here after a COMPLETE read.
+    end: datetime | None = None
+
+
+# The Alpaca News API's own maximum page size (its documented limit; the cron read above caps at the same value).
+_NEWS_PAGE_SIZE = 50
+# Wall-clock budget for one fetch_news_since call: it runs on the single trading thread (check_exits cannot run
+# while it does). Checked before every page request; when spent the read is incomplete ("time budget").
+_NEWS_READ_TIMEOUT_SECONDS = 30
+
+
+def _news_ts(raw: object) -> datetime | None:
+    """An article's created_at as an aware UTC datetime, or None when missing / unparseable / naive."""
+    try:
+        ts = datetime.fromisoformat(str(raw or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if ts.tzinfo is None:
+        return None
+    return ts.astimezone(timezone.utc)
+
+
+def _news_page_cap(oldest_seen: datetime | None, pages_read: int, start: datetime, end: datetime) -> int | None:
+    """Pages allowed for a read of start..end, re-derived after EVERY page from all pages read so far (sorted newest
+    first): they cover end - the oldest article seen, i.e. (that span / pages read) per page; the window needs about
+    (end - start) / that per-page span pages, and the cap allows the same again as headroom. One dense first page
+    therefore cannot fix a huge cap. None when the rate cannot be measured (the read is then incomplete)."""
+    if oldest_seen is None or pages_read <= 0:
+        return None
+    span = (end - oldest_seen).total_seconds()
+    window = (end - start).total_seconds()
+    if span <= 0 or window <= 0:
+        return None
+    est = math.ceil(window / (span / pages_read))
+    return est + est
+
+
+def fetch_news_since(symbol: str, start_utc: datetime) -> NewsFetch:
+    """EVERY Alpaca News (T1) article tagged with `symbol` from start_utc (inclusive) to now, read page by page
+    through next_page_token. Read-only. complete=True only when the API ends the listing (an HTTP 200 page whose
+    next_page_token field is present and null/empty); any HTTP error, timeout, network error, unreadable JSON, page
+    without a news list or without a next_page_token field, unreadable article time, repeated page token, reaching
+    the page cap (re-derived after every page) or the _NEWS_READ_TIMEOUT_SECONDS budget returns complete=False
+    with the reason; `end` is the window end sent to the API (the next incremental read starts there) —
+    the caller must then treat the news as unknown. Duplicate articles (same id) are kept once. Items carry the
+    same fields as _fetch_alpaca_news plus id. Used by the QHM re-entry dip release; the cron path is untouched."""
+    sym = (symbol or "").strip().upper()
+    key = os.getenv("ALPACA_API_KEY", "")
+    sec = os.getenv("ALPACA_SECRET_KEY", "")
+    if not key or not sec or not sym:
+        return NewsFetch([], False, "credentials or symbol missing", 0)
+    if not isinstance(start_utc, datetime) or start_utc.tzinfo is None:
+        return NewsFetch([], False, "start time is not timezone-aware", 0)
+    start = start_utc.astimezone(timezone.utc)
+    # Floored to the second actually sent: an article inside the dropped fraction is read by the next incremental
+    # read (which starts at this exact second), never lost between two reads.
+    end = datetime.now(timezone.utc).replace(microsecond=0)
+    if start >= end:
+        return NewsFetch([], False, "start time is not in the past", 0)
+    # The API's start is second-resolution: floor it so an article at the exact start second is returned;
+    # the exact start is then applied to each article below.
+    params = {"symbols": sym, "start": start.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "end": end.strftime("%Y-%m-%dT%H:%M:%SZ"), "sort": "desc", "limit": str(_NEWS_PAGE_SIZE)}
+    headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": sec, "Accept": "application/json"}
+    import ssl
+    try:
+        import certifi
+        _ctx = ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        _ctx = ssl.create_default_context()
+    items: list[dict] = []
+    seen_ids: set = set()
+    seen_tokens: set[str] = set()
+    token: str | None = None
+    pages = 0
+    oldest_seen: datetime | None = None
+    started = time.monotonic()
+
+    def _done(complete: bool, error: str) -> NewsFetch:
+        logger.info("catalyst news_since %s: start=%s pages=%d items=%d complete=%s%s", sym, start.isoformat(),
+                    pages, len(items), complete, (" error=%s" % error) if error else "")
+        return NewsFetch(items, complete, error, pages, end)
+
+    while True:
+        request_timeout_left = _NEWS_READ_TIMEOUT_SECONDS - (time.monotonic() - started)
+        if request_timeout_left <= 0:
+            return _done(False, "time budget %ss spent after %d page(s)" % (_NEWS_READ_TIMEOUT_SECONDS, pages))
+        q = dict(params)
+        if token:
+            q["page_token"] = token
+        req = urllib.request.Request("https://data.alpaca.markets/v1beta1/news?" + urllib.parse.urlencode(q),
+                                     headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=min(10, request_timeout_left), context=_ctx) as resp:
+                status = getattr(resp, "status", None)
+                if status != 200:
+                    return _done(False, "HTTP %s" % status)
+                data = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            return _done(False, "HTTP %s" % e.code)
+        except Exception as e:
+            return _done(False, "request failed: %s" % e)
+        pages += 1
+        news = data.get("news") if isinstance(data, dict) else None
+        if not isinstance(news, list):
+            return _done(False, "page without a news list")
+        for n in news:
+            if not isinstance(n, dict):
+                return _done(False, "malformed article")
+            ts = _news_ts(n.get("created_at"))
+            if ts is None:
+                return _done(False, "article time unreadable")
+            oldest_seen = ts if oldest_seen is None or ts < oldest_seen else oldest_seen
+            if ts < start:
+                continue
+            aid = n.get("id")
+            ident = ("id", aid) if aid is not None else ("row", n.get("created_at"), n.get("headline"))
+            if ident in seen_ids:
+                continue
+            seen_ids.add(ident)
+            items.append({
+                "id":         aid,
+                "symbols":    n.get("symbols") or [],
+                "headline":   n.get("headline", "") or "",
+                "summary":    n.get("summary", "") or "",      # whole summary: every word is classified
+                "created_at": n.get("created_at", "") or "",
+                "url":        n.get("url", "") or "",
+                "source":     "alpaca_news",  # data-tier tag
+            })
+        if "next_page_token" not in data:
+            return _done(False, "page without a next_page_token field")
+        nxt = data.get("next_page_token")
+        if not nxt:
+            return _done(True, "")
+        if not isinstance(nxt, str):
+            return _done(False, "page token unreadable")
+        if nxt in seen_tokens:
+            return _done(False, "repeated page token")
+        seen_tokens.add(nxt)
+        cap = _news_page_cap(oldest_seen, pages, start, end)
+        if cap is None:
+            return _done(False, "page cap not derivable from the pages read")
+        if pages >= cap:
+            return _done(False, "page cap %d reached" % cap)
+        token = nxt
+
+
 def get_active_catalysts(symbols: list[str]) -> dict[str, dict]:
     """For each symbol, the most-recent NON-neutral stock-specific catalyst within the lookback.
     Returns {symbol: {polarity, type, headline, created_at, url}}. Newest wins (dynamic, not static).
@@ -187,6 +345,7 @@ def get_active_catalysts(symbols: list[str]) -> dict[str, dict]:
         # flagging SPY. (Validation catch, 2026-07-14 — co-tag false positives found live.)
         hl = it["headline"].upper()
         primary = syms[0] if syms else None
+        target: str | None
         if primary in watch:
             target = primary
         else:

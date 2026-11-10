@@ -665,6 +665,25 @@ def alert_gtc_failed(symbol: str, side: str, stop_px: float, reason: str) -> Non
         logger.critical(f"alert_gtc_failed: could not page for {symbol} ({e}); reason: {reason}")
 
 
+def clear_gtc_failed(symbol: str, side: str) -> int:
+    """QHM-COVER-1109 C/X5: a stop for (symbol, side) was confirmed resting, so remove today's page stamps for that
+    symbol and side at every stop price — a later failure the same day pages again. Called only after a QHM stop is
+    read back resting from the broker (never on submit). Returns how many stamps were removed. Never raises."""
+    try:
+        today = datetime.now(_ET).strftime("%Y-%m-%d")
+        day = _gtc_fail_day(today)
+        prefix = f"{str(symbol).upper()}|{str(side).lower()}|"
+        keep = {k: v for k, v in day.items() if not k.startswith(prefix)}
+        removed = len(day) - len(keep)
+        if removed:
+            _atomic_write(_GTC_FAIL_PAGES, {today: keep})
+            logger.info(f"clear_gtc_failed: {symbol} {side} stop confirmed resting — {removed} page stamp(s) cleared")
+        return removed
+    except Exception as e:
+        logger.warning(f"clear_gtc_failed: could not clear page stamps for {symbol} {side} ({e})")
+        return 0
+
+
 def alert_floor_blind(symbol: str, tier: str, kind: str, detail: str, critical: bool) -> bool:
     """Operator page when the never-sell floor GUARD fails CLOSED on AMBIGUITY — it cannot
     read the ownership ledger, cannot read the live Alpaca net qty, detects ledger↔Alpaca

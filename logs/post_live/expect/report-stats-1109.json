@@ -1,0 +1,9 @@
+{
+  "change": "report-stats-1109",
+  "tier": 1,
+  "paths": ["scripts/audit_slack.py", "reporting/pnl_ledger.py"],
+  "proof": [{"log": "logs/midday_audit_cron.log", "pattern": "audit card trade record: all=[0-9]+ trades .*\\[change=report-stats-1109\\]"}],
+  "expected_rate": "once per midday card and once per after-close card on each trading day",
+  "window_sessions": 5,
+  "reversal": "The midday or after-close card still shows win rate 34.6% / 186 trades, or the card's All trade count disagrees with the closing orders in the Alpaca fills, or the card fails to post"
+}

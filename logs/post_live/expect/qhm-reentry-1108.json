@@ -1,0 +1,38 @@
+{
+  "change": "qhm-reentry-1108",
+  "tier": 2,
+  "paths": [
+    "execution/quarterly_hold_manager.py",
+    "events/catalyst_engine.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "QHM reentry [A-Z.]+: (locked|released) reason="
+    },
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "catalyst news_since [A-Z.]+: start=.* complete=(True|False)"
+    }
+  ],
+  "expected_rate": "event-driven: one 'locked' line when a QHM hold closes through its own exits, then one line per bot start while a sold pick is re-checked (QHM closed holds now: GE, GEV, LLY, NVDA, GOOGL history; several per week)",
+  "window_sessions": 10,
+  "window_reason": "QHM closes are not daily; ten sessions covers the recent close and restart rate.",
+  "reversal": "a QHM buy of a symbol whose prior hold closed through a QHM exit, before that symbol's next earnings report, without a 'released reason=dip_trigger' line whose close and ask are at or below the trigger; a released buy that is not a limit at the trigger; an owner-sold or unexplained-close hold released by a dip; after 10 locked cases, a negative cumulative score of locked cases vs an immediate re-buy (owner review)",
+  "metrics": [
+    {
+      "name": "QHM re-buys above the prior QHM exit price before earnings",
+      "source": "Alpaca fills (QH- client ids) vs the qhm_reentry events in trade_events.jsonl",
+      "direction": "down",
+      "bound": "zero without a released dip_trigger event"
+    },
+    {
+      "name": "locked cases scored at their earnings release vs an immediate re-buy",
+      "source": "trade_events.jsonl event=qhm_reentry + Alpaca daily bars",
+      "direction": "up",
+      "bound": "cumulative score >= 0 after the first 10 locked cases, else back to the owner"
+    }
+  ],
+  "verification": "tests/test_qhm_reentry_1108.py",
+  "baseline_exempt_reason": "The proof line text 'QHM reentry <SYM>: locked|released reason=' is new, emitted only by this change; it does not appear in the production log before this ship."
+}
