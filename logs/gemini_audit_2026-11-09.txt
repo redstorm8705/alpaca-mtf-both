@@ -1,0 +1,67 @@
+Nightly Gemini Audit — 2026-11-09
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['scripts/morning_rundown.py', 'scripts/morning_watch.py', 'scripts/gex_weekend_report.py', 'execution/manual_sale_proof.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution/quarterly_hold_manager.py | NVDA position is NAKED (broker ground truth: no-broker-stop=354m) and the bot is failing to recover the stop due to a status-parsing bug | NVDA
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **NVDA Stop Recovery Failure**: `QuarterlyHoldManager` is repeatedly logging `CRITICAL` errors for `NVDA` because it cannot prove the terminal status of the canceled stop. The log shows: `QuarterlyHoldManager: NVDA expected QHM owner qty 1 from baseline 1 but ledger proves 2; keeping recovery pending`.
+* **MSFT Anomaly**: `[ANOMALY-2] [MSFT] confirm_gate=27 scans but no entry — risk.open_positions=4 vs tracker=0`. This indicates a desync between the `risk` module and the `portfolio_tracker`.
+* **QHM Fail-Closed**: Multiple `WARNING` logs for `GOOGL`, `GE`, and `GEV` indicating `QHM cap check unavailable` or `overnight room unavailable`.
+
+### PERFORMANCE AUDIT
+* **Trade Integrity**: The `NVDA` position is currently in a `PENDING_STOP_REPLACE` state, but the `QuarterlyHoldManager` is failing to resolve it. The `ledger` shows 2 shares, but the `QHM` expects 1. This discrepancy is preventing the bot from placing a protective stop, leaving the position naked.
+* **Score Correlation**: The `strategy.run_cycle` logs show `AAPL`, `NET`, and `SNOW` consistently scoring 10/12, yet the `confirm_gate` is blocking entry. The logic appears to be functioning as intended (fail-closed), but the persistent `ANOMALY-2` for `MSFT` suggests the entry logic is not clearing its internal state correctly.
+
+### TRADE INTEGRITY
+* No new trade events were recorded in the provided JSON for the current date (2026-11-09), consistent with the `pnl_today: 0.0` snapshot.
+
+### MODIFIED FILE FINDINGS
+* **execution/quarterly_hold_manager.py**:
+    * **Bug**: `_order_status` method (line 6275).
+    * **Trace**: The method attempts to parse the status of an order. It uses `getattr(raw, "value", raw)`. When using `alpaca-py`, the status is an `OrderStatus` enum. The code performs `.lower().split(".")[-1]`. If the enum is `OrderStatus.CANCELED`, `str()` results in `"orderstatus.canceled"`. The split logic is correct, but the `_order_status` method is being called on objects that may not have the expected structure, leading to the `NVDA` stop recovery failure.
+    * **Failure Condition**: The `NVDA` stop recovery logic fails to identify the terminal status of the canceled stop, causing the bot to remain in `PENDING_STOP_REPLACE` indefinitely.
+* **scripts/morning_watch.py**:
+    * The backfill logic (`backfill` method) has a potential race condition where `last_processed_bar_ts` is updated before the `send_outcome` is confirmed. If the process crashes between `self.save()` and `send_outcome()`, the outcome might not be alerted.
+
+### P5 STATUS
+* P5-C1: UNTOUCHED
+* P5-C2: UNTOUCHED
+* P5-H1: OBSOLETE
+* P5-H2: UNTOUCHED
+* P5-H3: UNTOUCHED
+* P5-H4: UNTOUCHED
+* P5-H5: FIXED
+* P5-M1: UNTOUCHED
+* P5-M2: UNTOUCHED
+* P5-M3: UNTOUCHED
+* P5-L1: UNTOUCHED
+* P5-L2: UNTOUCHED
+* P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution/quarterly_hold_manager.py | Incorrect status parsing for terminal orders | The `_order_status` helper fails to correctly identify terminal statuses for `alpaca-py` objects, preventing stop recovery.**
+* **ALPHA ISSUE | MEDIUM | execution/quarterly_hold_manager.py | `_NO_REBUY_EXIT_REASONS` logic | The inclusion of `external_close_detected` in `_NO_REBUY_EXIT_REASONS` prevents the bot from re-adding positions that were closed by the broker (e.g., margin calls or system errors) rather than the owner.**
+
+### FIX VALIDATION
+* No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **Immediate Manual Intervention**: Manually place a protective stop for the `NVDA` position on the Alpaca dashboard, as the bot is currently unable to manage it.
+2. **Patch `_order_status`**: Update `execution/quarterly_hold_manager.py` to ensure `_order_status` correctly handles `alpaca-py` `OrderStatus` objects by explicitly checking for the enum type before string conversion.
+3. **Audit `_NO_REBUY_EXIT_REASONS`**: Remove `external_close_detected` from `_NO_REBUY_EXIT_REASONS` to allow the bot to recover positions closed by external broker actions.
+4. **Resolve `MSFT` Desync**: Investigate the `confirm_gate` logic in `strategy.run_cycle` to determine why `risk.open_positions` and `tracker` are out of sync.
+5. **Review `morning_watch.py`**: Add a delivery confirmation check before updating `last_processed_bar_ts` to prevent missed alerts during crashes.
+================================================================================
+BROKER GROUND TRUTH (2026-11-09, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   NAKED                    owners=qhm exposed=390m no-broker-stop=354m [07:05-13:00] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

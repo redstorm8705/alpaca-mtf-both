@@ -159,7 +159,7 @@ def _run(
             mock.patch.dict(sys.modules, {"execution.broker": fake_broker_mod}), \
             mock.patch.dict(sys.modules, {"execution.tier_capital_allocator": fake_allocator_mod}), \
             mock.patch("time.sleep"), mock.patch("time.monotonic", side_effect=lambda: float(next(clock))):
-        got = m._stop_safe_add(pos, add_qty, 230.0, label)
+        got = m._stop_safe_add(pos, add_qty, 230.0, label).filled_qty
     return got, cancels
 
 
