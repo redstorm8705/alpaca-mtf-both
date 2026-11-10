@@ -186,6 +186,46 @@ def _fifo_day(day: str, src: Optional[dict] = None) -> Optional[tuple[float, flo
         return None
 
 
+def _trade_record_fields(src: Optional[dict], dollar) -> list:
+    """Per-tier trade record (REPORT-STATS-1109) from Alpaca fills (FIFO, pnl_ledger.trade_stats): win rate,
+    trade count, profit factor and net, lifetime and month to date (PT). Replaces the old tracker's all-time
+    stats, which count only the core intraday tier and stopped moving when it stopped closing trades
+    (2026-10-13). When the fills cannot be read in full, ONE field says so; a stale number is never shown."""
+    try:
+        import reporting.pnl_ledger as _pl
+        led = (src or {}).get("led")
+        if led is None:
+            fills = _pl.fetch_all_fills(strict=True) or []
+            orders = _pl.fetch_all_orders(strict=True) or []
+            led = _pl.compute_realized(fills, qhm_symbols=_pl._get_qhm_symbols(),
+                                       coid_map=_pl.build_coid_map(orders))
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        now = _dt.now(_ZI("America/Los_Angeles"))
+        rts = led.get("round_trips", [])
+        life = _pl.trade_stats(rts)
+        month = _pl.trade_stats(rts, since=now.strftime("%Y-%m-01"))
+        order = [*_pl.TIER_LABELS.values(), "Untagged", "All"]
+    except Exception as e:  # noqa: BLE001 — a card must never break on the stats read
+        logger.warning("audit card: trade record read failed (%s)", e)
+        return [{"type": "mrkdwn", "text": "*Trade record*\nunavailable — Alpaca fills unreadable this run"}]
+    fields = []
+    for label in order:
+        s = life.get(label)
+        if not s or not s["trades"]:
+            continue
+        pf = "n/a" if s["profit_factor"] is None else f"{s['profit_factor']:.2f}"
+        m = month.get(label) or {}
+        mline = (f"{now.strftime('%b')}: {m['win_rate']:.0f}% of {m['trades']} · {dollar(m['net'])}"
+                 if m.get("trades") else f"{now.strftime('%b')}: no closes")
+        fields.append({"type": "mrkdwn", "text": (
+            f"*{label}*\n{s['win_rate']:.0f}% win · {s['trades']} trades\nPF {pf} · net {dollar(s['net'])}\n{mline}")})
+    _all = life.get("All") or {}
+    logger.info("audit card trade record: all=%s trades win_rate=%s tiers=%d [change=report-stats-1109]",
+                _all.get("trades"), _all.get("win_rate"), len(fields))
+    return fields
+
+
 def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None,
                      day: Optional[str] = None) -> dict:
     """
@@ -201,7 +241,7 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None,
     """
     injected: list[str] = []
     mismatch = False
-    stats = eod.get("all_time_stats", {}) or {}
+    src: Optional[dict] = None
 
     def _dollar(v: float) -> str:
         s = f"${abs(v):,.2f}"
@@ -298,17 +338,7 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None,
             ]
             source = "Alpaca mark-to-market · _realized unavailable this run_"
 
-    lifetime_fields = []
-    if stats:
-        wr = stats.get("win_rate")
-        pf = stats.get("profit_factor")
-        ar = stats.get("avg_r_multiple")
-        if wr is not None:
-            lifetime_fields.append({"type": "mrkdwn", "text": f"*Win rate*\n{float(wr):.1f}%"})
-        if pf is not None:
-            lifetime_fields.append({"type": "mrkdwn", "text": f"*Profit factor*\n{float(pf):.2f}"})
-        if ar is not None:
-            lifetime_fields.append({"type": "mrkdwn", "text": f"*Avg R-multiple*\n{float(ar):+.3f}"})
+    lifetime_fields = _trade_record_fields(src, _dollar)
 
     return {"today": today_fields, "lifetime": lifetime_fields,
             "source_note": source, "injected_numbers": injected, "mismatch": mismatch}
@@ -602,7 +632,7 @@ def render_card(mode: str, date_str: str, verdict: str, pnl: dict,
                    "elements": [{"type": "mrkdwn", "text": pnl["source_note"]}]})
     if pnl["lifetime"]:
         blocks.append({"type": "section",
-                       "text": {"type": "mrkdwn", "text": "*Lifetime*"},
+                       "text": {"type": "mrkdwn", "text": "*Trade record · Alpaca fills (lifetime, month to date)*"},
                        "fields": pnl["lifetime"]})
     blocks.append({"type": "divider"})
 

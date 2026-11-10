@@ -544,6 +544,48 @@ def compute_realized(fills: list[dict], qhm_symbols: set | None = None,
     }
 
 
+TIER_LABELS = {"daytrade": "Day", "intraday": "Swing + core", "qhm": "QHM", "forever6": "Forever 6"}
+
+
+def trade_stats(round_trips: list[dict], since: str | None = None) -> dict:
+    """Per-tier trade record from FIFO round trips (REPORT-STATS-1109). One TRADE = one closing order (a partial
+    close counts once per closing order, as the card's "Closed today" does); its P&L is the sum of the round
+    trips it closed, per entry tier. `since` (a PT date "YYYY-MM-DD") keeps closes on or after that date.
+    Returns {tier_label: {trades, wins, losses, win_rate, profit_factor, avg_win, avg_loss, net}} plus "All";
+    win_rate is a percent; profit_factor is None when there is no losing trade. Pure: no I/O, never raises on a
+    well-formed ledger."""
+    trades: dict[tuple, float] = defaultdict(float)
+    for r in round_trips or []:
+        day = str(r.get("exit_date") or "")
+        if since and day < since:
+            continue
+        key = r.get("exit_order_id") or r.get("exit_fill_id") or r.get("id")
+        label = TIER_LABELS.get(str(r.get("tier") or ""), "Untagged")
+        trades[(label, key)] += float(r.get("pnl", 0.0) or 0.0)
+
+    def _summ(pnls: list[float]) -> dict:
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p < 0]
+        n = len(pnls)
+        return {
+            "trades": n,
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(100.0 * len(wins) / n, 1) if n else None,
+            "profit_factor": round(sum(wins) / -sum(losses), 2) if losses else None,
+            "avg_win": round(sum(wins) / len(wins), 2) if wins else None,
+            "avg_loss": round(sum(losses) / len(losses), 2) if losses else None,
+            "net": round(sum(pnls), 2),
+        }
+
+    by_tier: dict[str, list[float]] = defaultdict(list)
+    for (label, _k), pnl in trades.items():
+        by_tier[label].append(round(pnl, 2))      # cents, so float noise never turns a $0.00 trade into a win
+    out = {label: _summ(p) for label, p in by_tier.items()}
+    out["All"] = _summ([p for pl_ in by_tier.values() for p in pl_])
+    return out
+
+
 def compute_unrealized(positions: list[dict]) -> float:
     total = 0.0
     for p in positions:
