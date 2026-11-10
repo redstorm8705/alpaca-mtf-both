@@ -190,12 +190,17 @@ def _mark_track_b_signal(dtm, sym: str, day: str) -> None:
         logger.warning("[%s] track-B signal marker write errored (in-process block only this tick): %s", sym, e)
 
 
+_SIDE_SCORE: dict = {}   # sym -> the side vote's score from the last _side_for read (DAY-VETO-SIZE-1109 decision log)
+
+
 def _side_for(sym: str) -> str:
     """Layer-A structural trend side for `sym` (LONG / SHORT / TWO_SIDED / UNKNOWN). Any error returns
-    UNKNOWN, which the direction rule treats as no trade (fail closed)."""
+    UNKNOWN, which the direction rule treats as no trade (fail closed). The vote's score is kept in _SIDE_SCORE."""
     try:
         from strategy.day_tier_side import compute_side_bias
-        return str((compute_side_bias(sym) or {}).get("side") or "UNKNOWN")
+        _sb = compute_side_bias(sym) or {}
+        _SIDE_SCORE[sym] = _sb.get("score")
+        return str(_sb.get("side") or "UNKNOWN")
     except Exception as e:  # noqa: BLE001
         logger.warning("[%s] Layer-A side read failed — UNKNOWN (no trade): %s", sym, e)
         return "UNKNOWN"
@@ -363,6 +368,107 @@ def _direction_block(sym: str, side: object, direction: object, mode: object, al
     except Exception as e:  # noqa: BLE001 — a selectivity rule never crashes the tick
         logger.warning("[%s] day-tier direction rules unreadable (not blocking): %s", sym, e)
         return False, ""
+
+
+_VETO_RULE1 = "no clear trend direction"
+_VETO_RULE3 = "long against the SHORT daily side"
+
+
+def _direction_block_b(sym: str, side: object, direction: object, mode: object,
+                       gate: dict) -> "tuple[bool, str, str]":
+    """Track B's call of the direction rules with DAY-VETO-SIZE-1109 (design record day_veto_size_2026-11-09.md, item 1).
+    Returns (block, reason, veto_reason). With config.DAYTRADE_VETO_DOWNSIZE_ENABLED True (and the full-gate /
+    record-only modes off): rule 1 is relaxed ONLY for side TWO_SIDED (UNKNOWN stays blocked) and rule 3 (a long against
+    a SHORT daily side) is relaxed. No early return: the relaxed setup still runs the direction-validity check and rule
+    2 (every 2m/5m check opposes -> block), via _direction_block with the side set to the trade's own direction. A
+    relaxed setup that passes returns (False, "", the relaxed rule's reason). Flag False -> exactly _direction_block.
+    Never raises."""
+    try:
+        from execution import day_veto_sizing as dvs
+        if not dvs.enabled() or _gate_blocks():
+            b, why = _direction_block(sym, side, direction, mode, False, gate)
+            return b, why, ""
+        import config
+        if getattr(config, "DAYTRADE_DIRECTION_RULES_BLOCK", True) is not True:
+            return False, "", ""
+        s = str(side or "").upper()
+        d = str(direction or "").lower()
+        veto = ""
+        if s == "TWO_SIDED":
+            veto = f"{_VETO_RULE1} (side={s})"
+        elif s == "SHORT" and d == "long":
+            veto = f"{_VETO_RULE3} (only a failed-trend fade is allowed)"
+        if not veto:
+            b, why = _direction_block(sym, side, direction, mode, False, gate)
+            return b, why, ""
+        if d not in ("long", "short"):
+            return True, f"invalid trade direction {direction!r}", ""
+        b, why = _direction_block(sym, "LONG" if d == "long" else "SHORT", direction, mode, False, gate)
+        return (True, why, "") if b else (False, "", veto)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] track-B veto rule read failed (today's rules): %s", sym, e)
+        b, why = _direction_block(sym, side, direction, mode, False, gate)
+        return b, why, ""
+
+
+def _veto_prepare(sym: str, decision: dict, trigger: dict, side: str, veto_reason: str, day_start_equity: float,
+                  bar_id: str) -> "dict | None":
+    """DAY-VETO-SIZE-1109 runner checks for a relaxed Track B setup, BEFORE any sizing call: (1) the structural stop
+    distance > 0 and min_entry_qty x |entry - stop| x DAYTRADE_BUDGET_SLIPPAGE_MULT within DAYTRADE_PER_TRADE_RISK_
+    EQUITY_PCT of start-of-day equity — first, before any m math; (2) the direction's automatic pause; (3) the posterior
+    (replay prior + live veto fills of the same exposure direction) -> m_kelly. Returns the trigger fields to merge
+    (veto_downsized tag + the decision-log block), or None = skipped and logged. place_entry re-checks (1) on the final
+    limit/stop and computes m_floor, m and the cluster bound. Never raises."""
+    try:
+        import config
+        from execution import day_trade_manager as dtm
+        from execution import day_veto_sizing as dvs
+        d = str(trigger.get("direction") or "").lower()
+        entry = float(trigger.get("entry_ref") or 0.0)
+        stop = dtm._compute_stop_price(trigger, d, entry)
+        dist = abs(entry - stop) if stop is not None else 0.0
+        if stop is None or not dist > 0:
+            _log_direction_skip(sym, decision, trigger, "veto setup skipped: no usable stop distance", bar_id)
+            return None
+        min_q = dtm._min_entry_qty(sym, 1)
+        cap = float(config.DAYTRADE_PER_TRADE_RISK_EQUITY_PCT) * float(day_start_equity)
+        ok, _fit = dvs.one_share_fit(min_q, dist, float(config.DAYTRADE_BUDGET_SLIPPAGE_MULT), cap)
+        if not ok:
+            _log_direction_skip(sym, decision, trigger, "veto setup skipped: one share risks more than the per-trade cap",
+                                bar_id)
+            return None
+        sign = dvs.exposure_sign(sym, d)
+        if sign is None:
+            _log_direction_skip(sym, decision, trigger, "veto setup skipped: exposure direction unreadable", bar_id)
+            return None
+        ctx = dvs.refresh()   # once per tick: R ledger from Alpaca orders + the pause check on new closed veto lots
+        pz = dvs.pause_info(sign)
+        if pz is not None:
+            _why_pz = ("veto path paused: pause file unreadable (fail closed)" if pz.get("unreadable") else
+                       f"veto path paused: live mean R CI upper < 0 (n={pz.get('n')}, mean={pz.get('mean')}, "
+                       f"upper={pz.get('upper')})")
+            _log_direction_skip(sym, decision, trigger, _why_pz, bar_id)
+            return None
+        trades = ctx.get("trades")
+        post = dvs.posterior(ctx.get("prior"), [t for t in trades if t.get("sign") == sign]
+                             if trades is not None else None)
+        mk = dvs.m_kelly(post)
+
+        def _r(v: object) -> object:
+            return round(float(v), 6) if isinstance(v, (int, float)) else v   # type: ignore[arg-type]
+
+        vinfo = {"change": dvs.CHANGE, "rule": veto_reason, "side": side, "side_score": _SIDE_SCORE.get(sym),
+                 "p": _r((post or {}).get("p")), "b": _r((post or {}).get("b")),
+                 "n_prior": (post or {}).get("n_prior"), "n_prior_eff": (post or {}).get("n_prior_eff"),
+                 "n_live": (post or {}).get("n_live"), "f_star": _r((post or {}).get("f_star")),
+                 "f_lcb": _r((post or {}).get("f_lcb")), "m_kelly": _r(mk),
+                 "inputs": "ok" if mk is not None else "posterior unavailable -> m_floor"}
+        logger.info("[%s] [change=day-veto-size-1109] track-B veto relaxed (%s): side=%s p=%s b=%s f_lcb=%s m_kelly=%s",
+                    sym, veto_reason, side, vinfo["p"], vinfo["b"], vinfo["f_lcb"], vinfo["m_kelly"])
+        return {"veto_downsized": True, "veto_reason": veto_reason, "veto": vinfo}
+    except Exception as e:  # noqa: BLE001
+        _log_direction_skip(sym, decision, trigger, f"veto setup skipped: error {e!r}", bar_id)
+        return None
 
 
 def _is_counter(side: object, direction: object) -> bool:
@@ -1284,6 +1390,22 @@ def run_tick() -> dict:
     call_budget = int(getattr(config, "DAYTRADE_MAX_API_CALLS_PER_RUN", 60))
     per_entry_est = int(getattr(config, "DAYTRADE_CALLS_PER_ENTRY_EST", 15))
     calls_used = 4 + 2 * int((recon or {}).get("checked", 0) or 0)  # clock+equity + ~2/owned reconcile + kill/sample
+    # DAY-VETO-SIZE-1109 item 6: every open-market tick rebuilds the veto R ledger for newly closed veto lots and
+    # re-checks the per-direction pause, so a pause follows the closed trade, not the next veto setup. Its broker order
+    # reads are capped (revision 3 item 4; revision 4 nit b) at what this tick's API budget has left after the calls
+    # already spent, keeping one per-entry estimate for EACH track that can still enter this tick (A when its universe
+    # is set, B and M when enabled) — only the tick's own budget values (call_budget, calls_used, per_entry_est). Reads
+    # are counted (nit c); lots not reached keep their cached / journal value and are read on a later tick.
+    try:
+        from execution import day_veto_sizing as _dvs_t
+        if _dvs_t.enabled() and bool(getattr(config, "DAYTRADE_TRACK_B_ENABLED", False)):
+            _n_tracks = sum(1 for _on in (bool(getattr(config, "DAYTRADE_UNIVERSE", [])),
+                                          bool(getattr(config, "DAYTRADE_TRACK_B_ENABLED", False)),
+                                          bool(getattr(config, "DAYTRADE_TRACK_M_ENABLED", False))) if _on)
+            _vctx = _dvs_t.refresh(max_reads=max(0, call_budget - calls_used - per_entry_est * _n_tracks))
+            calls_used += int(_vctx.get("api_calls") or 0)
+    except Exception as _ve:  # noqa: BLE001 — never blocks the tick
+        logger.warning("day-veto refresh failed (veto setups size at m_floor this tick): %s", _ve)
     universe = list(getattr(config, "DAYTRADE_UNIVERSE", []))
     bar_id = dtm.bar_id_for()
     entered = 0
@@ -1498,12 +1620,20 @@ def run_tick() -> dict:
                 _side_b = _side_for(sym)
                 _gate_b = _entry_direction_gate(sym, _side_b, trigger_b.get("direction"), trigger_b.get("mode"),
                                                 allow_counter_fade=False)
-                _blk_b, _blk_why_b = _direction_block(sym, _side_b, trigger_b.get("direction"), trigger_b.get("mode"),
-                                                      False, _gate_b)
+                # DAY-VETO-SIZE-1109: rules 1 (TWO_SIDED only) and 3 are relaxed to a reduced size; rule 2 still blocks.
+                _blk_b, _blk_why_b, _veto_why_b = _direction_block_b(sym, _side_b, trigger_b.get("direction"),
+                                                                     trigger_b.get("mode"), _gate_b)
                 if _blk_b:
                     _log_direction_skip(sym, {**decision_b, "side": _side_b},
                                         {**trigger_b, "alignment": _gate_b["alignment"]}, _blk_why_b, bar_id)
                     continue
+                if _veto_why_b:
+                    _vb = _veto_prepare(sym, {**decision_b, "side": _side_b},
+                                        {**trigger_b, "alignment": _gate_b["alignment"]}, _side_b, _veto_why_b,
+                                        day_start_equity, bar_id)
+                    if _vb is None:
+                        continue   # skipped and logged inside
+                    trigger_b = {**trigger_b, **_vb}
                 # CEO order 2026-10-06: the gate verdict is recorded, not blocking (see _gate_blocks).
                 trigger_b = {**trigger_b, "counter_trend": _is_counter(_side_b, trigger_b.get("direction")),
                              "alignment": _gate_b["alignment"], "gate_ok": _gate_b["ok"],
@@ -1543,6 +1673,8 @@ def run_tick() -> dict:
                     # 10/10 applies to longs AND shorts (CEO 2026-10-07: "full size, long or short"); the alignment
                     # and trend checks inside are computed for the trade's own direction.
                     _ten, _ten_why = lev.is_ten_of_ten(screen, mom, _gate_b)
+                    if trigger_b.get("veto_downsized") is True and _ten:
+                        _ten, _ten_why = False, f"veto_downsized setup: never maximum size ({_ten_why})"
                     decision_b = {**decision_b, "ten_of_ten": _ten, "ten_of_ten_reason": _ten_why}
                     _etf = None
                     if lev.pivot_enabled() and trigger_b.get("direction") == "long" and lev.bull_etf_for(sym):

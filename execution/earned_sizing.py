@@ -155,7 +155,10 @@ def plan(conviction: object, events: list, now: "datetime | None" = None) -> "di
         return None
     if not math.isfinite(conv):
         return None
-    trades = completed_trades(events)
+    # DAY-VETO-SIZE-1109 item 4: veto_downsized lots (client order id carries the veto marker) never enter the band
+    # record — they can neither prove nor pollute a band; they have their own R ledger (execution/day_veto_sizing.py).
+    from execution.day_veto_sizing import is_veto_coid
+    trades = [t for t in completed_trades(events) if not is_veto_coid(t.get("trade_id"))]
     cutoff = week_start_et(now)
     prior = [t for t in trades if t["exit_ts"] < cutoff and t["conviction"] is not None]
     cuts = band_cuts([t["conviction"] for t in prior])

@@ -906,6 +906,11 @@ DAYTRADE_TRACK_B_WATCHDAY_EXEMPT = True
 # entry's Day gross room also leaves Track B's unused budget free. Total Day cap unchanged; with no live mover A still
 # borrows B's room.
 DAYTRADE_TRACK_B_RESERVE = True
+# DAY-VETO-SIZE-1109 (design record logs/design_records/day_veto_size_2026-11-09.md, revision 8): a Track B setup blocked
+# only by "no clear daily trend" (side TWO_SIDED; UNKNOWN stays blocked) or "long against a SHORT daily side" trades at a
+# reduced size (execution/day_veto_sizing.py) instead of being skipped; rule 2 (every 2m/5m check opposes) still blocks.
+# Kill flag: only an explicit True enables it; False restores today's blocking exactly. Track A is unchanged.
+DAYTRADE_VETO_DOWNSIZE_ENABLED = True
 DAYTRADE_STOP_BUFFER_PCT     = 0.001  # PROV:daytier-v2-2026-08-29  buffer beyond the broken wall for a RIDE stop
 DAYTRADE_RIDE_TARGET_R       = 2.0    # PROV:daytier-bracket-2026-09-19 — RIDE take-profit = entry ± this × (entry→stop
                                       # distance), profit-side. FADE uses the GEX pin as the target; RIDE has no pin, so
