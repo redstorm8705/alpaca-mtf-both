@@ -1,0 +1,12 @@
+{
+  "change": "qhm-cover-1109",
+  "tier": 2,
+  "paths": ["execution/quarterly_hold_manager.py", "alerts.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "QHM [A-Z.]+ cover recovery: proved="}],
+  "expected_rate": "once per stuck QHM hold at the first cycle after deploy (NVDA on 11-10), then only when a QHM add leaves a hold unprotected",
+  "window_sessions": 5,
+  "reversal": "After the first RTH cycle NVDA has no resting QHM sell stop, or a QHM stop for more shares than the account holds, or no ACTION page for the uncovered share, or the ownership ledger changes for NVDA without a fill",
+  "metrics": [{"name": "nvda_qhm_stop_qty", "source": "Alpaca open orders for NVDA with a QH- client id", "direction": "up", "bound": "equals min(QHM proved, QHM ledger, free shares); 2 on 11-10 with no owner stop"}],
+  "verification": "tests/test_qhm_cover_1109.py",
+  "baseline_exempt_reason": "The proof line text 'cover recovery: proved=' is new in this diff and has zero matches in the current production log; adding a change tag would need another code revision."
+}
