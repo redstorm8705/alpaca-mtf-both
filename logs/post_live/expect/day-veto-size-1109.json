@@ -1,0 +1,11 @@
+{
+  "change": "day-veto-size-1109",
+  "tier": 2,
+  "paths": ["run_day_tier.py", "execution/day_trade_manager.py", "execution/day_veto_sizing.py", "execution/earned_sizing.py", "config.py"],
+  "proof": [{"log": "logs/day_tier_runner_cron.log", "pattern": "\\[change=day-veto-size-1109\\]"}],
+  "expected_rate": "on sessions where a Track B mover triggers against a TWO_SIDED or SHORT daily side: one veto_downsized decision per such setup (11-09 had 3-5); none on sessions where every Track B setup is with the daily trend",
+  "window_sessions": 5,
+  "reversal": "A veto_downsized entry sized above m_floor while the posterior edge is <= 0, a veto order whose stop risk exceeds the per-trade cap, an UNKNOWN-side or Track A setup tagged veto_downsized, same-direction veto stop-risk above the per-trade cap, or the per-direction pause failing to reset at the next trading day",
+  "metrics": [{"name": "veto_downsized_entries_per_session", "source": "day_tier_events.jsonl decisions tagged veto_downsized with an entry_fill", "direction": "up", "bound": "every Track B setup skipped only by rule 1 (TWO_SIDED) or rule 3 becomes an entry or a logged size skip"}],
+  "verification": "tests/test_day_veto_size_1109.py"
+}

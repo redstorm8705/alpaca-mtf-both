@@ -2386,7 +2386,9 @@ def _conv_inputs(symbol: str, size: dict, decision: dict, used: "tuple | None") 
         plan = es.plan(conviction, events)
         if plan is None or not plan.get("proven"):
             return {"stage": "plan", "plan": plan}
-        j = es.jump_ratio(es.completed_trades(events))
+        # DAY-VETO-SIZE-1109 (revision 4 nit d): veto_downsized lots stay out of CONV-1018's J as out of its band record
+        from execution.day_veto_sizing import is_veto_coid
+        j = es.jump_ratio([t for t in es.completed_trades(events) if not is_veto_coid(t.get("trade_id"))])
         if j is None:
             logger.info("[%s] CONV-1018: no measured one-minute jump yet — today's sizing", symbol)
             return {"stage": "no_j", "plan": plan}
@@ -2514,12 +2516,16 @@ def _conv_entry(symbol: str, direction: str, size: dict, decision: dict, limit_p
 
 
 # ── entry (B1/B2/B3/B6 + Rafael amendments) ─────────────────────────────────────────────────────
-def _mint_coid(symbol: str, direction: str) -> str:
+def _mint_coid(symbol: str, direction: str, veto: bool = False) -> str:
     """Stable day-tier client_order_id via ownership_guard.make_coid (tier 'daytrade' → 'DT-...').
-    Falls back to a plain unique string if make_coid rejects (never raises)."""
+    `veto` (DAY-VETO-SIZE-1109 item 4): the uniq part carries the veto marker (day_veto_sizing.veto_uniq) so the lot's
+    R ledger is rebuilt from Alpaca orders. Falls back to a plain unique string if make_coid rejects (never raises)."""
     side1 = "b" if direction == "long" else "s"
     epoch = int(time.time() * 1000)
     uniq = uuid.uuid4().hex[:8]
+    if veto:
+        from execution.day_veto_sizing import veto_uniq
+        uniq = veto_uniq()
     try:
         from execution.ownership_guard import make_coid
         return make_coid("daytrade", symbol, side1, epoch, uniq)
@@ -2762,6 +2768,89 @@ def _wired_entry(*, symbol: str, direction: str, size: dict, track: str, qty: in
                     float(_conv_sized["per_share"]), qty)
     return {"ok": True, "qty": qty, "stop_px": stop_px, "size": size, "min_q": _min_q, "conv_sized": _conv_sized,
             "skip": None}
+
+
+def _veto_log_skip(symbol: str, bar_id: str, decision: dict, trigger: dict, why: str) -> None:
+    """Decision record (Rule D) for a veto_downsized setup skipped inside place_entry. Best-effort."""
+    logger.info("[%s] [change=day-veto-size-1109] veto setup skipped: %s", symbol, why)
+    try:
+        from strategy import day_tier_logger
+        # unique per attempt (stock / fund / 1-share fallback share a bar; cold review nit b)
+        day_tier_logger.log_decision(f"SKIP-VETO-{symbol}-{bar_id}-{uuid.uuid4().hex}", symbol, decision=decision,
+                                     trigger={**(trigger or {}), "skip_reason": f"veto setup skipped: {why}"})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("[%s] veto skip decision log failed: %s", symbol, e)
+
+
+def _veto_sizing(*, symbol: str, direction: str, trigger: dict, limit_px: float, stop_px: float,
+                 live_equity: float, day_start_equity: float, min_qty: int, open_trades: dict,
+                 events_today: "list | None", state: "dict | None" = None,
+                 state_only_veto: "list | None" = None, broker_positions: "dict | None" = None) -> dict:
+    """DAY-VETO-SIZE-1109 items 2, 3, 5 for a veto_downsized setup, on the FINAL limit and stop. In order: stop distance
+    > 0 and min_entry_qty x |limit - stop| x DAYTRADE_BUDGET_SLIPPAGE_MULT within DAYTRADE_PER_TRADE_RISK_EQUITY_PCT of
+    start-of-day equity (before any m math); m_floor (> 1 -> skip); m = clamp(m_kelly, m_floor, 1); the same-direction
+    cluster room. Returns {"ok": True, "risk_mult", "qcap", "rec"} or {"ok": False, "why", "skip"} ("skip" = the
+    _LAST_ENTRY_SKIP record that lets the router try the fund / 1-share fallback, or None). Never raises."""
+    from execution import day_veto_sizing as dvs
+    try:
+        per_share = abs(float(limit_px) - float(stop_px))
+        min_q = _min_entry_qty(symbol, min_qty)
+        slip = float(config.DAYTRADE_BUDGET_SLIPPAGE_MULT)
+        cap = float(config.DAYTRADE_PER_TRADE_RISK_EQUITY_PCT) * float(day_start_equity)
+        if not (math.isfinite(per_share) and per_share > 0):
+            return {"ok": False, "why": "zero or negative stop distance", "skip": None}
+        ok1, fit = dvs.one_share_fit(min_q, per_share, slip, cap)
+        if not ok1:
+            return {"ok": False, "why": f"one share risks more than the per-trade cap ({min_q} sh x ${per_share:.4f} x "
+                                        f"{slip:g} > ${cap:.2f})",
+                    "skip": {"reason": "below_min_qty", "wired": fit, "min": min_q}}
+        risk_basis = min(float(live_equity), float(day_start_equity))
+        risk_pct = min(float(config.DAYTRADE_PER_TRADE_RISK_BASIS_PCT), float(config.DAYTRADE_PER_TRADE_RISK_EQUITY_PCT))
+        mf = dvs.m_floor(min_q, per_share, risk_basis, risk_pct)
+        if mf is None:
+            return {"ok": False, "why": "m_floor inputs unusable (fail closed)", "skip": None}
+        if mf > 1.0:
+            return {"ok": False, "why": f"one share risks more than the risk basis allows (m_floor {mf:.3f} > 1)",
+                    "skip": {"reason": "below_min_qty", "wired": max(0, math.floor(risk_basis * risk_pct / per_share)),
+                             "min": min_q}}
+        vinfo = dict(trigger.get("veto") or {})
+        mk = vinfo.get("m_kelly")
+        m, path = dvs.choose_m(mk if isinstance(mk, (int, float)) else None, mf)
+        sign = dvs.exposure_sign(symbol, direction)
+        if sign is None:
+            # nit e: an unmapped fund never counts as long — cluster direction unknown, fail closed (paged once/day)
+            return {"ok": False, "why": "exposure direction not affirmatively known — cluster bound unknown (fail closed)",
+                    "skip": None}
+        from strategy import day_tier_logger as _dtl
+        _whole = _dtl.read_events()   # ONE whole-journal read (tolerant: a torn line is skipped) for this veto setup
+
+        def _whole_journal(tid: str) -> list:
+            return [e for e in _whole if isinstance(e, dict) and e.get("trade_id") == tid]
+
+        # threats 2 + 3 (revision 3 item 2): each open veto lot's current stop from today's journal, else its whole
+        # journal history, else its state record; every veto state record that may still hold shares — any day — is
+        # counted too (deduped against open_trades), plus the caller's state-only lots.
+        _st_lots = dvs.state_open_veto_lots(state, _whole) + list(state_only_veto or [])
+        # revision 5 item 1: the broker book (pos_by_sym, read once by place_entry right before this, fail-closed there)
+        # confirms every counted lot (place_entry wraps this call in dvs.no_secondary_store(), revision 5 item 3).
+        cl = dvs.cluster_risk(open_trades, dvs.stops_by_trade(events_today or []), sign,
+                              st_stops=dvs.state_stops(state), state_only=_st_lots,
+                              journal_lookup=_whole_journal, unknown_lot_usd=cap / slip,
+                              broker_positions=broker_positions)
+        if not cl.get("ok"):
+            return {"ok": False, "why": f"{cl.get('why')} — cluster bound unknown (fail closed)", "skip": None}
+        n_cl, risk_cl = int(cl["n"]), float(cl["risk"])
+        qcap = dvs.cluster_qty_cap(cap, slip, risk_cl, per_share)
+        rec = {**vinfo, "m_floor": round(mf, 6), "m": round(m, 6), "m_path": path, "risk_mult": m, "sign": sign,
+               "per_share": round(per_share, 4), "min_qty": min_q, "per_trade_cap_usd": round(cap, 2),
+               "cluster_open_lots": n_cl, "cluster_stop_risk_usd": round(slip * risk_cl, 2), "cluster_qty_cap": qcap}
+        if qcap < min_q:
+            return {"ok": False, "why": (f"same-direction veto cluster full ({n_cl} lot(s), stop-risk "
+                                         f"${slip * risk_cl:.2f} of ${cap:.2f}; room {qcap} sh < {min_q})"),
+                    "skip": {"reason": "below_min_qty", "wired": qcap, "min": min_q}, "rec": rec}
+        return {"ok": True, "risk_mult": m, "qcap": qcap, "rec": rec, "sign": sign, "per_share": per_share}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "why": f"veto sizing error (fail closed): {e!r}", "skip": None}
 
 
 def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
@@ -3111,8 +3200,46 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             logger.warning("[%s] track-B fund entry skipped — fund stop floor error: %s", symbol, _ffe)
             _LAST_ENTRY_SKIP[str(symbol)] = {"reason": "fund_stop_floor_error", "wired": 0, "min": 0}
             return False
+        # DAY-VETO-SIZE-1109: a Track B setup the direction rules would have vetoed (runner tag) is sized on the bounded
+        # stop-risk path with risk_mult = m — never by CONV-1018, never at 10/10 maximum size.
+        _veto_on = trigger.get("veto_downsized") is True
+        _veto: "dict | None" = None
+        _veto_qty_no_veto = 0
+        if _veto_on:
+            from execution import day_veto_sizing as _dvs
+            if not _dvs.enabled() or _track != "B":
+                logger.info("[%s] [change=day-veto-size-1109] veto setup refused — kill flag off or not Track B", symbol)
+                return False
+            # revision 5 item 3: nothing in this call path writes logs/day_tier_state.json (place_entry holds its own
+            # in-memory copy of that file and would overwrite a page stamp): page dedupe falls back to the temp dir only.
+            with _dvs.no_secondary_store():
+                _veto = _veto_sizing(
+                    symbol=symbol, direction=direction, trigger=trigger, limit_px=limit_px,
+                    broker_positions=pos_by_sym,   # revision 5 item 1: the live book place_entry just read (fail-closed)
+                    stop_px=float(stop_px), live_equity=live_equity, day_start_equity=day_start_equity,
+                    min_qty=min_qty, open_trades=open_trades, events_today=_evs if _evs_ok else None,
+                    state=state,
+                    state_only_veto=[{"coid": state[k].get("coid"), "symbol": state[k].get("symbol"),
+                                      "side": state[k].get("side"),
+                                      "fill_qty": state[k].get("fill_qty") or state[k].get("qty"),
+                                      "entry_price": state[k].get("fill_px")}
+                                     for k in _state_only
+                                     if isinstance(state.get(k), dict) and _dvs.is_veto_coid(state[k].get("coid"))])
+            if not _veto.get("ok"):
+                if _veto.get("skip") is not None:
+                    _LAST_ENTRY_SKIP[str(symbol)] = _veto["skip"]
+                _veto_log_skip(symbol, bar_id, decision, {**trigger, "veto": {**(trigger.get("veto") or {}),
+                                                                              **(_veto.get("rec") or {})}},
+                               str(_veto.get("why")))
+                return False
+            _veto_qty_no_veto, _ = _bounded_entry_qty(
+                qty, limit_px, float(stop_px), live_equity, open_trades, pos_by_sym, buying_power, maintenance_margin,
+                maintenance_rate, open_orders, risk_equity=day_start_equity, symbol=symbol, track=_track,
+                track_budget=size.get("budget"), extra_b_lots=_state_only, risk_mult=1.0, max_size=False)
+            size = {**size, "risk_mult": float(_veto["risk_mult"]), "max_size": False}
         _conv_in: "dict | None" = None
-        if _track in ("A", "B") and _cfg("DAYTRADE_CONV_SIZING_ENABLED", True) is not False:
+        if (_track in ("A", "B") and _cfg("DAYTRADE_CONV_SIZING_ENABLED", True) is not False
+                and not _veto_on):
             _conv_in = _conv_inputs(symbol, size, decision, _used)
             if _ta_geom is not None and isinstance(_conv_in, dict) and _conv_in.get("stage") == "ok":
                 # TRACK-A-STOP-1026: the conviction sizing's tight stop never goes inside the Track A noise room.
@@ -3133,6 +3260,34 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
             return False
         qty, stop_px, size = int(_w["qty"]), float(_w["stop_px"]), _w["size"]
         _min_q, _conv_sized = int(_w["min_q"]), _w["conv_sized"]
+        if _veto is not None:
+            # Item 5: shrink to the same-direction cluster room (qcap >= min qty was checked before sizing).
+            _vrec = dict(_veto["rec"])
+            _qcap = int(_veto["qcap"])
+            if qty > _qcap:
+                logger.info("[%s] [change=day-veto-size-1109] veto lot shrunk to the same-direction cluster room %d -> %d "
+                            "sh", symbol, qty, _qcap)
+                qty = _qcap
+                size = {**size, "shares": qty, "notional": round(qty * limit_px, 2),
+                        "wire_cap_reason": str(size.get("wire_cap_reason") or "") + f"; veto cluster cap -> {qty}sh"}
+            _risk_usd = qty * float(_veto["per_share"])
+            # nit a: the comparison qty is the BOUNDED stop-risk path at risk_mult 1 (what the setup would wire without the
+            # veto when CONV-1018 does not size it); CONV-1018 is not evaluated for a veto setup, so its qty is not known.
+            _vrec.update(qty_without_veto_bounded_path=int(_veto_qty_no_veto),
+                         qty_without_veto_note=("bounded stop-risk path at risk_mult 1; CONV-1018 not evaluated "
+                                                "(its band sizing could differ)"),
+                         sizing_path="bounded_stop_risk (CONV-1018 excluded)",
+                         final_qty=qty, dollar_risk_usd=round(_risk_usd, 2),
+                         dollar_risk_pct_equity=round(_risk_usd / day_start_equity, 6) if day_start_equity > 0 else None)
+            size = {**size, "veto": _vrec, "veto_downsized": True}
+            logger.info("[%s] [change=day-veto-size-1109] veto_downsized %s: rule=%r side=%s score=%s p=%s b=%s "
+                        "n_prior=%s n_live=%s f_lcb=%s m_kelly=%s m_floor=%s m=%s (%s) qty_without_veto_bounded_path=%d final_qty=%d "
+                        "risk=$%.2f (%s of SOD equity) cluster=%d lot(s) $%.2f", symbol, direction,
+                        _vrec.get("rule"), _vrec.get("side"), _vrec.get("side_score"), _vrec.get("p"), _vrec.get("b"),
+                        _vrec.get("n_prior"), _vrec.get("n_live"), _vrec.get("f_lcb"), _vrec.get("m_kelly"),
+                        _vrec.get("m_floor"), _vrec.get("m"), _vrec.get("m_path"), int(_veto_qty_no_veto), qty,
+                        _risk_usd, f"{float(_vrec.get('dollar_risk_pct_equity') or 0.0):.3%}",
+                        int(_vrec.get("cluster_open_lots") or 0), float(_vrec.get("cluster_stop_risk_usd") or 0.0))
         try:
             _b_fund = _track == "B" and _is_fund(symbol)
         except Exception as _bfe:  # noqa: BLE001 — unreadable map: treat as a fund (the volume cap applies; fail closed)
@@ -3193,10 +3348,11 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
 
         # B3: mint the coid + WRITE the idempotency record BEFORE submit — and FAIL CLOSED if the
         # write does not persist (Finding C: a swallowed write let the same ENTER re-fire → double).
-        coid = _mint_coid(symbol, direction)
+        coid = _mint_coid(symbol, direction, veto=_veto_on)
         state[key] = {"bar_id": bar_id, "coid": coid, "state": "submitting", "symbol": symbol,
                       "side": direction, "ts": datetime.now(PT).isoformat(), "qty": qty, "stop_px": stop_px,
                       "track": _track, **({"cohold_bracket": True} if cohold else {}),
+                      **({"veto_downsized": True} if _veto_on else {}),
                       **({"risk_per_share": float(_conv_sized["per_share"])} if _conv_sized is not None else {})}
         if not _save_state(state):
             _page(f"[{symbol}] day-tier entry ABORTED — could not persist the idempotency record "
@@ -3208,7 +3364,11 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         day_tier_logger.log_decision(decision_id or coid, symbol, decision=decision, trigger=trigger,
                                      size=size, trade_id=coid)
         from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
-        _capital = live_admit("daytrade", "daytrade", symbol, order_side, qty, limit_px, stop_price=stop_px)
+        # A veto lot's order carries its marked coid (item 4) on both the allocator lease and the broker submit.
+        _capital = (live_admit("daytrade", "daytrade", symbol, order_side, qty, limit_px, stop_price=stop_px,
+                               client_order_id=coid) if _veto_on
+                    else live_admit("daytrade", "daytrade", symbol, order_side, qty, limit_px, stop_price=stop_px))
+        _submit_coid = live_order_id(_capital.lease) or (coid if _veto_on else None)
         if not _capital.approved:
             logger.warning("[%s] day-tier entry skipped — allocator: %s", symbol, _capital.reason)
             # No order was submitted: retire the pre-submit record so it neither blocks re-entry nor counts
@@ -3220,7 +3380,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         if cohold and bracket_tp is not None:
             order = broker.submit_bracket_entry(
                 symbol, qty, order_side, limit_px, bracket_tp, stop_px, tier="daytrade",
-                client_order_id=live_order_id(_capital.lease),
+                client_order_id=_submit_coid,
             )
             if order is broker.WASH_REJECTED:
                 # Alpaca still applied its wash-trade rule: no order exists. The runner routes to the ETF fallback.
@@ -3229,7 +3389,7 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         else:
             order = broker.submit_limit_order(
                 symbol, qty, order_side, limit_px, tier="daytrade",
-                client_order_id=live_order_id(_capital.lease),
+                client_order_id=_submit_coid,
             )
         if order is None:
             order = live_release(_capital.lease, "submit_none")
@@ -3243,6 +3403,10 @@ def place_entry(symbol: str, decision: dict, trigger: dict, size: dict, *,
         entry_order_id = str(getattr(order, "id", "") or "")
         entry_coid = str(getattr(order, "client_order_id", coid) or coid)
         state[key].update(state="submitted", order_id=entry_order_id, coid=entry_coid)
+        if _veto is not None:
+            # Item 5 freshness: a submitted veto entry counts toward the same-direction cluster for the rest of this tick.
+            from execution import day_veto_sizing as _dvs2
+            _dvs2.record_submitted(entry_coid, int(_veto["sign"]), qty * float(_veto["per_share"]))
         _save_state(state)
 
         # Confirm ANY fill, then cancel the resting remainder and re-read the ORDER's FINAL fill.
