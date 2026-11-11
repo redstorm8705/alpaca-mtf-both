@@ -238,14 +238,21 @@ def _save(d: dict) -> None:
         logger.warning("%s alarm state not saved: %s", TAG, e)
         if _MEM.get("save_err_day") != d.get("day"):
             _MEM["save_err_day"] = d.get("day")
-            _page(f"{TAG} alarm state file cannot be written ({e}); dedupe kept in memory until the bot restarts.")
+            _page(f"{TAG} alarm state file cannot be written ({e}); dedupe kept in memory until the bot restarts.",
+                  verdict="ownership alarm cannot save its state",
+                  bot_is="keeping its memory in the running bot until the next restart", kind="unmanaged_state")
 
 
-def _page(msg: str) -> None:
+def _page(msg: str, *, severity: str = "heads_up", symbol: str = "", verdict: "str | None" = None,
+          risk: "str | None" = None, bot_is: "str | None" = None, you: "str | None" = None,
+          kind: str = "unmanaged_position") -> None:
+    """Log `msg` (the full technical line, the post-live proof) and send the phone-first Slack form (SLACK-UX-1109:
+    plain words, severity first, the owner's one action) through alerts.notify. Never raises."""
     logger.critical(msg)
     try:
-        from alerts import send_slack
-        send_slack(":rotating_light: " + msg)
+        from alerts import notify
+        notify(severity, symbol, verdict or msg.replace(TAG, "").strip(), risk=risk, bot_is=bot_is, you=you,
+               tier="Ownership check", kind=kind)
     except Exception as e:  # noqa: BLE001
         logger.warning("%s page failed: %s", TAG, e)
 
@@ -275,7 +282,9 @@ def check_unmanaged(tracker, now_et: "datetime | None" = None) -> dict:
         except Exception as e:  # noqa: BLE001
             if "broker" not in seen:
                 seen.append("broker")
-                _page(f"{TAG} cannot verify position ownership: broker positions unreadable ({e}).")
+                _page(f"{TAG} cannot verify position ownership: broker positions unreadable ({e}).",
+                      verdict="cannot check which tier owns each position (Alpaca positions unreadable)",
+                      bot_is="retrying every cycle", kind="unmanaged_broker")
             _save(state)
             return out
         net = {}
@@ -311,7 +320,11 @@ def check_unmanaged(tracker, now_et: "datetime | None" = None) -> dict:
                 _page(f"{TAG} ownership source unreadable: {err}. "
                       + (f"Using its last good reading ({len(fallback)} symbol(s)); "
                          if isinstance(fallback, dict) else "No last good reading — its symbols will page as unmanaged; ")
-                      + "verify any unmanaged-position page before acting.")
+                      + "verify any unmanaged-position page before acting.",
+                      verdict=f"one tier's records are unreadable ({name.replace('_', ' ')})",
+                      bot_is=("using that tier's last good reading" if isinstance(fallback, dict)
+                              else "treating that tier's shares as unmanaged until it reads again"),
+                      you="check any 'no tier manages' alert before acting on it", kind="unmanaged_source")
         caveat = (f" Ownership partly UNVERIFIABLE ({', '.join(errors)}"
                   f"{'; last good reading used' if stale else ''}) — verify before acting.") if errors else ""
         paged = state.setdefault("paged", {})
@@ -362,15 +375,37 @@ def check_unmanaged(tracker, now_et: "datetime | None" = None) -> dict:
                 if s in qhm_pending and resid > 0 and not over:
                     _page(f"{TAG} [{s}] {confirmed:g} share(s) held at Alpaca that no tier has booked yet, while a "
                           f"QHM entry order is outstanding on {s} — most likely its fill awaiting QHM's next booking "
-                          f"pass (from 10:05 ET). Do NOT close; verify the QHM order filled.{caveat}")
+                          f"pass (from 10:05 ET). Do NOT close; verify the QHM order filled.{caveat}",
+                          symbol=s, verdict=f"{confirmed:g} share(s) not booked yet — most likely QHM's pending buy",
+                          bot_is="waiting for QHM to book the fill (from 7:05 AM PT)" + (" · ownership partly unverifiable" if caveat else ""),
+                          you="do not close them; check the QHM order filled if this repeats")
                 elif over:
                     _page(f"{TAG} [{s}] tiers record {m:g} share(s) but Alpaca holds {q:g} — a tier's records are "
-                          f"ahead of the account (a sale or exit it has not booked).{caveat}")
+                          f"ahead of the account (a sale or exit it has not booked).{caveat}",
+                          symbol=s, verdict=f"bot records {m:g} share(s), Alpaca holds {q:g}",
+                          bot_is="a tier has a sale or exit it has not booked yet" + (" · ownership partly unverifiable" if caveat else ""),
+                          you=f"check today's {s} fills in the Alpaca app")
                 else:
                     mv = abs(value.get(s, 0.0)) * (confirmed / abs(q))
-                    _page(f"{TAG} [{s}] {confirmed:g} share(s) ({'long' if resid > 0 else 'short'}, ~${mv:,.0f}) are "
+                    _side = "long" if resid > 0 else "short"
+                    # never suggest more shares than Alpaca holds (a stale opposite-side tier record can make the
+                    # residual larger than the position); this module reads no orders, so it says "no bot stop" and
+                    # asks the owner to check, rather than asserting no stop exists
+                    _n = min(confirmed, abs(q))
+                    _mv_held = abs(value.get(s, 0.0)) * (_n / abs(q))
+                    # the bot's real holding on this symbol, from this pass's residual (not the confirmed count,
+                    # which lags when the residual grows between passes)
+                    _managed_held = max(0.0, abs(q) - min(abs(resid), abs(q)))
+                    _page(f"{TAG} [{s}] {confirmed:g} share(s) ({_side}, ~${mv:,.0f}) are "
                           f"held at Alpaca but NO tier manages them (broker {q:g}, managed {m:g}) — no tier will place "
-                          f"a stop or exit them. Assign them to a tier or close them.{caveat}")
+                          f"a stop or exit them. Assign them to a tier or close them.{caveat}",
+                          severity="action", symbol=s, verdict=f"{_n:g} share(s) no tier manages",
+                          risk=f"{_n:g} {_side} share(s), about ${_mv_held:,.0f}, with no bot stop",
+                          bot_is="not managing them: it never places a stop or an exit for shares no tier owns"
+                                 + (" · ownership partly unverifiable, check first" if caveat else ""),
+                          you=(f"Alpaca holds {abs(q):g} {s}, the bot manages {_managed_held:g}: check your "
+                               f"stops cover all {abs(q):g} (the bot's own stop covers only its share(s)); if not, "
+                               f"place a GTC {'sell' if resid > 0 else 'buy'} stop for {_n:g}, or close {_n:g}"))
             else:
                 # a residual that shrank for two passes lowers the mark, so a later regrowth the
                 # same day pages again (e.g. UBER 72 -> 7 after a sale, then a new unmanaged lot)
