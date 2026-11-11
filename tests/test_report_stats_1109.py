@@ -85,5 +85,28 @@ class CardFields(unittest.TestCase):
         self.assertFalse(any("34.6" in str(x) for x in p["lifetime"]))
 
 
+class CardPassesRewriteGuard(unittest.TestCase):
+    """CARD-STATS-1111: from 2026-11-10 the trade-record nets were printed on the card but not allow-listed, so
+    validate_no_pnl_rewrite rejected every midday/nightly card (logs: "P&L-rewrite validator blocked card:
+    unexpected dollar figure(s)") and the raw-text fallback went out instead."""
+
+    def test_midday_card_with_tier_stats_validates(self):
+        led = {"round_trips": RTS, "per_day": {}}
+        with mock.patch.object(pl, "fetch_all_fills", return_value=[]), \
+                mock.patch.object(pl, "fetch_all_orders", return_value=[]), \
+                mock.patch.object(pl, "compute_realized", return_value=led), \
+                mock.patch.object(pl, "_get_qhm_symbols", return_value=set()), \
+                mock.patch.object(pl, "build_coid_map", return_value={}):
+            pnl = asl.build_pnl_fields("midday", {}, positions=[])
+        payload = asl.render_card("midday", "2026-11-11", "PASS", pnl, [], dist_footer=[], context_line="x")
+        ok, reason = asl.validate_no_pnl_rewrite(payload, pnl["injected_numbers"])
+        self.assertTrue(ok, reason)
+        self.assertIn("$13.00", pnl["injected_numbers"])          # the Day tier's lifetime net is allow-listed
+
+    def test_a_rogue_figure_is_still_blocked(self):
+        payload = {"blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "net $999.99"}}]}
+        self.assertFalse(asl.validate_no_pnl_rewrite(payload, ["$13.00"])[0])
+
+
 if __name__ == "__main__":
     unittest.main()
