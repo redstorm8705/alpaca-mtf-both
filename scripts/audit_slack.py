@@ -186,11 +186,14 @@ def _fifo_day(day: str, src: Optional[dict] = None) -> Optional[tuple[float, flo
         return None
 
 
-def _trade_record_fields(src: Optional[dict], dollar) -> list:
+def _trade_record_fields(src: Optional[dict], dollar, injected: Optional[list] = None) -> list:
     """Per-tier trade record (REPORT-STATS-1109) from Alpaca fills (FIFO, pnl_ledger.trade_stats): win rate,
     trade count, profit factor and net, lifetime and month to date (PT). Replaces the old tracker's all-time
     stats, which count only the core intraday tier and stopped moving when it stopped closing trades
-    (2026-10-13). When the fills cannot be read in full, ONE field says so; a stale number is never shown."""
+    (2026-10-13). When the fills cannot be read in full, ONE field says so; a stale number is never shown.
+    CARD-STATS-1111: every dollar figure printed here comes from Alpaca fills, so it is appended to `injected`
+    (the P&L-rewrite guard's allow-list); before this, the guard rejected the whole card from 2026-11-10 on and the
+    midday/nightly audits fell back to the raw-text post."""
     try:
         import reporting.pnl_ledger as _pl
         led = (src or {}).get("led")
@@ -218,6 +221,10 @@ def _trade_record_fields(src: Optional[dict], dollar) -> list:
         m = month.get(label) or {}
         mline = (f"{now.strftime('%b')}: {m['win_rate']:.0f}% of {m['trades']} · {dollar(m['net'])}"
                  if m.get("trades") else f"{now.strftime('%b')}: no closes")
+        if injected is not None:
+            injected.append(dollar(s["net"]))
+            if m.get("trades"):
+                injected.append(dollar(m["net"]))
         fields.append({"type": "mrkdwn", "text": (
             f"*{label}*\n{s['win_rate']:.0f}% win · {s['trades']} trades\nPF {pf} · net {dollar(s['net'])}\n{mline}")})
     _all = life.get("All") or {}
@@ -338,7 +345,7 @@ def build_pnl_fields(mode: str, eod: dict, positions: Optional[list] = None,
             ]
             source = "Alpaca mark-to-market · _realized unavailable this run_"
 
-    lifetime_fields = _trade_record_fields(src, _dollar)
+    lifetime_fields = _trade_record_fields(src, _dollar, injected)
 
     return {"today": today_fields, "lifetime": lifetime_fields,
             "source_note": source, "injected_numbers": injected, "mismatch": mismatch}
