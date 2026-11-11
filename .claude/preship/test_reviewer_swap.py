@@ -290,13 +290,25 @@ class GateRouting(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "tool.py.json")))
 
     def test_nvidia_substitute_recorded(self):
-        pa._LAST_NVIDIA_MODEL = "meta/test-model"
+        # NV-REVIEW-1110 order: Codex out -> the NVIDIA pair (needs a fresh cold-2nd PASS on this content); Gro is the
+        # last resort and is not asked when the pair gives a verdict.
+        sha = pa.hashlib.sha256(self.blob).hexdigest()
+        with open(os.path.join(self.tmp, "tool.py.cold2.json"), "w", encoding="utf-8") as f:
+            json.dump({"verdict": "PASS", "sha256": sha, "ts": int(pa.time.time())}, f)
+        pair = {"verdict": "APPROVE", "agreement": "2-of-2", "endpoint_down": False, "text": APPROVE_TXT,
+                "models": [{"id": m, "verdict": "APPROVE"} for m in pa._NVIDIA_PAIR],
+                "texts": {m: APPROVE_TXT for m in pa._NVIDIA_PAIR}}
         with mock.patch.object(pa, "_codex_review", return_value=(None, "not installed")), \
-                mock.patch.object(pa, "_gro", side_effect=RuntimeError("503 unavailable")), \
-                mock.patch.object(pa, "_nvidia", return_value=APPROVE_TXT):
+                mock.patch.object(pa._pg, "MARKER_DIR", self.tmp), \
+                mock.patch.object(pa._pg, "_content_sha", return_value=sha), \
+                mock.patch.object(pa, "_gro", side_effect=RuntimeError("503 unavailable")) as gro, \
+                mock.patch.object(pa, "_nvidia_pair", return_value=pair):
             ok, msg = self._audit(NVIDIA_API_KEY="n")
         self.assertTrue(ok, msg)
-        self.assertTrue(self._marker()["reviewer_b"].startswith("NVIDIA_"))
+        gro.assert_not_called()
+        m = self._marker()
+        self.assertEqual(m["reviewer_b"], "nvidia-pair")
+        self.assertEqual([x["id"] for x in m["reviewer_b_models"]], list(pa._NVIDIA_PAIR))
         self.assertTrue(self._rows()[-1]["reviewer"].startswith("NVIDIA_"))
 
     def test_waive_skips_codex(self):
