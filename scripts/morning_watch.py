@@ -254,8 +254,7 @@ class Watcher:
         if not st.get("void_warned"):
             st["void_warned"] = True
             self.save()
-            self.send(f"⚠️ {sym}: watch history incomplete ({len(miss)} IEX minute(s) missing from "
-                      f"{mr.fmt_pt(miss[0])}; {why}) — open {sym} sides VOID for today, no further alerts.")
+            self.send(f"⚠️ {sym} · watch history incomplete from {mr.fmt_pt12(miss[0])} — no more {sym} alerts today")
         return False
 
     def _resend_outcomes(self, sym: str) -> None:
@@ -274,13 +273,13 @@ class Watcher:
             return
         s["outcome_bar"] = bar
         self.save()
-        bar_pt = mr.fmt_pt(mr.parse_ts(bar["ts"]))
+        bar_pt = mr.fmt_pt12(mr.parse_ts(bar["ts"]))
+        kind = "call" if s["side"] == "CALL" else "put"
         if s["outcome"] == "STOP":
-            txt = (f"🛑 {sym} {s['side']} — invalidation printed — exit · 1-min bar {bar_pt} reached "
-                   f"{s['invalidation']:.2f} (bar ts_utc {bar['ts']})")
+            txt = f"🚨 ACTION {sym} · exit the {kind}: {sym} reached the out line {s['invalidation']:.2f} at {bar_pt}"
         else:
-            txt = (f"🎯 {sym} {s['side']} — target printed · 1-min bar {bar_pt} reached {s['target']:.2f} "
-                   f"(bar ts_utc {bar['ts']})")
+            txt = f"🎯 {sym} {kind} · target {s['target']:.2f} reached at {bar_pt}"
+        logger.info("morning_watch: %s %s outcome %s on the 1-min bar ts_utc %s", sym, s["side"], s["outcome"], bar["ts"])
         if not self.send(txt):
             logger.warning("morning_watch: %s %s outcome alert not delivered — will re-send", sym, s["side"])
             return
@@ -425,10 +424,11 @@ class Watcher:
         s["alerted"] = True
         s["alert_state"] = "STALE"
         self.save()
-        icon = "📈" if s["side"] == "CALL" else "📉"
-        text = (f"🔔 {sym} {s['side']} {icon} TRIGGERED — STALE, no entry · {mr.fmt_pt(self.now_fn())}\n"
-                f"   1-min bar {mr.fmt_pt(mr.parse_ts(s['break_bar_ts']))} closed {s['break_close']:.2f} vs trigger "
-                f"{s['trigger']:.2f} · {reason}")
+        kind = "call" if s["side"] == "CALL" else "put"
+        logger.info("morning_watch: %s %s STALE — 1-min bar %s closed %.2f vs trigger %.2f · %s", sym, s["side"],
+                    s.get("break_bar_ts"), s["break_close"], s["trigger"], reason)
+        text = (f"🔔 {sym} {kind} triggered at {mr.fmt_pt12(mr.parse_ts(s['break_bar_ts']))} — too late, no entry\n"
+                f"Why: {reason}")
         self._deliver_trigger(s, text, text)
         self._log_trigger(sym, s, "STALE", None, None, reason)
 
@@ -448,16 +448,17 @@ class Watcher:
             logger.error("morning_watch: %s %s TRIGGERED alert withheld — violations %s", sym, s["side"], keys)
             s["violations"] = keys
             s["alert_state"] = "REFERENCE ONLY"
-            text = (f"🔔 {sym} {s['side']} TRIGGERED — REFERENCE ONLY — alert withheld (check failed: "
-                    f"{', '.join(keys)}) · no entry")
+            text = (f"🔔 {sym} {'call' if s['side'] == 'CALL' else 'put'} triggered — no entry\n"
+                    f"Why: alert withheld (check failed: {', '.join(keys)})")
             self.state.setdefault("violations", {})
             for k in keys:
                 self.state["violations"][k] = self.state["violations"].get(k, 0) + 1
         self.save()
         # A re-send happens later, when the quote check is no longer current, so it never carries ACTIONABLE terms.
         late = text if s["alert_state"] != "ACTIONABLE" else (
-            f"🔔 {sym} {s['side']} TRIGGERED at {mr.fmt_pt(mr.parse_ts(s['break_bar_ts']))} — the alert was delayed "
-            f"(Slack failed) · its entry quote check is no longer current — no new entry from this alert")
+            f"🔔 {sym} {'call' if s['side'] == 'CALL' else 'put'} triggered at "
+            f"{mr.fmt_pt12(mr.parse_ts(s['break_bar_ts']))} — this alert was delayed, its prices are out of date — "
+            f"no entry from it")
         self._deliver_trigger(s, text, late)
         self._log_trigger(sym, s, s["alert_state"], sel, stop, reason)
 
@@ -481,42 +482,45 @@ class Watcher:
 
     def trigger_text(self, sym: str, s: dict, alert_state: str, pick: dict | None, stop: dict | None, reason: str,
                      poll: dict) -> str:
-        side, icon = s["side"], ("📈" if s["side"] == "CALL" else "📉")
-        rel = ">" if side == "CALL" else "<"
+        """SLACK-UX-1109 §4 / C1: an ACTIONABLE alert is four lines with the action on line 1; anything else says
+        'no entry' on line 1 and why on line 2. The model inputs (Black-Scholes, T, IV, quote time and venue, bar age)
+        go to the log only."""
+        side = s["side"]
+        kind = "call" if side == "CALL" else "put"
         now = self.now_fn()
         bar_ts = mr.parse_ts(s["break_bar_ts"])
-        head = (f"🔔 {sym} {side} {icon} {'✅ ' if alert_state == 'ACTIONABLE' else ''}TRIGGERED — {alert_state} · "
-                f"{mr.fmt_pt(now)}\n   1-min bar {mr.fmt_pt(bar_ts)} closed {s['break_close']:.2f} {rel} trigger "
-                f"{s['trigger']:.2f} (bar age {self._break_age_seconds(s):.0f}s)")
+        rel = ">" if side == "CALL" else "<"
+        logger.info("morning_watch: %s %s %s at %s — 1-min bar %s closed %.2f %s trigger %.2f (bar age %.0fs) · %s",
+                    sym, side, alert_state, mr.fmt_pt(now, True), mr.fmt_pt(bar_ts), s["break_close"], rel,
+                    s["trigger"], self._break_age_seconds(s), reason)
         if alert_state != "ACTIONABLE" or pick is None or stop is None:
             if alert_state == mr.NO_QUOTE:
-                why = (f"no candidate quote updated inside {mr.fmt_pt(poll.get('window_start'), True)}–"
-                       f"{mr.fmt_pt(poll.get('window_end'), True)}; {reason}")
+                why = "no live option quote at the break"
+            elif alert_state == mr.NO_CONTRACT:
+                why = "no contract under the price cap at the break"
             elif alert_state.startswith("REFERENCE ONLY"):
-                why = "the model stop is not placeable (at or below the floor, or at/above the bid)"
+                why = "the stop price would not sit below the bid"
             else:
                 why = reason
-            return f"{head}\n   {why} · no entry"
+            return f"🔔 {sym} {kind} triggered at {mr.fmt_pt12(bar_ts)} — no entry\nWhy: {why}"
         q = pick["quote"]
-        kind = "call" if side == "CALL" else "put"
         lbl = mr._strike_label(pick)
-        cap = mr.PREMIUM_CAP_PER_SHARE
-        maxloss = pick["ask"] * mr.SHARES_PER_CONTRACT
         worth = mr.intrinsic(pick["is_call"], pick["strike"], s["target"])
-        back = "below" if side == "CALL" else "above"
-        word = "above" if side == "CALL" else "below"
+        out_rel = "<" if side == "CALL" else ">"
         hours_left = (self.session_close - now).total_seconds() / 3600
-        iv_txt = f"IV {pick['iv']:.1%}" if pick.get("iv") else "IV n/a"
-        return (f"{head}\n"
-                f"   {sym} closed {word} ${s['trigger']:.2f} → buy the {sym} ${pick['strike']:g} {kind}\n"
-                f"   {lbl} · bid {pick['bid']:.2f} / ask {pick['ask']:.2f} (quote {mr.fmt_pt(mr.parse_ts(q.get('t')), True)}, "
-                f"venue {q.get('ask_venue') or '?'}) · Limit ${pick['ask']:.2f}, never above ${cap:.2f} · max loss ${maxloss:.0f}\n"
-                f"   Target {s['target']:.2f} → worth ≥ ${worth:.2f} there\n"
-                f"   Stop: sell-stop {lbl} at ${stop['stop']:.2f} (day, model: Black-Scholes at the invalidation "
-                f"{s['invalidation']:.2f}, T {hours_left:.1f}h, {iv_txt}) — place right after the fill\n"
-                f"   Exit line: {sym} back {back} {s['invalidation']:.2f}\n"
-                f"   If the {lbl} bid is at or below ${stop['stop']:.2f} when you are filled: exit, or re-run the stop on "
-                f"the live bid. Confirm the stop is still below the bid when you place it.")
+        logger.info("morning_watch: %s %s ACTIONABLE detail — %s bid %.2f / ask %.2f (quote %s, venue %s) · stop %.2f "
+                    "(Black-Scholes at the invalidation %.2f, T %.1fh, IV %s)", sym, side, lbl, pick["bid"], pick["ask"],
+                    mr.fmt_pt(mr.parse_ts(q.get("t")), True), q.get("ask_venue") or "?", stop["stop"],
+                    s["invalidation"], hours_left, f"{pick['iv']:.1%}" if pick.get("iv") else "n/a")
+        lines = [f"🚨 ACTION {sym} · buy 1 {lbl}, limit ${pick['ask']:.2f}",
+                 f"{sym} broke {s['trigger']:.2f}",
+                 f"After the fill: sell-stop at ${stop['stop']:.2f}",
+                 f"Target {sym} {s['target']:.2f} (≈${worth:.2f}) · out if {sym} {out_rel} {s['invalidation']:.2f}"]
+        spread = pick["ask"] - pick["bid"]
+        if pick["bid"] - stop["stop"] <= spread:   # the live bid is within one bid-ask spread of the stop
+            lines.append(f"Bid is near the stop: if the {lbl} bid is at or below ${stop['stop']:.2f} when you are "
+                         f"filled, exit.")
+        return "\n".join(lines)
 
     def _log_trigger(self, sym: str, s: dict, alert_state: str, sel: dict | None, stop: dict | None, reason: str) -> None:
         pick = (sel or {}).get("pick") or {}

@@ -1,0 +1,18 @@
+{
+  "change": "slack-ux-1109-part1",
+  "tier": 1,
+  "paths": [
+    "alerts.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/slack_sent.jsonl",
+      "pattern": "\"delivered\": true"
+    }
+  ],
+  "expected_rate": "one row for every Slack message the bot sends through alerts.py (fill cards, stop pages, reports routed through send_slack); dozens per trading day",
+  "window_sessions": 1,
+  "window_reason": "Fill cards go out every trading session, so the first full session after deploy writes rows.",
+  "reversal": "no rows after a full session with fills, a row whose first_line still shows broker JSON / an order id / an ALL_CAPS_STATE name, or a scrub warning on a message that lost a needed fact",
+  "verification": "tests/test_slack_ux_1109.py"
+}

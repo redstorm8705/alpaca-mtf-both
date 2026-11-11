@@ -137,6 +137,14 @@ def fmt_pt(dt: datetime | None, seconds: bool = False) -> str:
     return dt.astimezone(PT).strftime("%H:%M:%S PT" if seconds else "%H:%M PT")
 
 
+def fmt_pt12(dt: datetime | None) -> str:
+    """Owner-facing 12-hour PT time ('6:46 AM PT'); SLACK-UX-1109. Portable (no %-I)."""
+    if dt is None:
+        return "n/a"
+    t = dt.astimezone(PT)
+    return f"{t.hour % 12 or 12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'} PT"
+
+
 def parse_ts(ts: Any) -> datetime | None:
     """RFC-3339 (nanoseconds allowed) -> tz-aware UTC datetime (microsecond precision); None if unparseable/naive."""
     if isinstance(ts, datetime):
@@ -1086,6 +1094,82 @@ def _symbol_header(rec: dict) -> str:
             f"{em_s} · {gex_s} · {md_s}")
 
 
+_SHORT_SOURCE = (("call wall", "call wall"), ("put wall", "put wall"), ("gamma flip", "gamma flip"),
+                 ("EM high", "expected-move high"), ("EM low", "expected-move low"), ("VWAP", "VWAP"))
+
+
+def _short_source(src: str) -> str:
+    """Plain label for a level source in Slack ('call wall (GEX, prior-close OI)' -> 'call wall'); the full source
+    stays in the markdown archive."""
+    for key, label in _SHORT_SOURCE:
+        if src.startswith(key):
+            return label
+    return src
+
+
+def _price_text(rec: dict) -> tuple[float | None, str]:
+    """The symbol's price for Slack and its text; '(stale)' when the existing freshness check (IEX trade age < t_max)
+    did not pass. Falls back to the SIP level price, also marked stale."""
+    cp = rec.get("current_price") or {}
+    if cp.get("value") is not None:
+        fresh = bool(cp.get("current")) and cp.get("current_after_polls") is not False
+        return float(cp["value"]), f"{float(cp['value']):.2f}" + ("" if fresh else " (stale)")
+    lp = (rec.get("level_price") or {}).get("value")
+    if lp is not None:
+        return float(lp), f"{float(lp):.2f} (stale)"
+    return None, "n/a"
+
+
+def map_lines(rec: dict) -> list[str]:
+    """06:00 map for one symbol (SLACK-UX-1109 §4 + U4): a ladder, highest first, one level per line, the price marked
+    '● now'; a side with no level is omitted."""
+    price, ptxt = _price_text(rec)
+    lines = [f"{rec['symbol']} {ptxt}"]
+    placed = False
+    for lv in sorted(rec.get("ladder") or [], key=lambda x: -x["price"]):
+        if price is not None and not placed and lv["price"] < price:
+            lines.append(f"● {ptxt} now")
+            placed = True
+        arrow = "▲" if price is None or lv["price"] > price else "▼"
+        labels = " + ".join(dict.fromkeys(_short_source(x) for x in lv.get("sources") or []))
+        lines.append(f"{arrow} {lv['price']:.2f} {labels}")
+    if price is not None and not placed:
+        lines.append(f"● {ptxt} now")
+    return lines
+
+
+def _side_compact(rec: dict, side: str) -> str:
+    """One idea on the 06:46 line. Only a watched side shows a trigger; the strike and ask come from the send-time
+    poll (the TRIGGERED alert rebuilds both). Never a limit or a stop."""
+    s = rec["sides"][side]
+    word, kind = ("above", "call") if side == "CALL" else ("below", "put")
+    state, setup = s["state"], s["setup"]
+    if s.get("violations"):
+        return f"{kind} withheld (check failed)"
+    if state == NO_SETUP:
+        return f"no {kind} setup"
+    tg = (setup.get("trigger") or {}).get("price")
+    if state == "WATCHING":
+        pk = (s.get("strike") or {}).get("pick")
+        if pk:
+            fresh = bool((pk.get("quote") or {}).get("current"))
+            return f"{kind} if {word} {tg:.2f} ({_strike_label(pk)} ~${pk['ask']:.2f}{'' if fresh else ' (stale)'})"
+        return f"{kind} if {word} {tg:.2f}"
+    if state in (NO_QUOTE, NO_CONTRACT) and rec.get("verified"):
+        return f"{kind} if {word} {tg:.2f} (strike picked at the trigger)"
+    return f"no {kind} alert today (data not verified)"
+
+
+def watch_line(rec: dict) -> str:
+    """06:46: one line per symbol — price, expected-move range, then each idea."""
+    _price, ptxt = _price_text(rec)
+    em = rec.get("em") or {}
+    rng = ""
+    if em.get("available") and _price is not None:
+        rng = f" (range {_price - em['em']:.2f}–{_price + em['em']:.2f})"
+    return f"{rec['symbol']} {ptxt}{rng}: " + " · ".join(_side_compact(rec, side) for side in SIDES)
+
+
 def render(results: list[dict], send: str, now: datetime, counts: dict) -> tuple[list, str, str]:
     """Block Kit blocks, the fallback text (carries both ideas per symbol) and the markdown archive."""
     title = (f"☀️ Morning Rundown · {now.astimezone(PT).strftime('%a %b %d')} · {fmt_pt(now)}"
@@ -1129,10 +1213,28 @@ def render(results: list[dict], send: str, now: datetime, counts: dict) -> tuple
               "_No TRIGGERED message = no entry. Limit and stop come with the TRIGGERED alert. The bot places no orders for these._")
     if send == "0600":
         footer += "\n_The watchlist comes at 06:46 PT; entries come only as TRIGGERED alerts after that._"
-    blocks += [{"type": "divider"}, {"type": "context", "elements": [{"type": "mrkdwn", "text": footer}]}]
     md_lines += ["---", footer, ""]
-    fallback = f"{title}: " + " · ".join(fb_bits)
-    return blocks, fallback, "\n".join(md_lines) + "\n"
+    md_lines += ["", f"_full detail above; Slack fallback: {' · '.join(fb_bits)}_", ""]
+    # SLACK-UX-1109 §4: Slack gets the short form; the detail above stays in the markdown archive and the logs.
+    slack_lines: list[str] = []
+    if send == "0600":
+        live = [r for r in results if not r.get("failed")]
+        prices = " · ".join(f"{r['symbol']} {_price_text(r)[1]}" for r in live)
+        line1 = f"🗺️ Today's levels · {fmt_pt12(now)}" + (f" · {prices}" if prices else "")
+        slack_lines.append(line1)
+        for rec in results:
+            slack_lines.append("")
+            slack_lines += ([f"{rec['symbol']}: build failed, no levels"] if rec.get("failed") else map_lines(rec))
+        slack_lines += ["", "Watchlist at 6:46."]
+    else:
+        line1 = f"👀 0DTE watchlist · {fmt_pt12(now)}"
+        slack_lines.append(line1)
+        for rec in results:
+            slack_lines.append(f"{rec['symbol']}: build failed, no ideas" if rec.get("failed") else watch_line(rec))
+        slack_lines.append("Buy only on a 🚨 ACTION alert.")
+    slack_text = "\n".join(slack_lines)
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": slack_text[:2900]}}]
+    return blocks, line1, "\n".join(md_lines) + "\n"
 
 
 def _jsonable(x: Any) -> Any:
