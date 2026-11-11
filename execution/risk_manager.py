@@ -533,6 +533,72 @@ def _request_ledger_rebuild(fingerprint: str, reason: str) -> None:
         )
 
 
+_PRIOR_CLOSE_CACHE: "dict[tuple[str, str], float]" = {}
+_PRIOR_CLOSE_MISS: "dict[tuple[str, str], float]" = {}   # (symbol, PT date) -> monotonic time of the last miss
+
+
+def _prior_session_close(symbol: str) -> "float | None":
+    """KILL-PRIOR-CLOSE-1111: the close of the last session BEFORE today for a symbol the broker no longer reports (a
+    held-over lot fully sold today), from the T1 SIP daily bars (data/fetcher.py).
+
+    * "Today" is the PT date, the same day key `_today_fills` uses, so a check late in the PT evening never takes the
+      day's own close as the prior close (board risk seat).
+    * adjustment="split": on a split's ex-date the prior close is on today's share basis, matching today's fills; on any
+      other day it equals the raw close (board Thorp seat).
+    * Daily bars must be stamped at ET midnight (the session's date); any other stamp means the convention changed and
+      the lookup degrades instead of guessing a session.
+    * Found -> cached per (symbol, PT date). Miss -> remembered and not re-fetched for one scan interval, so a failing
+      fetch (whose rate-limit retries can take ~1 minute) costs the trading thread at most one attempt per interval.
+    Returns None on any miss or error; the caller then degrades exactly as before (fail closed, never masks). Never
+    raises."""
+    try:
+        from datetime import timedelta
+        today_pt = datetime.now(_PT).date()
+        key = (str(symbol).upper(), today_pt.isoformat())
+        if key in _PRIOR_CLOSE_CACHE:
+            return _PRIOR_CLOSE_CACHE[key]
+        last_miss = _PRIOR_CLOSE_MISS.get(key)
+        retry_after_s = timedelta(minutes=config.SCAN_INTERVAL_INTRADAY).total_seconds()
+        if last_miss is not None and time.monotonic() - last_miss < retry_after_s:
+            return None
+        _PRIOR_CLOSE_MISS[key] = time.monotonic()   # cleared below on success
+        from data import fetcher   # T1 bars (lazy: keeps the risk module import-light)
+        start_et = datetime(today_pt.year, today_pt.month, today_pt.day, tzinfo=_ET)
+        # the bot's own daily-bar lookback (config.BARS_TO_FETCH) as calendar days: always spans the prior session
+        lookback = timedelta(days=config.BARS_TO_FETCH[config.TF_DAILY])
+        bars = fetcher.fetch_bars_window(key[0], config.TF_DAILY, (start_et - lookback).astimezone(timezone.utc),
+                                         start_et.astimezone(timezone.utc), feed="sip", adjustment="split")
+        if bars is None or len(bars) == 0:
+            logger.warning("kill-switch prior close: no daily bars for %s — degrading [change=kill-prior-close-1111]",
+                           key[0])
+            return None
+        idx = bars.index.tz_localize(timezone.utc) if bars.index.tz is None else bars.index
+        stamps_et = [ts.astimezone(_ET) for ts in idx]
+        if any((t.hour, t.minute, t.second) != (0, 0, 0) for t in stamps_et):
+            logger.warning("kill-switch prior close: %s daily bars are not stamped at ET midnight (%s) — degrading "
+                           "[change=kill-prior-close-1111]", key[0], stamps_et[-1].isoformat())
+            return None
+        before = bars[[t.date() < today_pt for t in stamps_et]]
+        if len(before) == 0:
+            logger.warning("kill-switch prior close: no session before today for %s — degrading "
+                           "[change=kill-prior-close-1111]", key[0])
+            return None
+        close = float(before["close"].iloc[-1])
+        if not math.isfinite(close) or close <= 0:
+            logger.warning("kill-switch prior close: unusable close %r for %s — degrading "
+                           "[change=kill-prior-close-1111]", close, key[0])
+            return None
+        _PRIOR_CLOSE_CACHE[key] = close
+        _PRIOR_CLOSE_MISS.pop(key, None)
+        logger.info("kill-switch prior close for %s (fully sold held-over lot): %.4f from the %s daily bar "
+                    "[change=kill-prior-close-1111]", key[0], close, before.index[-1])
+        return close
+    except Exception as e:  # noqa: BLE001 — RC-3: logged; the caller degrades (fail closed)
+        logger.warning("kill-switch prior close lookup failed for %s (%s) — degrading [change=kill-prior-close-1111]",
+                       symbol, e)
+        return None
+
+
 def _kill_join_unresolved(
     check: str,
     symbol: str,
@@ -1641,9 +1707,14 @@ class RiskManager:
                     # prior close cancels ⇒ today P&L = realized cash = Σsell − Σbuy.
                     fill_pnl += sell_cash[sym] - buy_cash[sym]
                 else:
-                    # flat now with non-zero net today qty ⇒ a held-over lot was fully closed today;
-                    # its prior close is unavailable (no position to read lastday_price from) → degrade.
-                    return 0.0, False
+                    # flat now with non-zero net today qty ⇒ a held-over lot was fully closed today, so there is no
+                    # position to read lastday_price from. KILL-PRIOR-CLOSE-1111: read the prior session's close from
+                    # the T1 daily bar instead (2026-11-11: a Swing QQQM lot held overnight and sold at 06:33 PT blocked
+                    # every new entry for the rest of the session). No bar -> degrade as before (never mask).
+                    pc_flat = _prior_session_close(sym)
+                    if pc_flat is None:
+                        return 0.0, False
+                    fill_pnl += (pc_flat * buy_qty[sym] - buy_cash[sym]) + (sell_cash[sym] - pc_flat * sell_qty[sym])
             result = open_pnl + fill_pnl
             if not math.isfinite(result):
                 return 0.0, False
