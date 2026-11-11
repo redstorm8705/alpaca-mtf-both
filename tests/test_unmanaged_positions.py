@@ -32,7 +32,7 @@ class Alarm(unittest.TestCase):
         pm = mock.patch.dict(um._MEM, clear=True)
         pm.start()
         self.addCleanup(pm.stop)
-        p2 = mock.patch.object(um, "_page", side_effect=lambda m: self.pages.append(m))
+        p2 = mock.patch.object(um, "_page", side_effect=lambda m, **k: self.pages.append(m))
         p2.start()
         self.addCleanup(p2.stop)
         p3 = mock.patch("trade_logger.log_event")
@@ -321,6 +321,89 @@ class ManagedSources(unittest.TestCase):
                 p.stop()
         self.assertEqual(errors, ["qhm:ValueError"])
         self.assertNotIn("qhm", per)
+
+
+class SlackFormat(unittest.TestCase):
+    """SLACK-UX-1109 part 3: the ownership page renders the phone-first format; the log line keeps the full detail."""
+
+    def test_nvda_unmanaged_share_renders_action(self):
+        import alerts
+        sent = []
+        with mock.patch.object(alerts, "notify", side_effect=lambda *a, **k: sent.append((a, k)) or True):
+            with self.assertLogs(um.logger, level="CRITICAL") as logs:
+                um._page(f"{um.TAG} [NVDA] 1 share(s) (long, ~$174) are held at Alpaca but NO tier manages them",
+                         severity="action", symbol="NVDA", verdict="1 share(s) no tier manages",
+                         risk="1 long share(s), about $174, with no bot stop",
+                         bot_is="not managing them (it never trades shares no tier owns)",
+                         you="Alpaca holds 3 NVDA, the bot manages 2: check your stops cover all 3")
+        self.assertIn("[unmanaged-position] [NVDA]", logs.output[0])          # post-live proof line unchanged
+        (sev, sym, verdict), kw = sent[0]
+        text = alerts.render_notify(sev, sym, verdict, risk=kw["risk"], bot_is=kw["bot_is"], you=kw["you"],
+                                    tier=kw["tier"])
+        self.assertEqual(text.split("\n")[0], "🚨 ACTION NVDA · 1 share(s) no tier manages")
+        self.assertIn("You: Alpaca holds 3 NVDA, the bot manages 2", text)
+        self.assertNotIn("[unmanaged-position]", text)
+
+    def test_infra_page_has_no_internal_tag(self):
+        import alerts
+        sent = []
+        with mock.patch.object(alerts, "notify", side_effect=lambda *a, **k: sent.append((a, k)) or True):
+            um._page(f"{um.TAG} cannot verify position ownership: broker positions unreadable (x).",
+                     verdict="cannot check which tier owns each position (Alpaca positions unreadable)")
+        (sev, _sym, verdict), _kw = sent[0]
+        self.assertEqual(sev, "heads_up")
+        self.assertNotIn("unmanaged-position", verdict)
+
+
+class SlackFormatFromCheck(unittest.TestCase):
+    """The text check_unmanaged actually builds (adversarial review 11-11): no unchecked "no stop" claim, and never a
+    stop for more shares than Alpaca holds."""
+
+    def _run(self, qty, managed):
+        import alerts
+        sent = []
+        pos = SimpleNamespace(symbol="NVDA", qty=str(qty), market_value=str(174.0 * qty), asset_class="us_equity")
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(um, "_STATE", Path(d) / "s.json"), mock.patch.dict(um._MEM, {}, clear=True), \
+                mock.patch("execution.broker.get_open_positions", return_value=[pos]), \
+                mock.patch.object(um, "_managed_qty", return_value=({"NVDA": managed}, [], {"qhm": {"NVDA": managed}})), \
+                mock.patch.object(um, "_qhm_pending_entries", return_value=set()), \
+                mock.patch.object(alerts, "notify", side_effect=lambda *a, **k: sent.append((a, k)) or True):
+            for _ in range(2):
+                um.check_unmanaged(None)
+        return sent
+
+    def test_real_nvda_case(self):
+        (sev, sym, verdict), kw = self._run(3, 2.0)[0]
+        self.assertEqual((sev, sym, verdict), ("action", "NVDA", "1 share(s) no tier manages"))
+        self.assertIn("no bot stop", kw["risk"])
+        self.assertIn("Alpaca holds 3 NVDA, the bot manages 2: check your stops cover all 3", kw["you"])
+        self.assertIn("GTC sell stop for 1, or close 1", kw["you"])
+        self.assertNotIn("have no stop", verdict)
+
+    def test_growing_residual_states_the_real_managed_count(self):
+        """Passes (7 held, 2 managed) then (10, 2): the confirmed count lags at 5; the page must still say the bot
+        manages 2 (cold review 11-11)."""
+        import alerts
+        sent = []
+        def pos(q):
+            return SimpleNamespace(symbol="NVDA", qty=str(q), market_value=str(174.0 * q), asset_class="us_equity")
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(um, "_STATE", Path(d) / "s.json"), mock.patch.dict(um._MEM, {}, clear=True), \
+                mock.patch.object(um, "_managed_qty", return_value=({"NVDA": 2.0}, [], {"qhm": {"NVDA": 2.0}})), \
+                mock.patch.object(um, "_qhm_pending_entries", return_value=set()), \
+                mock.patch.object(alerts, "notify", side_effect=lambda *a, **k: sent.append((a, k)) or True):
+            with mock.patch("execution.broker.get_open_positions", return_value=[pos(7)]):
+                um.check_unmanaged(None)
+            with mock.patch("execution.broker.get_open_positions", return_value=[pos(10)]):
+                um.check_unmanaged(None)
+        (_sev, _sym, _verdict), kw = sent[0]
+        self.assertIn("Alpaca holds 10 NVDA, the bot manages 2", kw["you"])
+
+    def test_stale_opposite_side_record_never_oversizes(self):
+        (_sev, _sym, verdict), kw = self._run(5, -3.0)[0]
+        self.assertEqual(verdict, "5 share(s) no tier manages")
+        self.assertIn("about $870", kw["risk"])
 
 
 if __name__ == "__main__":
