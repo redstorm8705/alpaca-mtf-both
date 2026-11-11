@@ -1,0 +1,333 @@
+{
+  "audit_date": "2026-11-10",
+  "run_ts": "2026-11-10T10:30:02.494021-08:00",
+  "entry_analysis": {
+    "entry_count": 4,
+    "exit_count": 3,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AMDL",
+      "AMD",
+      "NVD",
+      "DRAM"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 26,
+    "levels": {
+      "STRESSED": 26
+    },
+    "last_score": 50,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 85,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-10 17:16:28,496 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-10 17:16:28,499 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-10 17:16:47,615 | WARNING  | strategy.signal_generator | run_scan: phase-1 global timeout \u2014 abandoned symbols: ['TQQQ', 'INTC', 'QCOM']",
+      "2026-11-10 17:17:33,126 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-10 17:17:33,129 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 2,
+    "losses": 1,
+    "total_pnl": -6.809899999999992,
+    "win_rate": 0.6666666666666666,
+    "profit_factor": 0.4011338559814172,
+    "avg_win": 13.815050000000031,
+    "avg_loss": -34.440000000000055,
+    "best": {
+      "symbol": "AMDL",
+      "pnl": 21.330100000000037,
+      "entry_price": 49.9509,
+      "exit_price": 51.89,
+      "size": 11.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 43.78,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "AMD",
+      "pnl": -34.440000000000055,
+      "entry_price": 535.53,
+      "exit_price": 518.31,
+      "size": 2.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 518.96,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "AMDL",
+        "pnl": 21.330100000000037,
+        "entry_price": 49.9509,
+        "exit_price": 51.89,
+        "size": 11.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 43.78,
+        "target": 0.0
+      },
+      {
+        "symbol": "AMD",
+        "pnl": -34.440000000000055,
+        "entry_price": 535.53,
+        "exit_price": 518.31,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 518.96,
+        "target": 0.0
+      },
+      {
+        "symbol": "NVD",
+        "pnl": 6.300000000000026,
+        "entry_price": 6.29,
+        "exit_price": 6.36,
+        "size": 90.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 5.89,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AMD": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 98,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:00-10:00"
+        ],
+        "uncovered_windows_pt": [
+          "07:00-07:00"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "AMDL": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 6,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:52-09:52",
+          "09:58-09:58"
+        ],
+        "uncovered_windows_pt": [
+          "06:52-06:52",
+          "06:58-06:58"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "DRAM": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 39,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "12:50-12:51"
+        ],
+        "uncovered_windows_pt": [
+          "09:50-09:51"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVD": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 62,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:50-10:50",
+          "11:51-11:52"
+        ],
+        "uncovered_windows_pt": [
+          "07:50-07:50",
+          "08:51-08:52"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 240,
+        "lapsed_min": 0,
+        "uncovered_at_close": true,
+        "uncovered_windows_et": [
+          "09:30-13:30"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-10:30"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-10",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "NVDA NAKED (broker ground truth) \u2014 STILL UNCOVERED at the window end",
+        "detail": "NVDA: no broker stop for 240m of 240m held (06:30-10:30 PT); owners qhm"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 15,
+    "symbols": [
+      "AMD",
+      "AMDL",
+      "DRAM",
+      "NVD"
+    ],
+    "by_symbol": {
+      "DRAM": {
+        "buy": 0,
+        "sell": 0
+      },
+      "NVD": {
+        "buy": 1,
+        "sell": 2
+      },
+      "AMD": {
+        "buy": 2,
+        "sell": 2
+      },
+      "AMDL": {
+        "buy": 3,
+        "sell": 2
+      }
+    }
+  }
+}

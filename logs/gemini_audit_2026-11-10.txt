@@ -1,0 +1,60 @@
+Nightly Gemini Audit — 2026-11-10
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['alerts.py', 'config.py', 'run_day_tier.py', 'scripts/audit_slack.py', 'reporting/pnl_ledger.py', 'execution/earned_sizing.py', 'execution/day_veto_sizing.py', 'execution/day_trade_manager.py', 'execution/quarterly_hold_manager.py', 'events/catalyst_engine.py', 'research/day_veto_prior.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution/broker.py | NVDA position is NAKED (broker ground truth: 390m exposure, 0m broker-stop coverage) | NVDA
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **[NVDA] NAKED POSITION**: The BROKER GROUND TRUTH explicitly classes NVDA as NAKED for the entire RTH session (06:30-13:00 PT). The log shows repeated `QHM dip-add: NVDA QHM cap check unavailable` warnings, indicating the QHM is failing to manage the position, leaving it without a broker-side stop.
+* **FIFO ORPHAN**: `FIFO orphan: closing fill for AMDL/AMD/NVD/DRAM/QQQM has no prior lot` appears repeatedly. While the EOD snapshot notes this is pre-heal, the persistence of these orphans across multiple cycles suggests a failure in the `ledger_sync` or `portfolio_tracker` to correctly map fills to the internal state.
+* **LEDGER SYNC**: `ledger_sync: 4 reducing admission(s) remain unresolved` and `wall-time 19.0s` indicates the ledger sync is struggling to keep up with the fill volume, potentially contributing to the orphan issues.
+
+### PERFORMANCE AUDIT
+* **P&L Sign Check**: The `pnl_today` of $-16.55$ is consistent with the provided fill list (AMD losses and DRAM losses outweighing AMDL/NVD gains).
+* **Stop Rate**: The bot hit stops on AMD and DRAM today. The stop-hit rate is high relative to the small number of trades, but within the expected variance for a "STRESSED" MRI regime.
+* **R:R Analysis**: The realized P&L on the DRAM short ($-4.87$ on 16 shares) vs. the entry price ($39.95$) shows the stop was hit almost immediately. The bot is failing to capture edge in the current "STRESSED" regime.
+
+### TRADE INTEGRITY
+* **Recording Bug**: The `pnl_today` drift of $-16.55$ vs. the tracker's $0.00$ is flagged as "PRE-HEAL" in the snapshot, but the frequency of `FIFO orphan` warnings suggests the `portfolio_tracker` is failing to ingest fills correctly, which will likely result in a failed ledger heal.
+
+### MODIFIED FILE FINDINGS
+* **execution/day_veto_sizing.py**: The new `_secondary_mark` and `_tertiary_mark` functions implement a fallback dedupe mechanism. However, `page_once` uses `_PAGED` (in-process set) and then checks `_secondary_has` (disk). If the process restarts, `_PAGED` is cleared, but the disk state remains. This is correct, but the `_NO_SECONDARY` context manager in `place_entry` creates a risk: if `place_entry` fails, the page might not be marked in the secondary store, leading to potential page storms on retry.
+* **execution/quarterly_hold_manager.py**: The `_uncovered_protective_keep` logic is complex. It attempts to keep "untagged" protective sells. If `pos` is `None` (unreadable), it keeps *all* protective sells. This is a safe fail-closed, but if the broker book is large, this could lead to a massive accumulation of "kept" orders that are not actually QHM-managed, potentially violating the `MAX_OPEN_POSITIONS` logic elsewhere.
+
+### P5 STATUS
+* **P5-C1**: UNTOUCHED
+* **P5-C2**: UNTOUCHED
+* **P5-H2**: UNTOUCHED
+* **P5-H3**: UNTOUCHED
+* **P5-H4**: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution/quarterly_hold_manager.py | QHM fails to manage NVDA stop | The QHM log shows `QHM dip-add: NVDA QHM cap check unavailable` repeatedly, resulting in a NAKED position.**
+* **EXECUTION BUG | HIGH | execution/portfolio_tracker.py | FIFO orphan accumulation | The tracker is failing to match fills to lots, leading to drift that may not heal.**
+
+### FIX VALIDATION
+* **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1. **IMMEDIATE**: Manually verify the NVDA position in the Alpaca dashboard and place a protective stop if the bot has failed to do so.
+2. **INVESTIGATE**: Determine why `QHM cap check` is failing for NVDA; the log suggests an "equity/price unreadable" error, which implies a data-feed failure for that specific symbol.
+3. **REPAIR**: Audit `portfolio_tracker` to understand why FIFO orphans are accumulating; the `ledger_sync` wall-time of 19s suggests the sync process is timing out or blocking.
+4. **MONITOR**: Check if `DAYTRADE_VETO_DOWNSIZE_ENABLED` is causing the `FIFO orphan` issues by creating lots that the tracker does not recognize.
+================================================================================
+BROKER GROUND TRUTH (2026-11-10, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AMD    COVERED                  owners=day exposed=98m no-broker-stop=0m [07:00-07:00] rejected_stop_orders=0
+  AMDL   COVERED                  owners=day exposed=6m no-broker-stop=0m [06:52-06:52, 06:58-06:58] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  DRAM   COVERED                  owners=day exposed=64m no-broker-stop=0m [09:50-09:51] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [12:50-12:50] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVD    COVERED                  owners=day exposed=62m no-broker-stop=0m [07:50-07:50, 08:51-08:52] rejected_stop_orders=0
+  NVDA   NAKED                    owners=qhm exposed=390m no-broker-stop=390m [06:30-13:00] rejected_stop_orders=0
+  QQQM   BROKER-STOP-LAPSED       owners=core exposed=0m no-broker-stop=0m [12:59-13:00] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

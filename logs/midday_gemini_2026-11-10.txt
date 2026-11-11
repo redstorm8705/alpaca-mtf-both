@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-11-10
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   NAKED position detected in broker ground truth | NVDA (exposed=240m, no-broker-stop=240m)
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** The P&L signs are correct for the closed trades (AMDL/NVD profit, AMD loss).
+*   **Correlation:** The closed trades were all "no 12-pt score (Day tier)" entries. There is insufficient data to correlate score-to-outcome, but the lack of 12-pt scoring on these entries suggests the bot is relying on secondary logic paths that are currently underperforming (1 win, 1 loss, 1 profit).
+*   **Stop Rate:** 0% stop-hit rate is misleading; the presence of a NAKED position (NVDA) indicates a failure in the stop-management lifecycle rather than a lack of volatility.
+
+### ENTRY QUALITY
+*   **Issue:** The bot is currently operating under a "PREMARKET RED LOCKOUT" (16/18 movers red), yet the log shows the bot attempting to scan and evaluate entries. While the logic correctly blocked longs, the continued scanning of 42 tickers during a high-stress MRI (50/100) environment with a "fail-closed" status on multiple symbols (DRAM) suggests inefficient resource allocation during a restricted session.
+
+### EXIT QUALITY
+*   **Issue:** The "FIFO orphan" warnings in the log (`execution.portfolio_tracker`) indicate that the bot's internal ledger is failing to reconcile with Alpaca's fill history. This is a significant degradation in decision quality, as the bot cannot accurately calculate risk or P&L if it does not recognize its own open lots.
+
+### MRI ALIGNMENT
+*   **Alignment:** The bot correctly identified the STRESSED regime (50/100) and applied a size floor (0.70x). However, the persistence of a NAKED position in a STRESSED regime is a high-risk mismatch.
+
+### LOG ANOMALIES
+*   **FIFO Orphan Warnings:** `FIFO orphan: closing fill for [SYMBOL] has no prior lot and no tracker record` — occurs for AMDL, AMD, and NVD. This indicates a state-sync failure between the execution engine and the portfolio tracker.
+*   **EOD P&L DRIFT:** `EOD P&L DRIFT: Alpaca=$-6.81 tracker=$0.00 drift=$-6.81` — The tracker is failing to record trades, confirming the degradation noted in the "KNOWN D1" context.
+*   **Unmanaged Position:** `[unmanaged-position] [NVDA] still unmanaged: residual 1 (paged)` — This confirms the NVDA position is not being tracked by the bot's internal management logic.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Portfolio Tracker/Ledger Desync |** The bot is failing to track open lots (FIFO orphans), leading to a complete loss of P&L visibility in the tracker ($0.00 vs $-6.81 actual). This prevents the bot from making informed risk decisions.
+*   **EXECUTION BUG | HIGH | Stop Management Failure |** NVDA is held NAKED despite the bot's internal `quarterly_hold_manager` attempting to guard it. The `unmanaged_positions` log confirms the bot has lost control of this specific position.
+
+### FIX VALIDATION
+*   **No prior fixes to validate.**
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Immediate manual intervention required to place a protective stop on the NAKED NVDA position via the Alpaca dashboard, as the bot's internal management has failed.
+2.  **EXECUTION:** Audit `execution.portfolio_tracker` and `trade_events.jsonl` to resolve the D1 entry-event degradation; the current state of the ledger is unreliable for automated risk management.
+3.  **ALPHA:** Review the "Day tier" entry logic; the current win/loss distribution on these trades is not providing sufficient edge to justify the risk in a STRESSED MRI regime.
