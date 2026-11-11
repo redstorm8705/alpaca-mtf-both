@@ -150,7 +150,7 @@ class Base(unittest.TestCase):
         return w
 
     def triggered(self):
-        return [t for t in self.sent if "TRIGGERED" in t and "summary" not in t]
+        return [t for t in self.sent if t.startswith("🔔") or (t.startswith("🚨 ACTION") and " · buy 1 " in t)]
 
 
 class TestWatcherBreaks(Base):
@@ -168,10 +168,10 @@ class TestWatcherBreaks(Base):
         w = self.watch()
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertIn("TRIGGERED — ACTIONABLE", trig[0])
-        self.assertIn("Limit $0.97", trig[0])
-        self.assertIn("sell-stop 101C at $0.40", trig[0])
-        self.assertIn("Confirm the stop is still below the bid", trig[0])
+        self.assertIn("🚨 ACTION SPY · buy 1", trig[0])
+        self.assertIn("limit $0.97", trig[0])
+        self.assertIn("sell-stop at $0.40", trig[0])
+        self.assertNotIn("Bid is near the stop", trig[0])
         self.assertTrue(self.mkt.snapshot_calls)
         self.assertGreaterEqual(min(self.mkt.snapshot_calls), BASE + 3 * M)   # every quote fetch AFTER the break bar closed
         s = w.state["symbols"]["SPY"]["sides"]["CALL"]
@@ -189,7 +189,7 @@ class TestWatcherBreaks(Base):
         self.watch()
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertIn("TRIGGERED — NO ACTIONABLE CONTRACT UNDER $1.25", trig[0])
+        self.assertIn("no contract under the price cap", trig[0])
         self.assertNotRegex(trig[0], r"Limit \$|sell-stop")
 
     def test_d_target_before_break_stale_invalidation_before_break_void(self):
@@ -237,7 +237,7 @@ class TestWatcherBreaks(Base):
         self.watch(minutes=25)
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertIn("TRIGGERED — STALE, no entry", trig[0])
+        self.assertIn("too late, no entry", trig[0])
         self.assertNotRegex(trig[0], r"Limit \$|sell-stop")
 
     def test_k_quote_retry_succeeds_before_t_max(self):
@@ -246,7 +246,7 @@ class TestWatcherBreaks(Base):
         self.watch()
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertIn("TRIGGERED — ACTIONABLE", trig[0])
+        self.assertIn("🚨 ACTION SPY · buy 1", trig[0])
 
     def test_k_quote_fails_until_t_max(self):
         self.mkt.bars[BASE + 2 * M] = (100.5, 101.3, 100.4, 101.2)
@@ -254,7 +254,7 @@ class TestWatcherBreaks(Base):
         self.watch(minutes=30)
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertIn("TRIGGERED — NO CURRENT EXECUTABLE QUOTE", trig[0])
+        self.assertIn("no live option quote", trig[0])
 
     def _l(self, bar_1001):
         plan = _plan(cutoff=BASE - 2 * M)
@@ -264,8 +264,8 @@ class TestWatcherBreaks(Base):
         self.watch(plan=plan)
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertIn("TRIGGERED — STALE, no entry", trig[0])
-        self.assertNotIn("ACTIONABLE", trig[0])
+        self.assertIn("too late, no entry", trig[0])
+        self.assertNotIn("🚨 ACTION", trig[0])
 
     def test_l_invalidation_during_quote_retry(self):
         self._l((100.0, 100.2, 98.9, 99.5))
@@ -301,10 +301,10 @@ class TestOutcomeAndStops(Base):
         self.mkt.bars[BASE + 5 * M] = (100.0, 100.2, 98.9, 99.2)      # invalidation -> STOP
         self.mkt.bars[BASE + 9 * M] = (101.0, 102.2, 101.0, 102.0)    # later target touch -> nothing
         w = self.watch(minutes=15)
-        exits = [t for t in self.sent if "invalidation printed — exit" in t]
+        exits = [t for t in self.sent if "exit the call" in t]
         self.assertEqual(len(exits), 1)
-        self.assertIn("ts_utc 2026-11-09T15:05:00Z", exits[0])
-        self.assertFalse(any("target printed" in t for t in self.sent))
+        self.assertIn("7:05 AM PT", exits[0])
+        self.assertFalse(any("🎯" in t for t in self.sent))
         self.assertEqual(w.state["symbols"]["SPY"]["sides"]["CALL"]["outcome"], "STOP")
 
     def test_v92_same_bar_both_is_stop(self):
@@ -319,7 +319,7 @@ class TestOutcomeAndStops(Base):
         self.watch()
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertIn("TRIGGERED — REFERENCE ONLY — no placeable stop", trig[0])
+        self.assertIn("the stop price would not sit below the bid", trig[0])
         self.assertNotRegex(trig[0], r"Limit \$|sell-stop")
 
     def test_v93_stop_below_bid_eligible(self):
@@ -328,9 +328,9 @@ class TestOutcomeAndStops(Base):
         self.mkt.bars[BASE + 2 * M] = (100.5, 101.3, 100.4, 101.2)
         self.watch()
         trig = self.triggered()
-        self.assertIn("TRIGGERED — ACTIONABLE", trig[0])
-        self.assertIn("sell-stop 101C at $0.79", trig[0])
-        self.assertIn("If the 101C bid is at or below $0.79 when you are filled", trig[0])
+        self.assertIn("🚨 ACTION SPY · buy 1", trig[0])
+        self.assertIn("sell-stop at $0.79", trig[0])
+        self.assertIn("if the 101C bid is at or below $0.79 when you are filled", trig[0])
 
     def test_v93_bid_falls_below_stop_before_send(self):
         self.model = 0.79
@@ -339,7 +339,7 @@ class TestOutcomeAndStops(Base):
         self.mkt.bars[BASE + 2 * M] = (100.5, 101.3, 100.4, 101.2)
         self.watch()
         trig = self.triggered()
-        self.assertIn("TRIGGERED — REFERENCE ONLY — no placeable stop", trig[0])
+        self.assertIn("the stop price would not sit below the bid", trig[0])
         self.assertNotRegex(trig[0], r"Limit \$|sell-stop")
 
 
@@ -361,15 +361,15 @@ class TestPreSendRecheck(Base):
         self.watch()
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertNotIn("ACTIONABLE", trig[0])
-        self.assertIn("REFERENCE ONLY — no placeable stop", trig[0])
+        self.assertNotIn("🚨 ACTION", trig[0])
+        self.assertIn("the stop price would not sit below the bid", trig[0])
         self.assertNotRegex(trig[0], r"Limit \$|sell-stop")
 
     def test_locked_recheck_not_actionable(self):
         self.mkt.recheck = self._q(1.00, 1.00)
         self.watch()
         trig = self.triggered()
-        self.assertIn("TRIGGERED — NO CURRENT EXECUTABLE QUOTE", trig[0])
+        self.assertIn("no live option quote", trig[0])
         self.assertNotRegex(trig[0], r"Limit \$|sell-stop")
 
     def test_raising_recheck_not_actionable(self):
@@ -379,8 +379,8 @@ class TestPreSendRecheck(Base):
         self.watch(minutes=30)
         trig = self.triggered()
         self.assertEqual(len(trig), 1)
-        self.assertIn("TRIGGERED — NO CURRENT EXECUTABLE QUOTE", trig[0])
-        self.assertNotIn("ACTIONABLE", trig[0])
+        self.assertIn("no live option quote", trig[0])
+        self.assertNotIn("🚨 ACTION", trig[0])
 
     def test_raising_recheck_recovers_within_t_max(self):
         calls = []
@@ -392,13 +392,13 @@ class TestPreSendRecheck(Base):
             return self._q(0.80, 1.20)(now)
         self.mkt.recheck = flaky
         self.watch()
-        self.assertIn("TRIGGERED — ACTIONABLE", self.triggered()[0])
+        self.assertIn("🚨 ACTION SPY · buy 1", self.triggered()[0])
 
     def test_recheck_ask_over_cap(self):
         self.mkt.recheck = self._q(1.20, 1.30)
         self.watch()
         trig = self.triggered()
-        self.assertIn("TRIGGERED — NO ACTIONABLE CONTRACT UNDER $1.25", trig[0])
+        self.assertIn("no contract under the price cap", trig[0])
         self.assertNotRegex(trig[0], r"Limit \$|sell-stop")
 
     def test_recheck_retry_past_cutoff_not_actionable(self):
@@ -418,14 +418,14 @@ class TestPreSendRecheck(Base):
         self.mkt.recheck = recheck
         w.run_loop()
         self.assertGreaterEqual(calls["n"], 2)
-        self.assertFalse(any("ACTIONABLE" in t and "NO ACTIONABLE" not in t for t in self.triggered()))
+        self.assertFalse(any("🚨 ACTION" in t for t in self.triggered()))
         self.assertEqual(st["symbols"]["SPY"]["sides"]["CALL"].get("stale_reason"),
                          "past the broker's same-day order cut-off")
 
     def test_older_recheck_not_actionable(self):
         self.mkt.recheck = lambda now: self._q(0.80, 1.20)(now - timedelta(minutes=5))
         self.watch()
-        self.assertIn("NO CURRENT EXECUTABLE QUOTE", self.triggered()[0])
+        self.assertIn("no live option quote", self.triggered()[0])
 
 
 class TestCoverage(Base):
@@ -438,7 +438,7 @@ class TestCoverage(Base):
         s = w.state["symbols"]["SPY"]["sides"]["CALL"]
         self.assertNotEqual(s["status"], "VOID")
         self.assertEqual(len(self.triggered()), 1)
-        self.assertIn("TRIGGERED — ACTIONABLE", self.triggered()[0])
+        self.assertIn("🚨 ACTION SPY · buy 1", self.triggered()[0])
         self.assertFalse(any("watch history incomplete" in t and t.startswith("⚠️") for t in self.sent))
 
     def test_trailing_minute_not_processed_past(self):
@@ -490,7 +490,7 @@ class TestDeliveryAndRestart(Base):
             return orig(bl, fb)
         with mock.patch.object(mw, "send_slack_blocks", side_effect=flaky):
             w = self.watch(minutes=15)
-        self.assertEqual(sum("invalidation printed — exit" in t for t in self.sent), 1)
+        self.assertEqual(sum("exit the call" in t for t in self.sent), 1)
         self.assertTrue(w.state["symbols"]["SPY"]["sides"]["CALL"]["outcome_alerted"])
 
     def test_outcome_survives_crash_before_send_outcome(self):
@@ -507,7 +507,7 @@ class TestDeliveryAndRestart(Base):
         self.assertIsNotNone(s.get("outcome_bar"))
         self.assertFalse(s.get("outcome_alerted"))
         self.watch(minutes=15, plan=plan, state=st)
-        self.assertEqual(sum("invalidation printed — exit" in t for t in self.sent), 1)
+        self.assertEqual(sum("exit the call" in t for t in self.sent), 1)
 
     def test_trigger_alert_resent_after_failed_delivery_never_actionable(self):
         """Codex pre-ship 11-08: a failed TRIGGERED send is re-sent on a later poll, without ACTIONABLE terms."""
@@ -516,15 +516,15 @@ class TestDeliveryAndRestart(Base):
         orig = mw.send_slack_blocks.side_effect
 
         def flaky(bl, fb):
-            if "TRIGGERED — ACTIONABLE" in bl[0]["text"]["text"] and fails["n"] == 0:
+            if "🚨 ACTION SPY · buy 1" in bl[0]["text"]["text"] and fails["n"] == 0:
                 fails["n"] += 1
                 return False
             return orig(bl, fb)
         with mock.patch.object(mw, "send_slack_blocks", side_effect=flaky):
             w = self.watch(minutes=10)
-        late = [t for t in self.sent if "the alert was delayed" in t]
+        late = [t for t in self.sent if "this alert was delayed" in t]
         self.assertEqual(len(late), 1)
-        self.assertNotRegex(late[0], r"ACTIONABLE|Limit \$|sell-stop")
+        self.assertNotRegex(late[0], r"🚨 ACTION|limit \$|sell-stop")
         self.assertNotIn("pending_alert_text", w.state["symbols"]["SPY"]["sides"]["CALL"])
 
     def test_corrupt_state_does_not_re_alert(self):

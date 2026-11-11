@@ -30,10 +30,12 @@ Priority levels (ntfy):
 """
 
 import os
+import re
 import sys
 import time
 import json
 import logging
+import traceback
 import ssl
 import urllib.request
 import urllib.error
@@ -66,6 +68,7 @@ except ImportError:
 
 logger = logging.getLogger("alerts")
 PT = ZoneInfo("America/Los_Angeles")
+_ET = ZoneInfo("America/New_York")
 
 # ── Config — read at import time, hot-reload not needed ──────────────────────
 _NTFY_TOPIC       = os.getenv("NTFY_TOPIC", "").strip()
@@ -216,6 +219,121 @@ def _chunk_text(text: object, limit: int = _SLACK_CHUNK_LIMIT) -> list:
     return chunks
 
 
+# ── SLACK-UX-1109: scrubber + send log ────────────────────────────────────────────────────────────────────────────
+# Never in Slack: broker JSON, order/lot ids, uuids, Python exception reprs, internal state names. They stay in the app
+# log (the raw text is logged with the call site before scrubbing, so the template gets fixed). Each rule is a flat
+# pattern with no nested quantifier; the scrubber runs per chunk (<= _SLACK_CHUNK_LIMIT chars) and never raises.
+_SCRUB_RULES = (
+    # an order-id label with its value (first, so the uuid / order-id rules below cannot strip the value and leave the
+    # label; the value never jumps across whitespace to eat the next word)
+    (re.compile(r"\bcoids?[ \t]?[=:][ \t]?[^\s,;)]+", re.IGNORECASE), ""),
+    # a flat JSON body {"key": value, ...}: a quote right after the brace, then ONE bounded class up to the closing
+    # brace (linear per start; a nested body unwraps over repeated passes)
+    (re.compile(r'\{\s*"[^{}\n]{0,1600}\}'), "(details in log)"),
+    # uuid (broker order ids)
+    (re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"), ""),
+    # client order ids: QH-NVDA-s-1762-51afa094, IN-QQQM-b-...-tnecls1
+    (re.compile(r"\b[A-Z]{2,4}-[A-Z0-9.]{1,10}-[a-z]{1,3}-[A-Za-z0-9_-]{2,60}"), ""),
+    # a Python exception repr: ValueError('...') / APIError("...")
+    # (one level of inner parentheses allowed; the two alternatives start with different characters, so no backtracking)
+    (re.compile(r"\b[A-Z][A-Za-z0-9_]{0,60}(?:Error|Exception)\((?:[^()\n]|\([^()\n]{0,100}\)){0,400}\)"),
+     "(error in log)"),
+    (re.compile(r"Traceback \(most recent call last\):?"), "(error in log)"),
+    # internal state names: ALL_CAPS with an underscore (PENDING_STOP_REPLACE); tickers and words like GTC/HALT have none
+    (re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]*[A-Z0-9]\b"), ""),
+    # named internal labels
+    (re.compile(r"\bambiguous-[a-z][a-z-]*[a-z]\b"), ""),
+    (re.compile(r"\bBV-5\b"), ""),
+)
+_SPACES = re.compile(r"[ \t]{2,}")
+_SCRUB_PASSES = 3   # nesting depth unwrapped for a nested JSON body
+
+
+def _call_site() -> str:
+    """First stack frame outside this module, as 'file:line' (for the scrub warning). Never raises."""
+    try:
+        here = os.path.abspath(__file__)
+        for fr in reversed(traceback.extract_stack()[:-1]):
+            if os.path.abspath(fr.filename) != here:
+                return f"{os.path.basename(fr.filename)}:{fr.lineno}"
+    except Exception:
+        return "?"
+    return "?"
+
+
+def _scrub_slack(text: object) -> str:
+    """Remove the token classes above from one outbound chunk. Logs the raw text (with the call site) when anything
+    was removed. Never raises: any error returns the input unchanged as a str."""
+    if not isinstance(text, str):
+        text = str(text)
+    try:
+        lines = text.split("\n")   # no rule crosses a newline, so each line is scrubbed on its own
+        for idx, ln in enumerate(lines):
+            out = ln
+            for _ in range(_SCRUB_PASSES):
+                before = out
+                for rx, repl in _SCRUB_RULES:
+                    out = rx.sub(repl, out)
+                if out == before:
+                    break
+            if out != ln:   # only a changed line is re-spaced, so report indentation elsewhere survives
+                lines[idx] = _SPACES.sub(" ", out).strip()
+        out = "\n".join(lines)
+        if out != text:
+            logger.warning(f"[slack scrub] {_call_site()} removed internal tokens; raw: {text[:500]!r}")
+        return out
+    except Exception as e:
+        logger.warning(f"[slack scrub] skipped ({e})")
+        return text
+
+
+_SENT_LOG_DEFAULT = _HERE / "logs" / "slack_sent.jsonl"
+_SENT_LOG = _SENT_LOG_DEFAULT
+
+
+def _log_sent(first_line: str, delivered: bool, *, kind: str = "legacy", severity: str = "", symbol: str = "",
+              incident: str = "", parts: int = 1) -> None:
+    """Append one row per logical message to logs/slack_sent.jsonl: one O_APPEND write under a NON-blocking lock (on
+    contention the row is dropped with a warning; the trading thread never waits), no fsync. Rows carry only the
+    scrubbed first line. Skipped in test runs unless a test pointed _SENT_LOG elsewhere. Never raises."""
+    path = _SENT_LOG
+    if path == _SENT_LOG_DEFAULT and _under_test():
+        return
+    try:
+        import fcntl
+        line1 = _scrub_slack(str(first_line).split("\n", 1)[0])[:200]
+        row = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "delivered": bool(delivered),
+               "kind": kind, "severity": severity, "symbol": symbol, "incident": incident, "parts": parts,
+               "first_line": line1}
+        data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                logger.warning(f"[slack send-log] busy — row dropped: {line1[:80]}")
+                return
+            os.write(fd, data)
+        finally:
+            os.close(fd)
+    except Exception as e:
+        logger.warning(f"[slack send-log] write failed ({e})")
+
+
+def _scrub_blocks(obj: object) -> object:
+    """Scrub every text string inside a Block Kit structure (dicts/lists), returning a new structure. Never raises."""
+    try:
+        if isinstance(obj, dict):
+            return {k: (_scrub_slack(v) if k == "text" and isinstance(v, str) else _scrub_blocks(v))
+                    for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_scrub_blocks(v) for v in obj]
+    except Exception as e:
+        logger.warning(f"[slack scrub] blocks skipped ({e})")
+    return obj
+
+
 def _post_slack_text(text: str) -> bool:
     """POST one Slack webhook message. Returns True on HTTP 200. Never raises.
 
@@ -273,12 +391,12 @@ def send_slack_blocks(blocks: list, fallback_text: str) -> bool:
     the webhook is unset, the text-fallback send failed, or ANY block-group POST failed — so a caller
     can log honestly instead of assuming success (the return was previously None, which let callers
     treat a no-op / failed delivery as 'sent'; Rafael 2026-09-06)."""
-    fallback_text = _sanitize(fallback_text)
+    fallback_text = _scrub_slack(_sanitize(fallback_text))
     if not _SLACK_WEBHOOK:
         logger.warning(f"[ALERT no-op] {fallback_text[:120]}")
         return False
     try:
-        blocks = list(blocks or [])
+        blocks = [_scrub_blocks(b) for b in (blocks or [])]
     except Exception:
         blocks = []
     if not blocks:
@@ -298,17 +416,20 @@ def send_slack_blocks(blocks: list, fallback_text: str) -> bool:
             all_ok = False
         if i < n:
             time.sleep(0.4)                 # preserve delivery order; avoid a rate burst
+    _log_sent(fallback_text, all_ok, kind="blocks", parts=n)
     return all_ok
 
 
-def _send_slack_chunked(text: str) -> bool:
+def _send_slack_chunked(text: str, meta: dict | None = None) -> bool:
     """Send `text` as 1+ Slack messages, chunked so nothing truncates. When >1 part, each is
     prefixed '(i/N)' and sent IN ORDER (short sleep between). Returns True iff EVERY part
-    posted, so a caller's failure logging still fires if any part drops. Never raises."""
+    posted, so a caller's failure logging still fires if any part drops. Never raises.
+    SLACK-UX-1109: each part is scrubbed of internal tokens, and one send-log row is written after all parts
+    (`meta` carries kind/severity/symbol/incident from notify(); legacy callers log kind "legacy")."""
     if not _SLACK_WEBHOOK:
         return False
     text = _mobile_clean(text)   # WS2 chokepoint: every outbound message is mobile-clean (idempotent)
-    parts = _chunk_text(text)
+    parts = [_scrub_slack(p) for p in _chunk_text(text)]
     n = len(parts)
     ok = True
     for i, part in enumerate(parts, 1):
@@ -317,6 +438,7 @@ def _send_slack_chunked(text: str) -> bool:
             ok = False
         if i < n:
             time.sleep(0.4)                 # preserve delivery order; avoid a rate burst
+    _log_sent(parts[0] if parts else "", ok, parts=n, **(meta or {}))
     return ok
 
 
@@ -378,6 +500,78 @@ def send_slack_delivery(message: str) -> bool:
     if not ok:
         logger.warning(f"send_slack_delivery failed: {message[:120]}")
     return ok
+
+
+SEVERITY_ACTION = "action"      # the owner must act, or money is unprotected and the bot cannot fix it
+SEVERITY_HEADS_UP = "heads_up"  # something is wrong and the bot is handling it
+SEVERITY_INFO = "info"          # fills, stop raises, reports; no action
+_SEV_PREFIX = {SEVERITY_ACTION: "🚨 ACTION ", SEVERITY_HEADS_UP: "⚠️ ", SEVERITY_INFO: ""}
+_SEV_NTFY_PRIORITY = {SEVERITY_ACTION: 5, SEVERITY_HEADS_UP: 4, SEVERITY_INFO: 3}
+
+
+def _one_line(v: object) -> str:
+    return " ".join(str(v).split()) if v is not None else ""
+
+
+def incident_id(symbol: str, kind: str) -> str:
+    """Stable incident id (symbol, kind, ET date): the join key between the app log and slack_sent.jsonl, so a later
+    resolution message can name the incident it closes."""
+    return f"{_one_line(symbol).upper() or 'BOT'}-{_one_line(kind) or 'general'}-{datetime.now(_ET).strftime('%Y%m%d')}"
+
+
+def render_notify(severity: str, symbol: str, verdict: str, *, risk: str | None = None, bot_is: str | None = None,
+                  you: str | None = None, tier: str | None = None, verdict_is_action: bool = False) -> str:
+    """The phone-first message standard (SLACK-UX-1109 §2 + U1-U3, C1): line 1 is the whole message on a lock screen
+    (severity word, symbol, verdict; no bold), then one fact per line. INFO/HEADS-UP omit an empty You: line; an
+    ACTION always carries an action, either on line 1 (verdict_is_action=True) or a You: line — when neither is given
+    the renderer adds 'You: check the bot log.' and logs an error, so an ACTION can never render without an action.
+    The footer is the tier only (Slack stamps the time). Pure; never raises."""
+    sev = severity if severity in _SEV_PREFIX else SEVERITY_INFO
+    sym = _one_line(symbol).upper()
+    head = f"{_SEV_PREFIX[sev]}{sym + ' · ' if sym else ''}{_one_line(verdict)}"
+    lines = [head]
+    if risk:
+        lines.append(f"Money at risk: {_one_line(risk)}")
+    if bot_is:
+        lines.append(f"Bot is: {_one_line(bot_is)}")
+    act = _one_line(you)
+    if sev == SEVERITY_ACTION and not act and not verdict_is_action:
+        logger.error(f"[notify] ACTION without an action for {sym}: {head[:120]} — added a default")
+        act = "check the bot log."
+    if act and act.lower().rstrip(".") != "nothing":
+        lines.append(f"You: {act}")
+    if tier:
+        lines.append(_one_line(tier))
+    return "\n".join(lines)
+
+
+def notify(severity: str, symbol: str, verdict: str, *, risk: str | None = None, bot_is: str | None = None,
+           you: str | None = None, tier: str | None = None, kind: str = "general",
+           verdict_is_action: bool = False) -> bool:
+    """Render the §2 standard and send it to every configured transport (ntfy priority by severity; Slack through the
+    scrubbed, chunked, send-logged path). Logs the incident id and line 1 to the app log. Returns True when any
+    transport confirmed delivery. Never raises."""
+    try:
+        sev = severity if severity in _SEV_PREFIX else SEVERITY_INFO
+        text = render_notify(sev, symbol, verdict, risk=risk, bot_is=bot_is, you=you, tier=tier,
+                             verdict_is_action=verdict_is_action)
+        inc = incident_id(symbol, kind)
+        first = text.split("\n", 1)[0]
+        logger.info(f"[notify] incident={inc} severity={sev} {first}")
+        ntfy_ok = _ntfy(_scrub_slack(first), _scrub_slack(text), priority=_SEV_NTFY_PRIORITY[sev])
+        slack_ok = False
+        if _SLACK_WEBHOOK:
+            slack_ok = _send_slack_chunked(_sanitize(text), meta={"kind": _one_line(kind) or "general", "severity": sev,
+                                                                  "symbol": _one_line(symbol).upper(), "incident": inc})
+        if not (ntfy_ok or slack_ok):
+            if _NTFY_TOPIC or _SLACK_WEBHOOK:
+                logger.warning(f"[ALERT FAILED] incident={inc} {first}")
+            else:
+                logger.debug(f"[ALERT no-op — no transport configured] {first}")
+        return bool(ntfy_ok or slack_ok)
+    except Exception as e:
+        logger.critical(f"notify: could not send {symbol} {kind} ({e}): {verdict}")
+        return False
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────────────
@@ -587,7 +781,6 @@ def alert_stale_bar(symbol: str, age_min: float) -> None:
 
 
 _GTC_FAIL_PAGES = _STATE_DIR / "gtc_failed_pages.json"
-_ET = ZoneInfo("America/New_York")
 
 
 def _gtc_fail_key(symbol: str, side: str, stop_px: float) -> str:
