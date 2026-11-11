@@ -14,8 +14,10 @@ prompt (CLAIM_PROMPT_HEAD) is used — an evidentiary-rigor audit for factual cl
 not a code-defect audit. Added 2026-08-04 after an unverified diagnostic claim shipped
 straight into handoff.md with zero review.
 
---waive-gro : waive reviewer #2 (Codex, or its Gro fallback) — record gro=WAIVED (Rafael-authorized
-              only). GAI must still APPROVE. Reviewer #2 is Codex since REVIEWER-SWAP-1025 (2026-10-25).
+--waive-gro : waive reviewer #2 (Codex, or its NVIDIA-pair / Gro fallback) — record gro=WAIVED (Rafael-authorized
+              only). GAI must still APPROVE. Reviewer #2 is Codex since REVIEWER-SWAP-1025 (2026-10-25); when Codex
+              is unavailable the NVIDIA pair (Mistral Large 4 + MiniMax M3.1) reviews, Gro only if NVIDIA is down
+              and the diff fits one request (NV-REVIEW-1110).
 --context   : PROACTIVE ground-truth facts (a file path OR inline string) about code
               OUTSIDE the diff — what a referenced constant means, threading model, a
               cross-file helper/guard, the runtime profile — plus refutations of the
@@ -31,8 +33,13 @@ import json
 import hashlib
 import subprocess
 import time
+import math
+import statistics
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import preship_gate as _pg  # noqa: E402 — the cold-2nd freshness rule is reused from the gate, not copied
 from preship_gate import GATED_CLAIM_FILES  # noqa: E402 — single source of truth, avoids drift
 
 # Derived from __file__, NOT hardcoded (2026-07-22). A hardcoded absolute path made the
@@ -155,28 +162,53 @@ def _load_env():
         pass
     return keys
 
+def _scrub(text, key=""):
+    """_redact() (every .env value) plus the call's own key, for any error text that leaves a provider call."""
+    text = _redact(str(text))
+    return text.replace(key, "***") if key else text
+
+
 def _curl(url, headers, body_dict, key, timeout=120):
-    # curl transport (macOS urllib hits SSL CERTIFICATE_VERIFY_FAILED). `timeout` bounds a SINGLE
-    # call so one mute/slow model cannot hang indefinitely; the NVIDIA ladder passes a shorter 70s
-    # per-model timeout so a bad model is abandoned quickly. NOTE the aggregate is NOT 120s: the
-    # ladder can run up to ~70s x N models and _sub/_gsub retry the whole ladder once, so the
-    # substitute path is bounded but can take a few minutes — acceptable for a ship-gate tool that
-    # never runs in the live trade loop (an unhandled hang there only delays/fails a ship, closed).
+    # curl transport (macOS urllib hits SSL CERTIFICATE_VERIFY_FAILED). `timeout` bounds a SINGLE call.
+    # KEY SAFETY (NV-REVIEW-1110 item 6): no secret is ever on curl's argv or in the URL. Headers (the API key among
+    # them) go through a header file read with `-H @file`; the request body through `--data-binary @file`. Both files
+    # are created by mkstemp (O_EXCL, mode 600, a per-process prefix plus a random suffix, so parallel pair calls
+    # never share one) and deleted in the same try/finally. A TimeoutExpired is re-raised WITHOUT its argv, and every
+    # error string is scrubbed (_redact masks every .env value), because on 2026-11-09 a TimeoutExpired message
+    # printed the NVIDIA key that used to sit on argv.
     import tempfile
-    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
-        json.dump(body_dict, f)
-        path = f.name
+    host = url.split("/")[2] if url.count("/") >= 2 else "?"
+    tag = f"preship_{os.getpid()}_"
+    paths = []
     try:
-        cmd = ["curl", "-s", url]
-        for h in headers:
-            cmd += ["-H", h]
-        cmd += ["--data-binary", f"@{path}"]
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+        hfd, hpath = tempfile.mkstemp(prefix=tag, suffix=".hdr")
+        paths.append(hpath)
+        os.fchmod(hfd, 0o600)
+        with os.fdopen(hfd, "w") as f:
+            f.write("".join(h + "\n" for h in headers))
+        bfd, bpath = tempfile.mkstemp(prefix=tag, suffix=".json")
+        paths.append(bpath)
+        with os.fdopen(bfd, "w") as f:
+            json.dump(body_dict, f)
+        cmd = ["curl", "-s", "-H", f"@{hpath}", "--data-binary", f"@{bpath}", url]
+        try:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).stdout
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"curl to {host} timed out after {timeout}s") from None
+        except OSError as e:
+            raise RuntimeError(_scrub(f"curl to {host} could not start ({type(e).__name__}: {e})", key)) from None
     finally:
-        os.unlink(path)
-    r = json.loads(out)
+        for p in paths:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+    try:
+        r = json.loads(out)
+    except ValueError:
+        raise RuntimeError(_scrub(f"non-JSON reply from {host}: {(out or '')[:160]}", key)) from None
     if isinstance(r, dict) and r.get("error"):
-        raise RuntimeError(str(r["error"]).replace(key, "***")[:200])
+        raise RuntimeError(_scrub(str(r["error"]), key)[:200])
     return r
 
 # PAPER-ACCOUNT FRAME (Rafael mandate 2026-09-26, CLAUDE.md "THIS IS A PAPER TRADING ACCOUNT").
@@ -216,7 +248,7 @@ def _gro(prompt, key):
             {"role": "user", "content": prompt}], "max_completion_tokens": 2048},
         key)
     if "choices" not in r:
-        raise RuntimeError(str(r).replace(key, "***")[:200])
+        raise RuntimeError(_scrub(str(r), key)[:200])
     return r["choices"][0]["message"]["content"]
 
 
@@ -234,49 +266,137 @@ _CODEX_TIMEOUT = 600
 # mentions Codex ("... for Claude, Codex and every worktree") does not match.
 _CODEX_SIGNED = re.compile(r"(?i)\bopenai\s+codex\b|\bchatgpt\s*/\s*codex\b|\bsigned(?:-off-by)?:\s*codex\b"
                            r"|\bagent-signature:\s*(?:openai\s+)?codex\b|noreply@openai\.com")
-# Every reviewer-#2 verdict, one JSON row each, in the git COMMON dir (shared by every worktree of this repository, so
-# a re-run from another worktree sees it). It blocks the Gro fallback for a (file, sha) Codex has already REJECTed —
-# no reviewer shopping across runs — and is the record the reversal criterion is counted from.
+# Every reviewer verdict (GAI, Codex, each NVIDIA pair model, Gro), one JSON row each, in the git COMMON dir (shared by
+# every worktree of this repository, so a re-run from another worktree sees it). It is the open-REJECT ledger that
+# blocks reviewer shopping across runs (_open_rejects) and the record the reversal criterion is counted from.
 _VERDICT_LOG_NAME = "reviewer-verdicts.jsonl"
+# GAI verdicts go to a SEPARATE append-only ledger beside it, same row format (NV-REVIEW-1110 item 5: GAI verdicts are
+# logged so a GAI REJECT blocks every fallback). reviewer-verdicts.jsonl keeps its reviewer-#2-and-pair content, which
+# its existing readers and tests rely on; the open-REJECT check reads BOTH ledgers, so the no-shopping rule is the same.
+_GAI_LOG_NAME = "gai-verdicts.jsonl"
+_COMMON_DIR_CACHE: list = []   # the resolved git common dir, resolved ONCE per process (no extra git call per ledger read)
+
+
+def _git_common_dir():
+    if not _COMMON_DIR_CACHE:
+        ok, out, _ = _git(["rev-parse", "--git-common-dir"])
+        d = out.strip() if ok and out.strip() else os.path.join(REPO, ".git")
+        _COMMON_DIR_CACHE.append(d if os.path.isabs(d) else os.path.join(REPO, d))
+    return _COMMON_DIR_CACHE[0]
+
+
+try:   # resolve once at import, so a ledger read inside an audit run adds no git call of its own
+    _git_common_dir()
+except Exception:  # noqa: BLE001 — no git here: resolved lazily (falling back to REPO/.git) on first use
+    _COMMON_DIR_CACHE.clear()
 
 
 def _verdict_log_path():
-    ok, out, _ = _git(["rev-parse", "--git-common-dir"])
-    d = out.strip() if ok and out.strip() else os.path.join(REPO, ".git")
-    return os.path.join(d if os.path.isabs(d) else os.path.join(REPO, d), _VERDICT_LOG_NAME)
+    return os.path.join(_git_common_dir(), _VERDICT_LOG_NAME)
 
 
-def _log_verdict(relpath, sha, reviewer, verdict, reason="", note=""):
-    """Append one reviewer verdict row (append-only; a write failure is reported, never fatal)."""
+def _gai_log_path():
+    # beside the reviewer ledger, wherever that resolves (a test that points _verdict_log_path at a temp dir moves both)
+    return os.path.join(os.path.dirname(_verdict_log_path()), _GAI_LOG_NAME)
+
+
+def _log_verdict(relpath, sha, reviewer, verdict, reason="", note="", evidence=False, run_id="", auto_counter=False):
+    """Append one reviewer verdict row (append-only; a write failure is reported, never fatal). `evidence` = the run
+    carried the AUTHOR's --evidence (an APPROVE on the same content then clears that reviewer's open REJECTs on it).
+    `run_id` = the audit run that wrote the row; `auto_counter` = the row is the result of the automatic name-premise
+    counter-prompt, which clears ONLY the REJECT that the same reviewer logged in the same run (the one it answered).
+    Reason and note are scrubbed of every .env value before they are written. GAI rows go to the separate GAI ledger."""
     row = {"ts": int(time.time()), "file": relpath, "sha256": sha, "reviewer": reviewer, "verdict": verdict,
-           "reason": (reason or "")[-300:], "note": note, "adjudicated": None}
+           "reason": _redact(reason or "")[-300:], "note": _redact(note or ""), "evidence": bool(evidence),
+           "run": run_id, "auto_counter": bool(auto_counter), "adjudicated": None}
     try:
-        with open(_verdict_log_path(), "a", encoding="utf-8") as f:
+        with open(_gai_log_path() if reviewer == "gai" else _verdict_log_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps(row) + "\n")
     except OSError as e:
         sys.stderr.write(f"[preship] reviewer verdict log write failed ({e}) — verdict still enforced this run.\n")
 
 
+def _ledger_rows(relpath):
+    """Rows for one file from BOTH ledgers (reviewer + GAI), oldest first by ts (stable within a ledger). An unreadable
+    ledger contributes nothing."""
+    rows = []
+    for path in (_verdict_log_path(), _gai_log_path()):
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(r, dict) and r.get("file") == relpath:
+                        rows.append(r)
+        except OSError:
+            continue
+    rows.sort(key=lambda r: r.get("ts") if isinstance(r.get("ts"), (int, float)) else 0)
+    return rows
+
+
+def _open_rejects(relpath, sha):
+    """NO REVIEWER SHOPPING (NV-REVIEW-1110 item 5): the reviewers whose REJECT is still open for this content.
+    A REJECT by reviewer R stays open until R itself APPROVEs later content (a different sha) or APPROVEs the same
+    content on a run that carried --evidence (the author answered it and R cleared it). An INDETERMINATE, a WAIVED row,
+    or another reviewer's APPROVE never clears it. Scope: a reject on THIS sha; Codex's reject is file-wide (any sha —
+    the REVIEWER-SWAP-1025 rule, kept), so a trivial edit plus a Codex outage still cannot route the file elsewhere.
+    Every fallback (the NVIDIA pair in either slot, Gro) is refused while any reviewer other than itself is listed.
+    ONLY FALLBACKS are gated by this ledger (design item 5: "blocks every fallback"): a primary reviewer (Codex, GAI)
+    re-run on the same content is not refused by it — that reviewer's own new verdict decides its slot.
+    Open REJECTs are tracked per (reviewer, sha): a REJECT on content A is never cleared by the same reviewer's later
+    REJECT on content B; only that reviewer's later APPROVE of a different sha, or its APPROVE of A on an AUTHOR
+    --evidence run, clears every (reviewer, A) entry. An APPROVE from the automatic name-premise counter-prompt
+    (auto_counter) clears ONLY the (reviewer, A) REJECT logged in its own run — never an earlier run's genuine REJECT
+    and never a REJECT on any other sha."""
+    return sorted({rv for rv, s, _run in _open_reject_entries(relpath) if s == sha or rv == "codex"})
+
+
+def _open_reject_entries(relpath):
+    """The open REJECT entries for a file as (reviewer, sha, run id) — the ledger state _open_rejects reads."""
+    opened = set()
+    for r in _ledger_rows(relpath):
+        rv, v, s, run = r.get("reviewer"), r.get("verdict"), r.get("sha256"), r.get("run") or None
+        if not rv:
+            continue
+        if v == "REJECT":
+            opened.add((rv, s, run))
+        elif v == "APPROVE":
+            auto = r.get("auto_counter") is True
+            author_ev = r.get("evidence") is True
+
+            def _clears(e, rv=rv, s=s, run=run, auto=auto, author_ev=author_ev):
+                orv, osha, orun = e
+                if orv != rv:
+                    return False
+                if auto:   # answers ONE reject: the same reviewer's, same content, same run — nothing else
+                    return run is not None and orun == run and osha == s
+                return osha != s or author_ev
+            opened = {e for e in opened if not _clears(e)}
+    return opened
+
+
 def _codex_rejected(relpath):
-    """True when Codex has REJECTed this file (any content) and has not APPROVEd it since — the reject stays
-    unresolved until Codex itself approves a later version (an INDETERMINATE in between does not clear it), so a
-    trivial edit plus a Codex outage cannot route the file to Gro. Unreadable log → False (nothing recorded)."""
-    open_reject = False
-    try:
-        with open(_verdict_log_path(), encoding="utf-8") as f:
-            for line in f:
-                try:
-                    r = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(r, dict) and r.get("file") == relpath and r.get("reviewer") == "codex":
-                    if r.get("verdict") == "REJECT":
-                        open_reject = True
-                    elif r.get("verdict") == "APPROVE":
-                        open_reject = False
-    except OSError:
-        return False
-    return open_reject
+    """True when Codex has an open REJECT on this file (any content) — kept as the file-wide special case of
+    _open_rejects (unknown sha → only the file-wide Codex entry can match)."""
+    return "codex" in _open_rejects(relpath, None)
+
+
+def _fallback_refusal(relpath, sha, own_ids, evidence, ignore=frozenset()):
+    """'' when a fallback reviewer whose verdict-log ids are `own_ids` may stand in; else the reason it may not.
+    Another reviewer's open REJECT blocks it outright; its own open REJECT on this content needs --evidence.
+    `ignore` = reviewers that are NOT being replaced because they review in this same run (Codex, whose own verdict
+    then decides its slot); their entries are left out of both checks."""
+    open_r = [r for r in _open_rejects(relpath, sha) if r not in ignore]
+    others = [r for r in open_r if r not in own_ids]
+    if others:
+        return (f"open REJECT from {', '.join(others)} on this file — no fallback may stand in until that reviewer "
+                f"approves later content, or approves this content on a run with --evidence")
+    if open_r and not (evidence or "").strip():
+        return (f"its own open REJECT ({', '.join(open_r)}) on this exact content — answer it with --evidence; a "
+                f"blind re-run does not clear it")
+    return ""
 
 
 class CodexUnavailable(RuntimeError):
@@ -353,6 +473,11 @@ def _codex_review(prompt, reminder, names_ok, relpath):
     return v, txt
 
 
+# NO CHUNKED REVIEW (NV-REVIEW-1110 item 1): audit_file no longer chunks. A reviewer that sees one chunk cannot see a
+# defect, or its guard, in another — 13 refuted Gro REJECTs on 2026-11-09/10. Gro now reviews only a diff that fits ONE
+# request; an oversized diff with the NVIDIA endpoint down fails closed. _split_pure_add_hunk and _gro_chunked below are
+# RETAINED ONLY as pure helpers for the existing verdict tests (test_verdict.py::_chunker_checks); nothing on the live
+# audit path calls them.
 def _split_pure_add_hunk(hunk, limit):
     """Split ONE git hunk that contains NO removed ('-') lines into line-boundary pieces of at most
     ~`limit` chars, each prefixed with the hunk's own '@@' header line. Returns [hunk] unchanged if
@@ -374,28 +499,13 @@ def _split_pure_add_hunk(hunk, limit):
 
 
 def _gro_chunked(head, diff_body, ctx_suffix, key):
-    # Gro TPM-RESILIENCE (Rafael 2026-09-20 — "stop settling for the first rejection; find a
-    # solution"). Groq's free tier caps a SINGLE request at 8k TPM, so a large diff overflows
-    # ("Request too large") outright and the old path fell straight to the substitute. Instead,
-    # SPLIT the diff into token-bounded chunks, audit EACH with a real Gro call, and COMBINE
-    # worst-verdict-wins: any chunk REJECT => the change REJECTs (return that chunk's rejection so
-    # the caller surfaces the real defect); all chunks APPROVE => APPROVE. A chunk that stays
-    # INDETERMINATE after a reminder RAISES, so the caller falls to the substitute/waive rather than
-    # silently passing. Yields a genuine Gro verdict on a diff of ANY size. The returned text carries
-    # exactly one `VERDICT:` line so the caller's _verdict() parses it unchanged.
-    # KNOWN DEGRADED MODE (cold-2nd 2026-09-20): a defect whose two halves land in SEPARATE chunks
-    # can look benign in each chunk -> all-APPROVE (chunking fails toward APPROVE only in this narrow
-    # cross-chunk case). MITIGATED: GAI (the required second voice) audits the WHOLE diff single-shot
-    # (Gemini's large input budget does not overflow where Gro's 8k TPM does), so a cross-chunk defect
-    # is still caught by GAI. Only if GAI is ALSO on its substitute does this mitigation weaken.
+    """RETAINED for test_verdict.py only (not called by audit_file since NV-REVIEW-1110). Splits the diff on hunk
+    boundaries into ~18000-char chunks (pure-add hunks split at line boundaries), asks _gro once per chunk (plus one
+    format-reminder retry on INDETERMINATE; there is NO 429 / rate-limit wait-and-retry any more — any _gro exception
+    propagates), and combines worst-verdict-wins: any chunk REJECT → that rejection; all APPROVE → APPROVE; a chunk
+    still INDETERMINATE after the reminder raises."""
     BUDGET = 18000  # chars for head + one chunk + ctx (~4.5k tokens; safely under 8k TPM w/ 2048 reserve)
     room = max(3000, BUDGET - len(head) - len(ctx_suffix))
-    # Split on git HUNK boundaries ("@@ ..."), NEVER mid-hunk, so a coherent change stays whole. A
-    # function rewritten in place emits its removal (-) and re-addition (+) as ONE hunk; the earlier
-    # line-based split cut that hunk across chunks, so a chunk saw the removal WITHOUT the re-addition
-    # and FALSE-REJECTED ("_nvidia removed, no replacement" — dogfood 2026-09-20). Keeping each hunk
-    # intact eliminates that class. The pre-hunk file header (diff --git / index / --- / +++) is
-    # prepended to EVERY chunk so each chunk is a self-describing diff.
     lines = diff_body.splitlines(keepends=True)
     header, hunks, cur_hunk = [], [], None
     for ln in lines:
@@ -404,29 +514,20 @@ def _gro_chunked(head, diff_body, ctx_suffix, key):
                 hunks.append(cur_hunk)
             cur_hunk = ln
         elif cur_hunk is None:
-            header.append(ln)          # pre-hunk file header lines
+            header.append(ln)
         else:
             cur_hunk += ln
     if cur_hunk is not None:
         hunks.append(cur_hunk)
     hdr = "".join(header)
-    if not hunks:                      # no @@ markers (e.g. the "(no change ...)" placeholder)
+    if not hunks:
         chunks = [diff_body]
     else:
         hroom = max(2000, room - len(hdr))
-        # NEW-FILE / PURE-INSERTION HUNKS (2026-09-23): a brand-new file is ONE hunk, and the
-        # never-split-a-hunk rule above left any new file larger than ~one chunk permanently
-        # un-auditable by Gro ("Request too large" on the single chunk -> no real Gro verdict).
-        # The never-split rule exists for hunks that REMOVE and RE-ADD lines (a split could show
-        # the removal without its re-addition); a hunk with NO '-' lines has no such pairing, so
-        # it is split at LINE boundaries into pieces that each fit, each carrying the hunk's own
-        # '@@' header. Hunks with any '-' line stay intact (unchanged behavior). Same known
-        # degraded mode as any chunking: a defect spanning two pieces can look benign in each —
-        # mitigated because GAI audits the WHOLE diff single-shot.
         hunks = [p for h in hunks for p in (_split_pure_add_hunk(h, hroom) if len(h) > hroom else [h])]
         chunks, cur = [], ""
         for h in hunks:
-            if cur and len(cur) + len(h) > hroom:   # never split a hunk; flush the group first
+            if cur and len(cur) + len(h) > hroom:
                 chunks.append(hdr + cur)
                 cur = ""
             cur += h
@@ -435,44 +536,29 @@ def _gro_chunked(head, diff_body, ctx_suffix, key):
         if not chunks:
             chunks = [hdr + diff_body]
     n = len(chunks)
-
-    def _gro_rl(p):
-        # Groq's 8k TPM is PER-MINUTE, so consecutive chunk calls exhaust the budget and get a 429
-        # "rate limit ... tokens per minute". That is NOT a per-request overflow and NOT a reject —
-        # wait for the minute to roll and retry (up to 2×). This is what makes multi-chunk auditing
-        # actually work within the free cap (Rafael 2026-09-20: "find a solution", not settle).
-        for attempt in range(3):
-            try:
-                return _gro(p, key)
-            except Exception as e:
-                m = str(e).lower()
-                rl = ("rate limit" in m or "rate-limit" in m or ("tokens per minute" in m and "used" in m)
-                      or "429" in m)
-                if rl and attempt < 2:
-                    sys.stderr.write(f"[preship] Gro per-minute TPM hit on a chunk — waiting 62s "
-                                     f"(attempt {attempt + 1}/2).\n")
-                    time.sleep(62)
-                    continue
-                raise
-
     for i, ch in enumerate(chunks, 1):
         marker = (f"(CHUNK {i} of {n} of a larger staged diff — audit ONLY this chunk's changed "
                   f"lines for a defect INTRODUCED here; the other chunks are audited separately. "
-                  f"Bare names used here may be DEFINED in another chunk or in unchanged code not shown "
-                  f"(see the STATIC ANALYSIS block below for bare-name resolution). "
                   f"APPROVE this chunk if IT introduces no defect.)\n")
         cprompt = head + marker + ch + ctx_suffix
-        txt = _gro_rl(cprompt)
+        txt = _gro(cprompt, key)
         v = _verdict(txt)
         if v == "INDETERMINATE":
-            txt = _gro_rl(cprompt + "\n\nREMINDER: end with exactly ONE line beginning "
-                          "`VERDICT: APPROVE` or `VERDICT: REJECT — <defect>`.")
+            txt = _gro(cprompt + "\n\nREMINDER: end with exactly ONE line beginning "
+                       "`VERDICT: APPROVE` or `VERDICT: REJECT — <defect>`.", key)
             v = _verdict(txt)
         if v == "REJECT":
             return f"Gro chunked audit ({n} chunks): chunk {i} REJECTED.\n{txt}"
         if v != "APPROVE":
             raise RuntimeError(f"Gro chunk {i}/{n} INDETERMINATE after reminder — cannot combine")
     return f"Gro chunked audit: all {n} chunk(s) APPROVE.\nVERDICT: APPROVE"
+
+
+
+# Groq's own size refusal ("Request too large for model ... Requested 8985 > Limit 8000", 2026-08-24) or an HTTP 413 /
+# context-length error. A per-minute 429 rate limit is NOT a size refusal (it also fails closed, with its own message).
+_TOO_LARGE_RE = re.compile(r"(?i)request too large|too large|\b413\b|context length|maximum context")
+
 
 def _gai(prompt, key, paid_key=""):
     prompt = _framed(prompt)
@@ -500,16 +586,18 @@ def _gai(prompt, key, paid_key=""):
         _last_err = None
         for _model in _GAI_LADDER:
             try:
+                # The key travels in the x-goog-api-key header (via _curl's header file), never in the URL
+                # (NV-REVIEW-1110 item 6: a URL ?key= can surface in an error or a timeout message).
                 r = _curl(
-                    f"https://generativelanguage.googleapis.com/v1beta/models/{_model}:generateContent?key={k}",
-                    ["Content-Type: application/json"],
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{_model}:generateContent",
+                    [f"x-goog-api-key: {k}", "Content-Type: application/json"],
                     {"contents": [{"parts": [{"text": prompt}]}],
                      "generationConfig": {"maxOutputTokens": 2048,
                                           "thinkingConfig": {"thinkingBudget": 0}}},
                     k)
                 if "candidates" in r:
                     return r["candidates"][0]["content"]["parts"][0]["text"]
-                _last_err = RuntimeError(str(r).replace(k, "***")[:200])
+                _last_err = RuntimeError(_scrub(str(r), k)[:200])
             except Exception as _e:
                 _last_err = _e
             # this model failed (retired 404 / quota 429 / overload 503 / error) — try the next one
@@ -547,62 +635,181 @@ def _gai(prompt, key, paid_key=""):
             pass
     raise last
 
-# OPTION-C SUBSTITUTE reviewer MODEL LADDER (Rafael-authorized 2026-08-24; laddered 2026-09-20).
-# Stands in for GAI or Gro ONLY when that voice is genuinely DOWN (outage/quota/TPM-overflow) so a
-# single-provider failure never blocks EVERY ship. Members VERIFIED LIVE via the
-# integrate.api.nvidia.com/v1/models probe (2026-09-20) — diverse lineages (Meta / Mistral /
-# NVIDIA-tuned-Llama), each a strong INSTRUCT (not a reasoning) model that lands a single clean
-# `VERDICT:` line. RE-PINNED history: meta/llama-3.1-70b-instruct RETIRED (410, 2026-08-26);
-# nemotron-3-super is live but a REASONING model → INDETERMINATE (excluded). llama-3.2-90b-vision-
-# instruct stays FIRST (proven). LADDERED per Rafael 2026-09-20 ("when the fallback doesn't work,
-# try another model — it offers more than one; stop settling for the first rejection"): a single
-# pinned model that timed out or went mute forced a hard fail + manual --waive-gro (2026-09-20).
-_NVIDIA_LADDER = (
-    "meta/llama-3.2-90b-vision-instruct",      # proven clean-VERDICT (the prior single pin)
-    "mistralai/mistral-large-2-instruct",      # strong general instruct, diverse (Mistral) lineage
-    "nvidia/llama-3.1-nemotron-70b-instruct",  # 70b INSTRUCT (NOT the reasoning nemotron-3-super)
-)
-_NVIDIA_PER_MODEL_TIMEOUT = 70  # bounded per model so trying the whole ladder stays reasonable
-_LAST_NVIDIA_MODEL = ""         # which ladder model actually answered (recorded in the marker)
+# NVIDIA REVIEWER PAIR (NV-REVIEW-1110, owner 2026-11-10: "I'd prefer we use mistral vs groq for reviews"; design
+# logs/design_records/nv_review_2026-11-10.md). Replaces the old one-model-at-a-time NVIDIA ladder. The pair is
+# reviewer #2 whenever Codex is unavailable (every diff size), and the GAI stand-in whenever Gemini is down.
+# Chosen by the 2026-11-09 bake-off on the BAKEOFF-1025 cases (4 planted bugs, 6 clean, x2): Mistral Large 4 caught
+# 7/8 bugs with 0/12 false rejects, MiniMax M3.1 6/8 and 0/12; the old ladder head llama-3.2-90b caught 2/4 with 3/6
+# false rejects. Both pair models often return EMPTY content (no verdict 7/20 and 9/20) — hence two models, a retry
+# per model, and fail-closed when neither lands a verdict.
+_NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+_NVIDIA_PAIR = ("mistralai/mistral-large-4-1t-a52b", "minimaxai/minimax-m3.1-flash")
+_PAIR_LABEL = "nvidia-pair"
+_NVIDIA_SYSTEM = ("You are a Senior Staff engineer auditing a diff before it ships to a live trading bot. Concrete, "
+                  "no hedging. REJECT only for a concrete failing input (input -> wrong output/crash) in the CHANGED "
+                  "lines, and QUOTE the exact offending line; a theoretical 'could' is a NIT, not a REJECT.")
+# BAKE-OFF MEASUREMENTS the per-model limits are DERIVED from (design item 4). Seconds of every SUCCESSFUL run (a
+# parsed APPROVE or REJECT) per model, in file order, from the 2026-11-09 result file nv_results_1794292058.json
+# (rows [model, case_id, expected, verdict, seconds, tail]; that run used max_tokens 6000, temperature 0.2, a 420 s
+# cap, the _NVIDIA_SYSTEM message above and the _framed() prompt).
+_BAKEOFF_OK_SECONDS = {
+    "mistralai/mistral-large-4-1t-a52b": (217, 211, 277, 83, 264, 204, 185, 190, 195, 238, 224, 37, 20),
+    "minimaxai/minimax-m3.1-flash": (224, 103, 51, 58, 136, 103, 115, 80, 22, 30, 13),
+}
+# The token budget the bake-off accuracy was measured at. The result file stores only the last 400 characters of
+# each reply, so output length cannot be measured from it; a smaller budget would be a guess the data does not
+# support (and the models that went silent were the ones that ran long), so the measured budget is kept.
+_BAKEOFF_MAX_TOKENS = 6000
+
+
+def _derived_timeout(samples):
+    """Per-model timeout = p90 of the successful bake-off latencies plus headroom equal to the upper spread
+    (p90 - median). Mistral: p90 258.8 s, median 204 s -> 314 s; MiniMax: p90 136 s, median 80 s -> 192 s. Both models
+    run in parallel, so a slot is bounded by the slower model's own serial calls: the first ask, one no-verdict retry,
+    and at most one name-premise counter-prompt — worst case about 3 serial calls of that model's timeout per slot."""
+    p90 = statistics.quantiles(samples, n=10, method="inclusive")[-1]
+    return int(math.ceil(p90 + (p90 - statistics.median(samples))))
+
+
+_NVIDIA_TIMEOUT = {m: _derived_timeout(s) for m, s in _BAKEOFF_OK_SECONDS.items()}
+
+
+class NvidiaTransportError(RuntimeError):
+    """The NVIDIA call itself failed (timeout, HTTP error such as 404, no `choices`) — distinct from a reply that
+    carries no verdict. Only when BOTH pair models fail this way is the endpoint treated as down (then Gro may run)."""
+
+
+def _nv_label(model):
+    return f"NVIDIA_{model}"
+
+
+def _nv_call(model, prompt, key):
+    """One NVIDIA chat call → the model's final `message.content` ('' when empty or missing). `reasoning_content` is
+    never read: an APPROVE that exists only in hidden reasoning is not a verdict (design item 4)."""
+    try:
+        r = _curl(_NVIDIA_URL, [f"Authorization: Bearer {key}", "Content-Type: application/json"],
+                  {"model": model, "temperature": 0.2, "max_tokens": _BAKEOFF_MAX_TOKENS, "messages": [
+                      {"role": "system", "content": _NVIDIA_SYSTEM},
+                      {"role": "user", "content": _framed(prompt)}]},
+                  key, timeout=_NVIDIA_TIMEOUT.get(model, max(_NVIDIA_TIMEOUT.values())))
+    except Exception as e:  # noqa: BLE001 — every transport failure becomes one typed, scrubbed error
+        raise NvidiaTransportError(_scrub(f"{model}: {e}", key)[:300]) from None
+    try:
+        msg = r["choices"][0]["message"]
+    except (KeyError, IndexError, TypeError):
+        raise NvidiaTransportError(_scrub(f"{model}: no choices in reply: {str(r)[:160]}", key)[:300]) from None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    return content if isinstance(content, str) else ""
+
+
+def _nv_model_verdict(model, prompt, key, reminder="", names_ok=None):
+    """One pair member: (status, text, pre_counter), status APPROVE / REJECT / NO_VERDICT / TRANSPORT. A model with no
+    verdict (empty content, no single VERDICT line, or a transport failure) is retried ONCE with the format reminder.
+    TRANSPORT only when every attempt failed at transport. A REJECT on an undefined-name premise the static check
+    contradicts gets one counter-prompt (as for every other reviewer); if that yields no verdict the REJECT stands.
+    pre_counter = the original REJECT text when a counter-prompt landed a verdict (the caller logs that REJECT first,
+    then the counter-prompt result as an auto_counter row of the same run), else None."""
+    pre = None
+    status, txt, reached = "TRANSPORT", "", False
+    for attempt in range(2):
+        try:
+            txt = _nv_call(model, prompt if attempt == 0 else prompt + reminder, key)
+        except NvidiaTransportError as e:
+            txt = str(e)
+            continue
+        reached = True
+        v = _verdict(txt) if txt.strip() else "INDETERMINATE"
+        if v in ("APPROVE", "REJECT"):
+            status = v
+            break
+    else:
+        status = "NO_VERDICT" if reached else "TRANSPORT"
+    if status == "REJECT" and _name_premise_reject(txt, names_ok):
+        try:
+            t2 = _nv_call(model, prompt + _name_counter(txt) + reminder, key)
+            v2 = _verdict(t2) if t2.strip() else "INDETERMINATE"
+            if v2 in ("APPROVE", "REJECT"):
+                pre = txt
+                status, txt = v2, t2
+        except NvidiaTransportError as e:
+            sys.stderr.write(f"[preship] {model} counter-prompt failed ({str(e)[:80]}) — its REJECT stands.\n")
+    return status, txt, pre
+
+
+def _nvidia_pair(prompt, key, reminder="", names_ok=None, models=_NVIDIA_PAIR):
+    """Ask both pair models IN PARALLEL with the same prompt and combine (design item 3):
+      any REJECT → REJECT; at least one APPROVE and no REJECT → APPROVE ('2-of-2' or '1-of-2');
+      neither lands a verdict → verdict None (the caller fails closed, no marker).
+    Returns {"verdict", "agreement", "models": [{"id", "verdict"}], "texts": {id: text}, "endpoint_down", "text"};
+    endpoint_down is True only when every model failed at transport on every attempt. The model ids travel in this
+    return value (no module global)."""
+    def _one(m):
+        try:
+            return _nv_model_verdict(m, prompt, key, reminder, names_ok)
+        except Exception as e:  # noqa: BLE001 — an unexpected error is no verdict (fail closed), never endpoint-down
+            return "NO_VERDICT", _scrub(f"{m}: {type(e).__name__}: {e}", key)[:300], None
+    with ThreadPoolExecutor(max_workers=len(models)) as ex:
+        results = list(ex.map(_one, models))
+    statuses = [r[0] for r in results]
+    pre_counter = {m: r[2] for m, r in zip(models, results, strict=True) if r[2] is not None}
+    if "REJECT" in statuses:
+        verdict = "REJECT"
+    elif "APPROVE" in statuses:
+        verdict = "APPROVE"
+    else:
+        verdict = None
+    n_ok = statuses.count("APPROVE")
+    agreement = f"{n_ok}-of-{len(models)}" if verdict == "APPROVE" else ""
+    pairs = list(zip(models, statuses, strict=True))
+    texts = {m: r[1] for m, r in zip(models, results, strict=True)}
+    shown = [m for m, s in pairs if s == "REJECT"] or list(models)
+    text = "\n\n".join(f"[{m}: {s}]\n{(texts[m] or '')[-600:]}" for m, s in pairs if m in shown)
+    return {"verdict": verdict, "agreement": agreement,
+            "models": [{"id": m, "verdict": s} for m, s in pairs],
+            "texts": texts, "pre_counter": pre_counter,
+            "endpoint_down": all(s == "TRANSPORT" for s in statuses), "text": text}
 
 
 def _nvidia(prompt, key):
-    prompt = _framed(prompt)
-    # Try each ladder model in turn. A transport failure (timeout / 4xx / 5xx / no-choices) OR an
-    # INDETERMINATE response (no single clean VERDICT line — e.g. a mute/reasoning model) advances
-    # to the NEXT model. A model that returns a USABLE verdict (APPROVE or REJECT) is HONORED and
-    # returned — the ladder shops past a BROKEN or MUTE model, NEVER past a genuine REJECT
-    # (reviewer-shopping for an APPROVE is forbidden by the anti-bias rules). Raises only if the
-    # WHOLE ladder yields no usable verdict — the caller then fails closed / --waive path.
-    global _LAST_NVIDIA_MODEL
-    last_err = None
-    for model in _NVIDIA_LADDER:
-        try:
-            r = _curl(
-                "https://integrate.api.nvidia.com/v1/chat/completions",
-                [f"Authorization: Bearer {key}", "Content-Type: application/json"],
-                {"model": model, "temperature": 0.2, "max_tokens": 2048, "messages": [
-                    {"role": "system",
-                     "content": "You are a Senior Staff engineer auditing a diff before it ships "
-                                "to a live trading bot. Concrete, no hedging. REJECT only for a "
-                                "concrete failing input (input -> wrong output/crash) in the CHANGED "
-                                "lines, and QUOTE the exact offending line; a theoretical 'could' is a "
-                                "NIT, not a REJECT."},
-                    {"role": "user", "content": prompt}]},
-                key, timeout=_NVIDIA_PER_MODEL_TIMEOUT)
-            if "choices" not in r:
-                last_err = RuntimeError(f"{model}: {str(r).replace(key, '***')[:160]}")
-                continue
-            txt = r["choices"][0]["message"]["content"]
-            if _verdict(txt) == "INDETERMINATE":
-                last_err = RuntimeError(f"{model}: no clean single VERDICT line")
-                continue  # mute / reasoning model — try the next
-            _LAST_NVIDIA_MODEL = model
-            return txt  # a usable verdict (APPROVE or REJECT) — honor it, never shop past it
-        except Exception as e:
-            last_err = e  # timeout / transport error — advance to the next model
-            continue
-    raise last_err if last_err else RuntimeError("all NVIDIA ladder models failed")
+    """COMPATIBILITY WRAPPER (the pre-NV-REVIEW-1110 `_nvidia(prompt, key) -> text` signature, kept for callers and test
+    patch points). Runs the NVIDIA pair and returns its combined reply ending in exactly one VERDICT line; raises
+    RuntimeError when neither model gave a verdict. audit_file uses _nvidia_pair directly (it needs both model ids and
+    verdicts for the ledger and the marker)."""
+    res = _nvidia_pair(prompt, key)
+    if res["verdict"] is None:
+        raise RuntimeError(f"NVIDIA pair gave no verdict: {res['models']}")
+    body = "\n".join(ln for ln in res["text"].splitlines()
+                     if not ln.strip().lstrip("*#-+>• ").strip().upper().startswith("VERDICT:"))
+    tail = "APPROVE" if res["verdict"] == "APPROVE" else "REJECT — " + ", ".join(
+        m["id"] for m in res["models"] if m["verdict"] == "REJECT")
+    return f"{body}\nVERDICT: {tail}"
+
+
+def _log_pair(relpath, sha, res, note, evidence, run_id=""):
+    """One row per pair model. A model whose REJECT went through the name-premise counter-prompt gets its original
+    REJECT row first, then the counter-prompt result as an auto_counter row of this run (it clears only that REJECT)."""
+    pre = res.get("pre_counter") or {}
+    for row in res["models"]:
+        rid = row["id"]
+        if rid in pre:
+            _log_verdict(relpath, sha, _nv_label(rid), "REJECT", pre[rid], note=note, evidence=evidence, run_id=run_id)
+            _log_verdict(relpath, sha, _nv_label(rid), row["verdict"], res["texts"].get(rid, ""),
+                         note=note + "; automatic name-premise counter-prompt", evidence=evidence, run_id=run_id,
+                         auto_counter=True)
+        else:
+            _log_verdict(relpath, sha, _nv_label(rid), row["verdict"], res["texts"].get(rid, ""),
+                         note=note, evidence=evidence, run_id=run_id)
+
+
+def _pair_refusal(relpath, sha, evidence, ignore=frozenset()):
+    """'' when the NVIDIA pair may stand in for this exact staged content, else why not (design items 5 and 8):
+    the file's cold-2nd PASS must be recorded and fresh for this content — the gate's own check
+    (preship_gate._cold2_ok: same marker, same MARKER_MAX_AGE_SEC, PASS verdict, sha of the staged blob) — and no
+    other reviewer may hold an open REJECT on it."""
+    ok, why = _pg._cold2_ok(relpath, ":" + relpath)
+    if not ok:
+        return f"cold-2nd precondition not met ({why})"
+    return _fallback_refusal(relpath, sha, {_nv_label(m) for m in _NVIDIA_PAIR}, evidence, ignore)
 
 
 def _verdict(text):
@@ -769,6 +976,12 @@ def _name_counter(reject_text):
 
 
 def audit_file(relpath, waive_gro, keys, evidence="", context=""):
+    """(ok, message). The message is scrubbed of every .env value before it leaves (NV-REVIEW-1110 item 6)."""
+    ok, msg = _audit_file(relpath, waive_gro, keys, evidence, context)
+    return ok, _redact(msg)
+
+
+def _audit_file(relpath, waive_gro, keys, evidence="", context=""):
     _bias = _check_prompt_bias(context, evidence)
     if _bias:
         return False, (
@@ -837,8 +1050,20 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
                  "decision `VERDICT: APPROVE` or `VERDICT: REJECT — <defect>`. Do NOT start any "
                  "other line with `VERDICT:` and do NOT restate the format.")
 
-    # GAI (required) — with the OPTION-C substitute on a genuine GAI outage (Rafael 2026-08-24).
+    _ev = bool(evidence.strip())
+    _run = uuid.uuid4().hex   # this audit run's id, stored on every ledger row it writes (see _open_rejects)
+    nk = keys.get("NVIDIA_API_KEY", "")
+    # GAI (required) — with the NVIDIA pair standing in on a genuine GAI outage (option C, Rafael 2026-08-24; the pair
+    # replaced the llama ladder, NV-REVIEW-1110 item 2).
     gai_substituted = ""
+    gai_pair = None
+    # Codex reviews this run unless reviewer #2 is waived, and its own verdict then decides: a Codex REJECT (or Codex
+    # being unavailable while its old REJECT is open) still blocks the ship in the reviewer-#2 step below. So Codex's
+    # file-wide ledger entry for EARLIER content must not block the GAI-slot pair BEFORE Codex has re-reviewed the fixed
+    # content. A Codex REJECT on THIS content is never exempt (a same-content Codex re-run without --evidence does not
+    # clear it), so it still blocks the GAI-slot pair.
+    _codex_on_this = any(rv == "codex" and s == sha for rv, s, _r in _open_reject_entries(relpath))
+    _gai_ignore = set() if (waive_gro or _codex_on_this) else {"codex"}
     try:
         gai_txt = _gai(prompt, keys.get("GEMINI_API_KEY", ""), keys.get("GEMINI_PAID_API_KEY", ""))
         gai_v = _verdict(gai_txt)
@@ -849,61 +1074,68 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
             gai_v = _verdict(gai_txt)
     except Exception as e:
         # OPTION C: GAI genuinely DOWN (free quota exhausted; paid NOT attempted unless the
-        # GEMINI_ALLOW_PAID default-deny gate is explicitly opened by Rafael). Engage the
-        # substitute so a single-provider outage never blocks EVERY ship. Reached ONLY on a
-        # GAI *outage* exception — never on a GAI *REJECT* (a reject returns a verdict, not an
-        # exception, and is handled below with full Gro+GAI rigor). No NVIDIA key => fail-closed.
-        nk = keys.get("NVIDIA_API_KEY", "")
+        # GEMINI_ALLOW_PAID default-deny gate is explicitly opened by Rafael). Reached ONLY on a GAI *outage*
+        # exception — never on a GAI *REJECT* (a reject returns a verdict, not an exception). No NVIDIA key, a missing
+        # or stale cold-2nd, an open REJECT from another reviewer, or a pair with no verdict => fail-closed.
+        _ge = _scrub(e)
         if not nk:
-            return False, f"{relpath}: GAI audit failed ({e}) and no NVIDIA substitute key — fail-closed, no marker"
-        def _sub(p):
-            # one retry — the NVIDIA free tier occasionally times out on first hit (2026-08-24).
+            return False, f"{relpath}: GAI audit failed ({_ge}) and no NVIDIA substitute key — fail-closed, no marker"
+        _why = _pair_refusal(relpath, sha, evidence, _gai_ignore)
+        if _why:
+            return False, (f"{relpath}: GAI down ({_ge}) and the NVIDIA pair may not stand in: {_why} — "
+                           f"fail-closed, no marker")
+        sys.stderr.write(f"[preship] GAI down ({_ge[:60]}) — the NVIDIA pair stands in for GAI.\n")
+        gai_pair = _nvidia_pair(prompt + _reminder, nk, _reminder, _names_ok)
+        _log_pair(relpath, sha, gai_pair, "gai-slot substitute", _ev, _run)
+        if gai_pair["verdict"] is None:
+            return False, (f"{relpath}: GAI down ({_ge}) and neither NVIDIA pair model gave a verdict "
+                           f"({gai_pair['models']}) — fail-closed, no marker")
+        gai_v, gai_txt, gai_substituted = gai_pair["verdict"], gai_pair["text"], _PAIR_LABEL
+    if gai_pair is None:
+        # The verdict is logged BEFORE any counter-prompt, so a REJECT is on record even if the counter-prompt fails.
+        _log_verdict(relpath, sha, "gai", gai_v, gai_txt, evidence=_ev, run_id=_run)
+        if gai_v == "REJECT" and _name_premise_reject(gai_txt, _names_ok):
+            sys.stderr.write("[preship] GAI rejected on an undefined-name premise the static check contradicts — "
+                             "one automatic counter-prompt with that evidence.\n")
             try:
-                return _nvidia(p, nk)
-            except Exception:
-                time.sleep(3)
-                return _nvidia(p, nk)
-        try:
-            sys.stderr.write(f"[preship] GAI down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA model ladder).\n")
-            gai_txt = _sub(prompt + _reminder)
-            gai_v = _verdict(gai_txt)
-            if gai_v == "INDETERMINATE":
-                gai_txt = _sub(prompt + _reminder)
-                gai_v = _verdict(gai_txt)
-            gai_substituted = f"NVIDIA_{_LAST_NVIDIA_MODEL}"
-        except Exception as e2:
-            return False, f"{relpath}: GAI down ({e}) AND option-C substitute failed after retry ({e2}) — fail-closed, no marker"
-    if gai_v == "REJECT" and _name_premise_reject(gai_txt, _names_ok):
-        sys.stderr.write("[preship] GAI rejected on an undefined-name premise the static check contradicts — "
-                         "one automatic counter-prompt with that evidence.\n")
-        try:
-            if gai_substituted:
-                gai_txt = _nvidia(prompt + _name_counter(gai_txt) + _reminder, keys.get("NVIDIA_API_KEY", ""))
-            else:
                 gai_txt = _gai(prompt + _name_counter(gai_txt) + _reminder, keys.get("GEMINI_API_KEY", ""),
                                keys.get("GEMINI_PAID_API_KEY", ""))
-            gai_v = _verdict(gai_txt)
-        except Exception as _ge:
-            return False, f"{relpath}: GAI counter-prompt failed ({_ge}) after a name-premise REJECT — no marker"
-    _gai_label = f"substitute {gai_substituted}" if gai_substituted else "GAI"
+                gai_v = _verdict(gai_txt)
+            except Exception as _gce:
+                return False, (f"{relpath}: GAI counter-prompt failed ({_scrub(_gce)}) after a name-premise REJECT "
+                               f"— no marker")
+            # its own row, marked auto_counter with this run's id: it clears ONLY the REJECT logged just above (the one
+            # it answered), never an earlier run's REJECT; `evidence` stays the author's --evidence flag
+            _log_verdict(relpath, sha, "gai", gai_v, gai_txt, note="automatic name-premise counter-prompt",
+                         evidence=_ev, run_id=_run, auto_counter=True)
+    elif gai_v == "APPROVE" and [r for r in _open_rejects(relpath, sha) if r not in _gai_ignore]:
+        return False, (f"{relpath}: the NVIDIA pair approved for GAI, but an open REJECT on this content is not cleared "
+                       f"({', '.join(r for r in _open_rejects(relpath, sha) if r not in _gai_ignore)}) — "
+                       f"fail-closed, no marker")
+    _gai_label = (f"substitute {_PAIR_LABEL} ({gai_pair['models']})" if gai_pair else "GAI")
     if gai_v == "INDETERMINATE":
         return False, (f"{relpath}: {_gai_label} INDETERMINATE — no parseable VERDICT line after a retry "
                        f"(NOT a content reject; re-run the audit). Last 300 chars:\n{gai_txt[-300:]}")
     if gai_v != "APPROVE":
         return False, f"{relpath}: {_gai_label} REJECT — no marker.\n{gai_txt[-600:]}"
 
-    # Reviewer #2 (required unless waived): Codex first (BGC gate, REVIEWER-SWAP-1025); Gro only when Codex is
-    # unavailable. The marker keeps the `gro` field name the ship gate reads; `reviewer_b` records who gave it.
+    # Reviewer #2 (required unless waived): Codex first (BGC gate, REVIEWER-SWAP-1025). When Codex is unavailable — or
+    # as the required SECOND reviewer on a Codex-signed file Codex approved — the NVIDIA pair reviews (NV-REVIEW-1110
+    # item 1, every diff size); Gro only when the NVIDIA endpoint is down (both pair models transport-failed, or no
+    # NVIDIA key) AND the diff fits one Gro request. The marker keeps the `gro` field name the ship gate reads;
+    # `reviewer_b` records who gave it.
     gro_substituted = ""
     reviewer_b = "gro"
+    b_pair = None
     signed = (not waive_gro) and _codex_signed(relpath)
     codex_v, codex_txt = (None, "") if waive_gro else _codex_review(prompt, _reminder, _names_ok, relpath)
     if codex_v is not None:
-        _log_verdict(relpath, sha, "codex", codex_v, codex_txt, note="codex-signed file" if signed else "")
+        _log_verdict(relpath, sha, "codex", codex_v, codex_txt, note="codex-signed file" if signed else "",
+                     evidence=_ev, run_id=_run)
     if waive_gro:
         gro_v = "WAIVED"
         reviewer_b = "waived"
-        _log_verdict(relpath, sha, "waived", "WAIVED")
+        _log_verdict(relpath, sha, "waived", "WAIVED", run_id=_run)
     elif codex_v == "INDETERMINATE":
         return False, (f"{relpath}: Codex INDETERMINATE — no parseable VERDICT line after a retry "
                        f"(NOT a content reject; re-run). Last 300 chars:\n{codex_txt[-300:]}")
@@ -912,109 +1144,96 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     elif codex_v == "APPROVE" and not signed:
         gro_v, reviewer_b = "APPROVE", "codex"
     elif codex_v is None and signed:
-        # A Codex-signed file (or unreadable history) needs Codex AND Gro; with Codex unavailable it cannot ship.
-        return False, (f"{relpath}: Codex-signed file (or unreadable history) needs Codex AND Gro, and Codex is "
+        # A Codex-signed file (or unreadable history) needs Codex AND a second reviewer; with Codex unavailable it
+        # cannot ship.
+        return False, (f"{relpath}: Codex-signed file (or unreadable history) needs Codex AND a second reviewer (the "
+                       f"NVIDIA pair; it needs Codex AND Gro only when NVIDIA is down), and Codex is "
                        f"unavailable ({codex_txt[:80]}) — no marker. Re-run when Codex is back.")
-    elif codex_v is None and _codex_rejected(relpath):
-        # No reviewer shopping across runs: Codex's latest verdict on this file is a REJECT, so a Codex outage does not
-        # hand the file to Gro. Resolve the reject when Codex is back (--evidence), or the owner waives reviewer #2.
-        return False, (f"{relpath}: Codex's latest verdict on this file is REJECT and Codex is unavailable now "
-                       f"({codex_txt[:80]}) — Gro fallback refused. Resolve the reject (--evidence) when Codex is back.")
     else:
-        # Codex unavailable → Gro is reviewer #2; or Codex approved a Codex-signed file → Gro must ALSO approve.
-        if codex_v == "APPROVE":
-            sys.stderr.write("[preship] Codex-signed file: Codex APPROVE recorded; Gro must also approve.\n")
+        _second = codex_v == "APPROVE"
+        # On a Codex-signed file Codex has just approved, Codex is not being replaced, so its own ledger entry does not
+        # block the second reviewer (a second reviewer is not a fallback for Codex).
+        _ignore = {"codex"} if _second else set()
+        _note = "second reviewer on a codex-signed file" if _second else f"codex unavailable: {codex_txt[:120]}"
+        if _second:
+            sys.stderr.write("[preship] Codex-signed file: Codex APPROVE recorded; a second reviewer must also approve.\n")
         else:
-            sys.stderr.write(f"[preship] Codex unavailable ({codex_txt[:120]}) — Gro reviews as reviewer #2.\n")
-        try:
-            gro_txt = _gro(prompt, keys.get("GROQ_API_KEY", ""))
-            gro_v = _verdict(gro_txt)
-            if gro_v == "INDETERMINATE":
-                gro_txt = _gro(prompt + _reminder, keys.get("GROQ_API_KEY", ""))
-                gro_v = _verdict(gro_txt)
-        except Exception as e:
-            # Gro's free tier has a HARD 8k-TPM PER-REQUEST cap a large diff can exceed outright
-            # ("Request too large"), plus a per-minute budget that rate-limits under load — a Gro
-            # OUTAGE, not a REJECT (a reject returns a verdict, not an exception).
-            # STEP 1 (Rafael 2026-09-20 — "stop settling"): if this is a TPM/size overflow, get a
-            # REAL Gro verdict by CHUNKING the diff, BEFORE falling to any substitute.
-            _em = str(e).lower()
-            _tpm = ("request too large" in _em or "tokens per minute" in _em or " tpm" in _em
-                    or "8000" in _em or "413" in _em or "too large" in _em)
-            gro_v = None
-            if _tpm:
-                try:
-                    sys.stderr.write("[preship] Gro TPM-overflow — chunking the diff for a REAL Gro "
-                                     "verdict (not settling for the substitute).\n")
-                    gro_txt = _gro_chunked(_head, _diff_body, _ctx_suffix, keys.get("GROQ_API_KEY", ""))
-                    gro_v = _verdict(gro_txt)
-                    if gro_v not in ("APPROVE", "REJECT"):
-                        gro_v = None  # indeterminate chunk -> fall to substitute below
-                except Exception as _ce:
-                    sys.stderr.write(f"[preship] Gro chunked audit failed ({str(_ce)[:80]}) — "
-                                     "falling to option-C substitute.\n")
-                    gro_v = None
-            if gro_v is None:
-                # STEP 2 — OPTION-C SYMMETRY (Rafael 2026-08-28): engage the NVIDIA model-ladder
-                # substitute the GAI path uses, instead of hard-failing to a manual --waive-gro.
-                # Reached ONLY on a Gro *outage* (or a chunked audit that could not land a verdict),
-                # never a *REJECT*. No NVIDIA key => the old --waive-gro path.
-                nk = keys.get("NVIDIA_API_KEY", "")
-                if not nk:
-                    return False, (f"{relpath}: Gro audit failed ({e}) and no NVIDIA substitute "
-                                   "key. Re-run with --waive-gro only if Rafael authorizes.")
-                def _gsub(p):
-                    try:
-                        return _nvidia(p, nk)
-                    except Exception:
-                        time.sleep(3)
-                        return _nvidia(p, nk)
-                try:
-                    sys.stderr.write(f"[preship] Gro down ({str(e)[:60]}) — engaging option-C substitute (NVIDIA model ladder).\n")
-                    gro_txt = _gsub(prompt + _reminder)
-                    gro_v = _verdict(gro_txt)
-                    if gro_v == "INDETERMINATE":
-                        gro_txt = _gsub(prompt + _reminder)
-                        gro_v = _verdict(gro_txt)
-                    gro_substituted = f"NVIDIA_{_LAST_NVIDIA_MODEL}"
-                except Exception as e2:
-                    return False, (f"{relpath}: Gro down ({e}), chunked audit did not land a verdict, "
-                                   f"AND option-C substitute failed ({e2}). Re-run with --waive-gro "
-                                   "only if Rafael authorizes.")
-        if gro_v == "REJECT" and _name_premise_reject(gro_txt, _names_ok):
-            sys.stderr.write("[preship] Gro rejected on an undefined-name premise the static check contradicts — "
-                             "one automatic counter-prompt with that evidence.\n")
+            sys.stderr.write(f"[preship] Codex unavailable ({codex_txt[:120]}) — the NVIDIA pair reviews as reviewer #2.\n")
+        use_gro = not nk
+        if nk:
+            _why = _pair_refusal(relpath, sha, evidence, _ignore)
+            if _why:
+                return False, (f"{relpath}: NVIDIA pair fallback refused: {_why} — no marker.")
+            b_pair = _nvidia_pair(prompt, nk, _reminder, _names_ok)
+            _log_pair(relpath, sha, b_pair, _note, _ev, _run)
+            if b_pair["endpoint_down"]:
+                use_gro = True
+                sys.stderr.write(f"[preship] NVIDIA endpoint down for both pair models ({b_pair['text'][:160]}) — "
+                                 "Gro may review only if the diff fits one request.\n")
+            elif b_pair["verdict"] is None:
+                return False, (f"{relpath}: neither NVIDIA pair model gave a verdict ({b_pair['models']}) — "
+                               f"fail-closed, no marker; re-run.")
+            else:
+                gro_v, gro_txt, gro_substituted = b_pair["verdict"], b_pair["text"], _PAIR_LABEL
+        if use_gro:
+            b_pair = None
+            _why = _fallback_refusal(relpath, sha, {"gro"}, evidence, _ignore)
+            if _why:
+                return False, f"{relpath}: Gro fallback refused: {_why} — no marker."
             try:
-                if gro_substituted:
-                    gro_txt = _nvidia(prompt + _name_counter(gro_txt) + _reminder, keys.get("NVIDIA_API_KEY", ""))
-                elif "chunked audit" in gro_txt:
-                    gro_txt = _gro_chunked(_head, _diff_body, _ctx_suffix + _name_counter(gro_txt),
-                                           keys.get("GROQ_API_KEY", ""))
-                else:
-                    gro_txt = _gro(prompt + _name_counter(gro_txt) + _reminder, keys.get("GROQ_API_KEY", ""))
+                gro_txt = _gro(prompt, keys.get("GROQ_API_KEY", ""))
                 gro_v = _verdict(gro_txt)
-            except Exception as _xe:
-                return False, (f"{relpath}: Gro counter-prompt failed ({_xe}) after a name-premise REJECT — "
-                               "no marker; re-run (or --evidence).")
-        _gro_lbl = f"substitute {gro_substituted}" if gro_substituted else "Gro"
-        _log_verdict(relpath, sha, gro_substituted or "gro", gro_v, gro_txt,
-                     note="second reviewer on a codex-signed file" if codex_v == "APPROVE"
-                     else f"codex unavailable: {codex_txt[:120]}")
-        if codex_v == "APPROVE":
+                if gro_v == "INDETERMINATE":
+                    gro_txt = _gro(prompt + _reminder, keys.get("GROQ_API_KEY", ""))
+                    gro_v = _verdict(gro_txt)
+            except Exception as e:
+                _em = _scrub(e)
+                if _TOO_LARGE_RE.search(_em):
+                    return False, (f"{relpath}: the NVIDIA pair is unreachable and this diff does not fit one Gro "
+                                   f"request ({_em[:160]}) — no chunked review; fail-closed, no marker. Re-run when "
+                                   "NVIDIA or Codex is back, or --waive-gro only if Rafael authorizes.")
+                return False, (f"{relpath}: the NVIDIA pair is unreachable and Gro failed ({_em[:160]}) — "
+                               "fail-closed, no marker. Re-run with --waive-gro only if Rafael authorizes.")
+            # Logged BEFORE any counter-prompt, so a REJECT is on record even if the counter-prompt fails.
+            _log_verdict(relpath, sha, "gro", gro_v, gro_txt, note=_note, evidence=_ev, run_id=_run)
+            if gro_v == "REJECT" and _name_premise_reject(gro_txt, _names_ok):
+                sys.stderr.write("[preship] Gro rejected on an undefined-name premise the static check contradicts — "
+                                 "one automatic counter-prompt with that evidence.\n")
+                try:
+                    gro_txt = _gro(prompt + _name_counter(gro_txt) + _reminder, keys.get("GROQ_API_KEY", ""))
+                    gro_v = _verdict(gro_txt)
+                except Exception as _xe:
+                    return False, (f"{relpath}: Gro counter-prompt failed ({_scrub(_xe)}) after a name-premise "
+                                   "REJECT — no marker; re-run (or --evidence).")
+                # its own row, auto_counter with this run's id: clears ONLY the REJECT logged just above in this run
+                _log_verdict(relpath, sha, "gro", gro_v, gro_txt, note=_note + "; automatic name-premise counter-prompt",
+                             evidence=_ev, run_id=_run, auto_counter=True)
+        _gro_lbl = f"{_PAIR_LABEL} ({b_pair['models']})" if b_pair else "Gro"
+        if _second:
             reviewer_b = "codex+" + (gro_substituted or "gro")
         if gro_v == "INDETERMINATE":
             return False, (f"{relpath}: {_gro_lbl} INDETERMINATE — no parseable VERDICT line after a "
                            f"retry (NOT a content reject; re-run). Last 300 chars:\n{gro_txt[-300:]}")
         if gro_v != "APPROVE":
             return False, f"{relpath}: {_gro_lbl} REJECT — no marker.\n{gro_txt[-600:]}"
-    # DIVERSITY NOTE: if BOTH voices fell back to the same NVIDIA model, the 2-voice review is
-    # degraded to one model reviewing twice — still better than blocking, and the marker records
-    # both substitutions so a true 2-voice re-run is available once a primary recovers. Surfaced,
-    # never silently passed (Rafael-visible on stderr).
-    if gro_substituted and gai_substituted and gro_substituted == gai_substituted:
-        sys.stderr.write(f"[preship] NOTE: both Gro and GAI fell back to {gro_substituted} — "
-                         "degraded 2-voice (same model twice); re-run when a primary provider "
-                         "recovers for an independent second voice.\n")
+        _left = [r for r in _open_rejects(relpath, sha) if r not in _ignore]
+        if _left:
+            return False, (f"{relpath}: {_gro_lbl} approved, but an open REJECT on this content is not cleared "
+                           f"({', '.join(_left)}) — fail-closed, no marker")
+    # FINAL NO-EXEMPTION RE-CHECK (NV-REVIEW-1110 rev 4, adversarial claims check 2026-11-10): whenever a fallback (the
+    # NVIDIA pair in either slot, or Gro) filled a slot this run, re-read the ledger with NO exemptions and refuse the
+    # marker while any REJECT is still open on this content. A Codex APPROVE of this content in this run has already
+    # cleared Codex's entries on earlier content (a later-sha APPROVE clears them), so a legitimate run is not blocked.
+    if gai_substituted or reviewer_b not in ("codex", "waived"):
+        _still = _open_rejects(relpath, sha)
+        if _still:
+            return False, (f"{relpath}: a fallback reviewer filled a slot, but an open REJECT on this content is not "
+                           f"cleared ({', '.join(_still)}) — fail-closed, no marker")
+    # DIVERSITY NOTE: if the pair filled BOTH slots, the 2-voice review is the same two models twice — still better
+    # than blocking, recorded in the marker, and surfaced (Rafael-visible on stderr).
+    if gro_substituted and gai_substituted:
+        sys.stderr.write(f"[preship] NOTE: the {_PAIR_LABEL} filled both the GAI and the reviewer-#2 slot — degraded "
+                         "2-voice (same models twice); re-run when GAI or Codex recovers for an independent voice.\n")
 
     os.makedirs(MARKER_DIR, exist_ok=True)
     # marker["gai"] MUST stay the literal "APPROVE": the ship gate (preship_gate._marker_ok)
@@ -1025,17 +1244,29 @@ def audit_file(relpath, waive_gro, keys, evidence="", context=""):
     if gro_substituted and not reviewer_b.startswith("codex+"):
         reviewer_b = gro_substituted
     # `gro` = reviewer #2's verdict (field name kept: preship_gate._marker_ok reads it); `reviewer_b` = who gave it.
+    # _marker_ok reads only ts / gro / gai / sha256, never reviewer_b, so audit-trail labels such as "nvidia-pair" or
+    # "codex+nvidia-pair" cannot change whether the gate opens.
     marker = {"sha256": sha, "gro": gro_v, "gai": "APPROVE", "ts": int(time.time()),
               "file": relpath, "reviewer_b": reviewer_b}
-    if gai_substituted:
-        marker["gai_substituted"] = gai_substituted  # audit trail: GAI was down; this voice stood in
-    if gro_substituted:
-        marker["gro_substituted"] = gro_substituted  # audit trail: Gro was down; this voice stood in
+    if gai_pair:
+        # audit trail (design item 7): GAI was down; the pair stood in — both model ids, both verdicts, 2-of-2 / 1-of-2
+        marker["gai_substituted"] = _PAIR_LABEL
+        marker["gai_models"] = gai_pair["models"]
+        marker["gai_agreement"] = gai_pair["agreement"]
+    if b_pair:
+        marker["gro_substituted"] = _PAIR_LABEL
+        marker["reviewer_b_models"] = b_pair["models"]
+        marker["reviewer_b_agreement"] = b_pair["agreement"]
     with open(os.path.join(MARKER_DIR, relpath.replace("/", "__") + ".json"), "w") as f:
         json.dump(marker, f, indent=2)
-    _gai_disp = f"APPROVE (SUBST:{gai_substituted})" if gai_substituted else "APPROVE"
-    _gro_disp = f"{gro_v} (SUBST:{gro_substituted})" if gro_substituted else gro_v
-    _b_name = "codex" if reviewer_b == "codex" else ("codex=APPROVE gro" if reviewer_b.startswith("codex+") else "gro")
+    _gai_disp = f"APPROVE (SUBST:{_PAIR_LABEL} {gai_pair['agreement']})" if gai_pair else "APPROVE"
+    _gro_disp = f"{gro_v} ({b_pair['agreement']})" if b_pair else gro_v
+    if reviewer_b == "codex":
+        _b_name = "codex"
+    elif reviewer_b.startswith("codex+"):
+        _b_name = "codex=APPROVE " + reviewer_b.split("+", 1)[1]
+    else:
+        _b_name = reviewer_b if reviewer_b in (_PAIR_LABEL, "waived") else "gro"
     return True, (f"{relpath}: APPROVED ({_b_name}={_gro_disp} gai={_gai_disp}) — marker "
                   f"written, sha {sha[:12]}")
 
