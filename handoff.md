@@ -8,6 +8,21 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-11-11 Wed, Claude signed) — pick up here
+
+- **Shipped 11-11:** GAI-RETRY-1111 (PR 941, tooling only, on OCI 985622c, no restart). A Gemini 429 now logs its quota id
+  and retryDelay, and the one retry waits what Google asks. Proof: the next "[preship] GAI busy — waiting Ns" line.
+- **Measured 11-11:** the NVIDIA reviewer pair fails on real diffs (Mistral cut at ~340 s by NVIDIA; MiniMax runs out of
+  tokens reasoning). Preship falls back to Gro. Follow-up: review big diffs in small pieces (test first).
+- **Awaiting owner:** SLACK-UX-1109 approval (record `logs/design_records/slack_ux_2026-11-09.md`, approval_ready READY).
+  It covers the phone-first alert format and a short 06:46 watchlist. Board, Codex and GAI have reviewed it, and every
+  requested change is folded in.
+- **Automation:** scheduled task `slack-report-actions` (Mac, 03:30/18:30/22:30 local) works the GitHub-issue queue
+  (labels post-live, slack-report, loss-review, gemini). Trading fixes stop at an approval package. Open: #939 loss review
+  (AMD/DRAM; the 0.25x ATR stop floor needs out-of-sample data), #940 Gemini findings (QHM cap check blocked by
+  priceless MOC QQQM buy; FIFO false orphans).
+- **Next:** build SLACK-UX-1109 on approval, then the QHM priceless-buy approval package.
+
 ## ⏩ LATEST (2026-11-09 Mon, Claude signed) — pick up here
 
 - **Shipped and live 11-09:**
