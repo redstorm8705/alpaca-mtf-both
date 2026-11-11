@@ -8,6 +8,24 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-11-11 Wed evening, Claude signed) — pick up here
+
+- **Shipped + deployed 11-11 evening (OCI a244d38, services restarted):**
+  - KILL-PRIOR-CLOSE-1111 (PR 943): the kill measure prices a fully sold overnight lot from the prior daily close.
+    Cause of the 11-11 all-day entry block (Swing QQQM sold 06:33 PT; 69 blocked cycles). Replay: (0,False)->(+9.89,True).
+    Proof: "kill-switch prior close for <SYM> (fully sold held-over lot)" the next morning the trend-night lot sells.
+  - SLACK-UX-1109 parts 1-2 (PR 945): alerts scrubber + send log (logs/slack_sent.jsonl) + notify(); 06:00 map,
+    06:46 one-line watchlist, 4-line TRIGGERED buy. First live sends 11-12 06:00/06:46 PT.
+- **NEXT (P0, owner direction 11-11): KILL-BACKUP-1111** — the kill switch must block only on a measured -7%, never on a
+  measurement glitch; on a failed exact measure, measure from Alpaca fills instead. Draft rev 1:
+  `logs/design_records/kill_backup_measure_2026-11-11.md` (session worktree). Board Thorp + risk seat
+  APPROVE-WITH-CHANGES; GAI REJECT (rev 1 counted QHM/F6 losses). Rev 2 must be tier-aware: active qty = start-of-day
+  Day+Swing claim + today's active fills (fill tags), protected fill terms one-sided, opposite-sign guard, distinct trip
+  cause, page when a rebuild does not repair the exact measure. Then GAI round 2 -> owner package.
+- **Owner asks open:** NVDA 3rd share has no stop (owner to place 1-share GTC stop $163.07); QHM book at the 40% cap
+  blocks NVDA averaging down (owner's number); midday/nightly audit Slack reports still raw markdown (separate change,
+  midday_audit.py + the nightly audit script, not covered by SLACK-UX-1109); SLACK-UX part 3 (migrate callers to notify).
+
 ## ⏩ LATEST (2026-11-11 Wed, Claude signed) — pick up here
 
 - **Shipped 11-11:** GAI-RETRY-1111 (PR 941, tooling only, on OCI 985622c, no restart). A Gemini 429 now logs its quota id
