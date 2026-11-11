@@ -168,6 +168,54 @@ def _scrub(text, key=""):
     return text.replace(key, "***") if key else text
 
 
+class ProviderError(RuntimeError):
+    """A provider's own error reply, summarized (GAI-RETRY-1111). retry_after = the seconds the provider asked to wait
+    (Google's RetryInfo.retryDelay), None when it gave none; per_day = every exhausted quota is a daily one;
+    last_reason = the LAST ladder model's own reason (the text the retry and paid-key decisions classify, exactly as
+    before GAI-RETRY-1111 — the joined message only adds information, it never changes those decisions)."""
+
+    def __init__(self, msg, retry_after=None, per_day=False, last_reason=None, raw=None):
+        super().__init__(msg)
+        self.retry_after = retry_after
+        self.per_day = per_day
+        self.last_reason = msg if last_reason is None else last_reason
+        # raw = the exact text origin/main raised for a provider error (scrubbed str(error), first 200 chars). The
+        # retry and paid-key decisions classify THIS string, so they stay identical to before (cold-2nd round 3).
+        self.raw = raw
+
+
+def _error_summary(err, key=""):
+    """Provider error object -> (summary text, retry_after seconds or None, per_day). Keeps what the old 200-character
+    cut of str(dict) dropped: the code, status, message, each exhausted quota id and limit, and Google's retryDelay.
+    Every piece is scrubbed (all .env values + `key`) BEFORE it is cut, so a cut can never leave part of a key."""
+    if not isinstance(err, dict):
+        return _scrub(err, key)[:300], None, False
+    # Order: code, status, each quota, retryDelay, THEN the (long, generic) message, so a later cut drops the
+    # message first and never the quota id or the wait (adversarial review round 1).
+    parts = [_scrub(err.get("code", ""), key), _scrub(err.get("status", ""), key)]
+    retry, _qids = None, []
+    details = err.get("details")
+    for d in details if isinstance(details, list) else []:
+        if not isinstance(d, dict):
+            continue
+        viols = d.get("violations")
+        for v in viols if isinstance(viols, list) else []:
+            if isinstance(v, dict):
+                qid = _scrub(v.get("quotaId") or v.get("quotaMetric") or "", key)[:120]
+                parts.append(f"quota={qid} limit={_scrub(v.get('quotaValue', '?'), key)[:20]}")
+                _qids.append(qid.lower())
+        rd = d.get("retryDelay")
+        m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)s\s*", rd) if isinstance(rd, str) else None
+        if m:
+            _r = float(m.group(1))
+            retry = _r if retry is None else min(retry, _r)
+            parts.append(f"retryDelay={_r:g}s")
+    parts.append(_scrub(err.get("message", ""), key)[:240])
+    per_day = bool(_qids) and all("perday" in q for q in _qids)   # daily only when EVERY listed quota is daily
+    text = " | ".join(x for x in parts if x)
+    return (text or _scrub(err, key)[:300]), retry, per_day
+
+
 def _curl(url, headers, body_dict, key, timeout=120):
     # curl transport (macOS urllib hits SSL CERTIFICATE_VERIFY_FAILED). `timeout` bounds a SINGLE call.
     # KEY SAFETY (NV-REVIEW-1110 item 6): no secret is ever on curl's argv or in the URL. Headers (the API key among
@@ -208,7 +256,8 @@ def _curl(url, headers, body_dict, key, timeout=120):
     except ValueError:
         raise RuntimeError(_scrub(f"non-JSON reply from {host}: {(out or '')[:160]}", key)) from None
     if isinstance(r, dict) and r.get("error"):
-        raise RuntimeError(_scrub(str(r["error"]), key)[:200])
+        _msg, _retry, _per_day = _error_summary(r["error"], key)
+        raise ProviderError(_scrub(_msg, key)[:600], _retry, _per_day, raw=_scrub(str(r["error"]), key)[:200])
     return r
 
 # PAPER-ACCOUNT FRAME (Rafael mandate 2026-09-26, CLAUDE.md "THIS IS A PAPER TRADING ACCOUNT").
@@ -560,6 +609,13 @@ def _gro_chunked(head, diff_body, ctx_suffix, key):
 _TOO_LARGE_RE = re.compile(r"(?i)request too large|too large|\b413\b|context length|maximum context")
 
 
+# GAI-RETRY-1111 retry wait. Without a retryDelay the old fixed 6 s stays. With one, Google's own figure is used, up
+# to one per-minute quota window (60 s) plus 5 s margin; a longer asked wait means a quota that will not clear within
+# this run, so the caller's fallback runs at once instead of sleeping.
+_GAI_DEFAULT_WAIT_S = 6
+_GAI_MAX_WAIT_S = 65
+
+
 def _gai(prompt, key, paid_key=""):
     prompt = _framed(prompt)
     # Free key is used BY DEFAULT (the free tier is a DAILY quota that RESETS — do not permanently
@@ -584,6 +640,7 @@ def _gai(prompt, key, paid_key=""):
 
     def _one(k):
         _last_err = None
+        _errs, _retries, _days = [], [], []
         for _model in _GAI_LADDER:
             try:
                 # The key travels in the x-goog-api-key header (via _curl's header file), never in the URL
@@ -601,7 +658,20 @@ def _gai(prompt, key, paid_key=""):
             except Exception as _e:
                 _last_err = _e
             # this model failed (retired 404 / quota 429 / overload 503 / error) — try the next one
-        raise _last_err if _last_err else RuntimeError("all GAI ladder models failed")
+            _errs.append(f"{_model}: {_scrub(_last_err, k)[:600]}")
+            _ra = getattr(_last_err, "retry_after", None)
+            if _ra is not None:
+                _retries.append(_ra)
+            _days.append(bool(getattr(_last_err, "per_day", False)))
+        # GAI-RETRY-1111: every model's reason, not only the last one's, so a 429 shows WHICH quota ran out and how
+        # long Google asked to wait. The soonest retryDelay any model gave is the wait; per_day only when every model
+        # in the ladder reported a daily quota.
+        raise ProviderError("; ".join(_errs)[:4000] or "all GAI ladder models failed",
+                            min(_retries) if _retries else None, bool(_days) and all(_days),
+                            # classification text = what origin/main raised for the LAST model: a provider error's
+                            # old 200-char text, otherwise the exception text itself.
+                            (getattr(_last_err, "raw", None) or _scrub(_last_err, k)) if _last_err is not None
+                            else "all GAI ladder models failed")
     # FREE-FIRST discipline (Rafael): the free tier is a ROLLING quota — a brief backoff often
     # clears a per-minute spike without spending paid. Retry free once with a short wait BEFORE
     # any paid attempt; paid is a genuine last resort, not an inertia default.
@@ -611,15 +681,27 @@ def _gai(prompt, key, paid_key=""):
             return _one(key)
         except Exception as e:
             last = e
-            msg = str(e).lower()
+            msg = str(getattr(e, "last_reason", e)).lower()   # the last model's reason, as before GAI-RETRY-1111
             transient = ("429" in msg or "resource_exhausted" in msg or "quota" in msg
                          or "rate limit" in msg or "rate-limit" in msg or "503" in msg
                          or "unavailable" in msg)
             if transient and attempt == 0:
-                time.sleep(6)
+                # GAI-RETRY-1111: wait the time Google asked for (RetryInfo.retryDelay, +1 s) instead of a fixed
+                # 6 s; no wait when every model's quota is a daily one (it will not reset in a retry window) or
+                # when the asked wait exceeds one per-minute quota window plus margin (_GAI_MAX_WAIT_S).
+                _ra = getattr(e, "retry_after", None)
+                if getattr(e, "per_day", False):
+                    sys.stderr.write("[preship] GAI daily quota exhausted on every model — no retry wait.\n")
+                    break
+                _wait = _GAI_DEFAULT_WAIT_S if _ra is None else _ra + 1
+                if _wait > _GAI_MAX_WAIT_S:
+                    sys.stderr.write(f"[preship] GAI asked to wait {_ra:.0f}s (> {_GAI_MAX_WAIT_S}s) — no retry.\n")
+                    break
+                sys.stderr.write(f"[preship] GAI busy — waiting {_wait:.0f}s before one retry.\n")
+                time.sleep(_wait)
                 continue
             break
-    msg = str(last).lower()
+    msg = str(getattr(last, "last_reason", last)).lower()   # unchanged paid-key classification (last model only)
     is_quota = ("429" in msg or "resource_exhausted" in msg or "quota" in msg
                 or "rate limit" in msg or "rate-limit" in msg)
     # DEFAULT-DENY paid gate (Rafael mandate 2026-08-24): the paid key is spent ONLY when Rafael has
@@ -1084,7 +1166,7 @@ def _audit_file(relpath, waive_gro, keys, evidence="", context=""):
         if _why:
             return False, (f"{relpath}: GAI down ({_ge}) and the NVIDIA pair may not stand in: {_why} — "
                            f"fail-closed, no marker")
-        sys.stderr.write(f"[preship] GAI down ({_ge[:60]}) — the NVIDIA pair stands in for GAI.\n")
+        sys.stderr.write(f"[preship] GAI down ({_ge}) — the NVIDIA pair stands in for GAI.\n")
         gai_pair = _nvidia_pair(prompt + _reminder, nk, _reminder, _names_ok)
         _log_pair(relpath, sha, gai_pair, "gai-slot substitute", _ev, _run)
         if gai_pair["verdict"] is None:
