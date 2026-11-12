@@ -1,0 +1,46 @@
+Midday Gemini Audit — 2026-11-11
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   Unprotected position (NAKED) | NVDA
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** No closed trades were recorded in the provided data, preventing a full performance audit.
+*   **Stop-Hit Rate:** 0% (0 stops).
+*   **P&L:** $0.00.
+*   **Note:** The bot is currently in a "fail-closed" state regarding new entries due to a persistent `RuntimeError` in the kill-switch evaluation, which has effectively halted new trading activity.
+
+### ENTRY QUALITY
+*   **Findings:** No new entries were taken during the audit period. The bot is currently in a "fail-closed" state, preventing new entries due to the `RuntimeError` identified in the logs.
+
+### EXIT QUALITY
+*   **Findings:** The bot is failing to manage the `NVDA` position correctly. The `execution.unmanaged_positions` log consistently reports `[NVDA] still unmanaged: residual 1 (paged)`, and the `BROKER GROUND TRUTH` identifies `NVDA` as `NAKED`. The bot is not providing the required software-only stop protection for this position.
+
+### MRI ALIGNMENT
+*   **Findings:** MRI levels were consistently `ELEVATED` (score 40). The bot correctly applied a size floor of 0.85x, demonstrating that the MRI logic is functioning despite the broader `RuntimeError` affecting the kill-switch.
+
+### LOG ANOMALIES
+*   **Recurring Error:** `ERROR | strategy.run_cycle | kill-switch evaluation failed (RuntimeError('kill-switch exact tier attribution is unresolved'))` — This error appears in every cycle, causing the bot to enter a "fail-closed" state for new entries.
+*   **Unmanaged Position:** `WARNING | execution.unmanaged_positions | [unmanaged-position] [NVDA] still unmanaged: residual 1 (paged)` — This warning persists across every cycle, confirming the bot is failing to manage the `NVDA` position.
+
+### NEW BUGS / CONCERNS
+*   **CATEGORY:** EXECUTION BUG
+*   **SEVERITY:** CRITICAL
+*   **Description:** The bot is failing to provide software-only stop protection for the `NVDA` position, resulting in a `NAKED` status in the broker ground truth.
+*   **Exact Condition:** Occurs continuously during every `strategy.run_cycle` while `NVDA` is held.
+
+*   **CATEGORY:** INFRASTRUCTURE
+*   **SEVERITY:** HIGH
+*   **Description:** Persistent `RuntimeError` in `kill-switch` evaluation prevents new entries.
+*   **Exact Condition:** `RuntimeError('kill-switch exact tier attribution is unresolved')` triggered during `strategy.run_cycle`.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Immediate manual intervention required for `NVDA` position. Since the bot is failing to manage the stop, the position must be closed or a manual stop must be placed via the broker interface to mitigate risk.
+2.  **INFRASTRUCTURE:** Debug `ledger_sync` or `kill-switch` module to resolve the `exact tier attribution` error. The `ledger_sync` log at `18:20:20` indicates 4 reducing admissions remain unresolved; this is likely the root cause of the kill-switch failure.
+3.  **EXECUTION:** Investigate why `NVDA` is paged/unmanaged; verify if the `ledger_sync` rebuild at `18:20:20` failed to correctly map the `NVDA` residual to a managed tier.
