@@ -8153,7 +8153,7 @@ class QuarterlyHoldManager:
         claimed = self._other_tier_claim(sym)
         if open_sells is None or claimed is None:
             return None
-        if claimed > broker_qty - proved + 1e-9:
+        if claimed > broker_qty - proved:   # share counts; any excess claim blocks the adoption
             # a QH-tagged fill proves shares another tier also claims: a tagging contradiction, never adopted
             if _ADOPT_LOG_DAY.get(log_key) != "claim":
                 _ADOPT_LOG_DAY[log_key] = "claim"
