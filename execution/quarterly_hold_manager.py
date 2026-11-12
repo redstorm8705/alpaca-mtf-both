@@ -214,6 +214,8 @@ _quarterly_hold_symbols: set[str] = set()
 # the guard is effective in ANY process. Fail-safe: any error → empty frozenset
 # (never raise into a caller; matches prior behavior).
 _QHM_STATE_FILE = _ROOT / "data" / "state" / "quarterly_holds.json"
+_RESTOP_PAGE_DAY: dict = {}   # QHM-RESTOP-1112: "<SYM>|<ET date>" -> CRITICAL page sent (once a day)
+_ADOPT_LOG_DAY: dict = {}   # QHM-ADOPT-1111: "<SYM>|<ET date>" -> last no-adoption reason logged (once a day)
 # MUST match the in-process registration set exactly (the HoldStates that add a
 # symbol to _quarterly_hold_symbols — see reconcile/init, incl. PENDING_EARNINGS,
 # a fully-open position whose GTC stop is cancelled pre-earnings). Excludes only
@@ -409,6 +411,12 @@ class HoldPosition:
     owner_add_blocked_order_ids: list[str] = field(default_factory=list)
     coverage_page_key: Optional[str] = None    # "<ET date>|<reason>;<reason>" stop-coverage pages sent today
     cover_gap_page_key: Optional[str] = None   # QHM-COVER-1109: "<ET date>|<gap>" last uncovered-share page; None = off
+    # QHM-ADOPT-1111: shares QHM's own tagged fills proved and adopted above the ledger's QHM claim; the strict resync
+    # keeps this count until the ledger rebuild books it (cleared then, or when the broker holds fewer shares)
+    proven_adopt_qty: Optional[int] = None
+    # QHM-RESTOP-1112: the share count at which the stop was last recalculated from the average cost; a different
+    # qty_filled means shares were added (or removed) since, so the stop is recalculated once. None = not yet baselined.
+    restop_qty: Optional[int] = None
     closed_reason: Optional[str] = None        # why the hold closed; "owner_app_sale"/"owner_confirmed" = owner's exit
     # QHM-REENTRY-1108: the re-entry lock written with QHM's own close (same _save_state as the CLOSED transition),
     # and, on a re-added hold, the release that let it back in. Defaults keep older state files loadable; a CLOSED
@@ -1039,6 +1047,28 @@ class QuarterlyHoldManager:
                 if (_pos.stop_recovery_requires_qty_proof
                         or _pos.ambiguous_add_client_order_id):
                     _guard_skip.add(_sym)
+                    continue
+                try:
+                    _adopt = self._maybe_adopt_proven_shares(_pos, _order_snapshot)
+                except Exception as exc:  # RC-3: one symbol must not suppress the rest
+                    logger.exception("QHM %s proven-share adoption failed: %s", _sym, exc)
+                    _adopt = (True, True)
+                if _adopt is not None:
+                    if _adopt[0]:
+                        _guard_skip.add(_sym)
+                    if _adopt[1]:
+                        _coverage_blocked.add(_sym)
+                    continue
+                try:
+                    _restop = self._maybe_restop_after_add(_pos, _order_snapshot)
+                except Exception as exc:  # RC-3: one symbol must not suppress the rest
+                    logger.exception("QHM %s stop recalculation failed: %s", _sym, exc)
+                    _restop = None
+                if _restop is not None:
+                    if _restop[0]:
+                        _guard_skip.add(_sym)
+                    if _restop[1]:
+                        _coverage_blocked.add(_sym)
                     continue
                 try:
                     _skip_guard, _block_loop = self._reconcile_stop_coverage(
@@ -6298,6 +6328,12 @@ class QuarterlyHoldManager:
                 live_qty = owner_qty_hint
             else:
                 live_qty = ledger_qty
+                _adopted = pos.proven_adopt_qty
+                if isinstance(_adopted, int) and _adopted > 0:
+                    if ledger_qty >= _adopted or _adopted > raw_qty:
+                        pos.proven_adopt_qty = None   # QHM-ADOPT-1111: booked by the ledger, or shares since sold
+                    else:
+                        live_qty = _adopted           # QHM-ADOPT-1111: proven QH fills the ledger has not booked yet
             if live_qty > raw_qty:
                 return None
         except Exception as exc:  # broker/SDK transports raise several runtime types
@@ -8065,6 +8101,296 @@ class QuarterlyHoldManager:
         except Exception as exc:  # RC-3
             logger.warning("QHM %s uncovered-share check failed: %s", pos.symbol, exc)
 
+    def _other_tier_claim(self, symbol: str) -> Optional[float]:
+        """QHM-ADOPT-1111: shares another live tier manager claims on `symbol` (the sources the unmanaged-position
+        alarm reads: the core Swing tracker's open trades, Swing breakout, Day->Swing hand-offs, the Day tier log, F6,
+        Swing trend_night), as an absolute count. None when any source is unreadable. Never raises."""
+        sym = symbol.upper()
+        try:
+            from execution import unmanaged_positions as _up
+            total = 0.0
+            for name, fn in _up._sources(None, datetime.now(ET)):
+                if name in ("qhm", "swing_tracker"):
+                    continue   # QHM itself; the core tracker is read from its trade log below
+                total += abs(float(fn().get(sym, 0.0) or 0.0))
+            # Any read or parse error here (missing, partly written, invalid JSON) reaches the except below -> None ->
+            # no adoption this cycle.
+            from execution.portfolio_tracker import TRADE_LOG_FILE
+            if TRADE_LOG_FILE.exists():
+                book = json.loads(TRADE_LOG_FILE.read_text())
+                for t in (book.get("open") or []) if isinstance(book, dict) else []:
+                    if (isinstance(t, dict) and str(t.get("symbol") or "").upper() == sym
+                            and t.get("status") != "closed"):
+                        total += abs(float(t.get("qty_remaining", t.get("qty", 0)) or 0))
+            return total if math.isfinite(total) else None
+        except Exception as exc:  # RC-3: an unreadable source means no adoption this cycle
+            logger.warning("QHM %s other-tier claim unreadable (%s) — no adoption", sym, exc)
+            return None
+
+    def _maybe_adopt_proven_shares(
+        self, pos: HoldPosition, order_snapshot: list
+    ) -> "Optional[tuple[bool, bool]]":
+        """QHM-ADOPT-1111 (owner-approved; logs/design_records/qhm_adopt_proven_2026-11-11.md): QHM's own tagged fills
+        prove it bought more shares than its record holds (11-09 NVDA: proved 3, record 2, broker 3), and no other
+        tier claims the rest. Stop first: resize QHM's sole resting stop to the proven count at the existing stop
+        price; only after the broker's own remaining quantity reads back equal does QHM raise its record and save.
+        None = not applicable (the normal stop reconcile runs). (skip_guard, block_loop) when it acted or must hold
+        this cycle. Never resizes at or below the stop price, or when other open sells hold the shares."""
+        if (pos.state != HoldState.ACTIVE or pos.direction != "long" or pos.stop_price <= 0
+                or pos.qty_filled <= 0 or pos.owner_add_stage):
+            return None
+        sym = pos.symbol.upper()
+        own = [o for o in order_snapshot
+               if str(getattr(o, "symbol", "") or "").upper() == sym
+               and str(getattr(o, "client_order_id", "") or "").startswith("QH-")]
+        if len(own) != 1:
+            return None
+        shape = self._qh_stop_shape(own[0], pos, self._PROTECTIVE_OPEN_STATUSES)
+        if (shape is None or not shape["id"] or shape["remaining"] != pos.qty_filled
+                or round(shape["stop_price"], 2) != round(float(pos.stop_price), 2)):
+            return None
+        inputs, _why = self._cover_inputs(pos)
+        if inputs is None:
+            return None
+        broker_qty, price = inputs
+        if broker_qty <= shape["remaining"]:
+            return None   # QHM's stop already covers every broker share: no proof read (board (c))
+        today = self._now_et().strftime("%Y-%m-%d")
+        log_key = f"{sym}|{today}"
+        proved = self._qhm_proved_fill_qty(pos)
+        if proved is None or proved <= pos.qty_filled:
+            return None
+        if proved > broker_qty:
+            if _ADOPT_LOG_DAY.get(log_key) != "over":
+                _ADOPT_LOG_DAY[log_key] = "over"
+                logger.warning("QHM %s adoption: proved=%d exceeds broker=%d — no adoption", sym, proved, broker_qty)
+            return None
+        others = [o for o in order_snapshot if not any(o is q for q in own)]
+        open_sells = self._open_sell_remaining(sym, others)
+        claimed = self._other_tier_claim(sym)
+        if open_sells is None or claimed is None:
+            return None
+        if claimed > broker_qty - proved:   # share counts; any excess claim blocks the adoption
+            # a QH-tagged fill proves shares another tier also claims: a tagging contradiction, never adopted
+            if _ADOPT_LOG_DAY.get(log_key) != "claim":
+                _ADOPT_LOG_DAY[log_key] = "claim"
+                self._alert("HEADS-UP %s (QHM): QHM's own orders prove %d share(s) but other tiers claim %g of the %d "
+                            "held; the bot did not adopt them and the share stays flagged until this is checked."
+                            % (sym, proved, claimed, broker_qty))
+            return None
+        if price <= float(pos.stop_price):
+            if _ADOPT_LOG_DAY.get(log_key) != "price":
+                _ADOPT_LOG_DAY[log_key] = "price"
+                logger.warning("QHM %s adoption: price %.2f at or below the stop %.2f — no resize this cycle",
+                               sym, price, pos.stop_price)
+            return None
+        if broker_qty - open_sells < proved:
+            if _ADOPT_LOG_DAY.get(log_key) != "held":
+                _ADOPT_LOG_DAY[log_key] = "held"
+                logger.warning("QHM %s adoption: other open sells hold %d share(s) (broker=%d proved=%d) — no resize",
+                               sym, open_sells, broker_qty, proved)
+            return None
+        # The same in-place replace, on the same trading thread, that _reconcile_stop_coverage makes every cycle (it
+        # never cancels; on failure it returns None and the old stop stays). Like every broker call the SDK sets no
+        # HTTP timeout; this adds at most one call per cycle, and only while a proven, unadopted gap exists.
+        from execution.broker import replace_stop_order
+        replacement = replace_stop_order(sym, shape["id"], float(pos.stop_price), qty=proved)
+        new_shape = (self._qh_stop_shape(replacement, pos, self._PROTECTIVE_OPEN_STATUSES)
+                     if replacement is not None else None)
+        if (new_shape is None or not new_shape["id"] or self._order_remaining(replacement) != proved
+                or round(new_shape["stop_price"], 2) != round(float(pos.stop_price), 2)):
+            self._stop_coverage_pending(pos, "proven-share adoption stop resize unconfirmed")
+            return True, True
+        prior = (pos.qty_filled, pos.qty_total, pos.stop_order_id, pos.proven_adopt_qty)
+        pos.qty_filled = proved
+        pos.qty_total = proved
+        pos.stop_order_id = new_shape["id"]
+        pos.proven_adopt_qty = proved
+        pos.updated_at = self._now_et().isoformat()
+        if not self._save_state():
+            pos.qty_filled, pos.qty_total, _old_stop, pos.proven_adopt_qty = prior
+            pos.stop_order_id = new_shape["id"]   # the broker's stop id did change; the record stays at its old count
+            self._stop_coverage_pending(pos, "proven-share adoption did not persist")
+            return True, True
+        logger.warning(
+            "QHM %s adopted %d proven share(s), stop now covers %d (stop %s -> %s @ $%.2f; record %d -> %d; broker=%d "
+            "other_tiers=%g open_sells=%d) [change=qhm-adopt-1111]",
+            sym, proved - prior[0], proved, shape["id"], new_shape["id"], pos.stop_price, prior[0], proved,
+            broker_qty, claimed, open_sells)
+        try:
+            self._record_adoption(pos, proved - prior[0], proved, shape["id"], new_shape["id"])
+        except Exception as exc:  # RC-3: the audit line is best-effort
+            logger.warning("QHM %s adoption audit line failed: %s", sym, exc)
+        if broker_qty != proved:
+            self._alert("HEADS-UP %s (QHM): the bot adopted %d proven share(s) and its stop now covers %d, but Alpaca "
+                        "holds %d; check the other %d." % (sym, proved - prior[0], proved, broker_qty,
+                                                          broker_qty - proved))
+        return True, True
+
+    def _overnight_gap_margin(self, symbol: str, live: float) -> Optional[float]:
+        """QHM-RESTOP-1112 step d: the symbol's median absolute overnight gap (open vs prior close) over about a year of
+        T1 daily bars, times the live price: a stop must sit at least this far below the market. None when unreadable.
+        Never raises."""
+        try:
+            import pandas as pd
+            import config as _cfg
+            from data.fetcher import fetch_bars
+            # about a year of sessions: the config's 12-month momentum lookback (no new number)
+            bars = fetch_bars(symbol, _cfg.TF_DAILY, num_bars=_cfg.MOMENTUM_LONG_LOOKBACK)
+            if bars is None or bars.empty or len(bars) < 2:
+                return None
+            gaps = (pd.to_numeric(bars["open"]) / pd.to_numeric(bars["close"]).shift(1) - 1).abs().dropna()
+            med = float(gaps.median()) if len(gaps) else math.nan
+            return med * live if math.isfinite(med) and med >= 0 else None
+        except Exception as exc:  # RC-3
+            logger.warning("QHM %s overnight-gap margin unavailable: %s", symbol, exc)
+            return None
+
+    def _restop_page(self, sym: str, why: str) -> None:
+        """Step j: the stop could not be recalculated while the current stop is not safely below the market."""
+        key = f"{sym}|{self._now_et().strftime('%Y-%m-%d')}"
+        logger.critical("QHM %s stop recalculation blocked (%s) and the current stop is not safely below the market "
+                        "[change=qhm-restop-1112]", sym, why)
+        if _RESTOP_PAGE_DAY.get(key):
+            return
+        _RESTOP_PAGE_DAY[key] = True
+        self._alert("🚨 ACTION %s (QHM): the bot could not recalculate the stop after an add (%s), and the current stop "
+                    "is at or near the market price. Check the stop in Alpaca." % (sym, why))
+
+    def _maybe_restop_after_add(
+        self, pos: HoldPosition, order_snapshot: list
+    ) -> "Optional[tuple[bool, bool]]":
+        """QHM-RESTOP-1112 (owner-approved; logs/design_records/qhm_restop_on_add_2026-11-12.md, rev 2 steps a-k): when
+        QHM's share count differs from the count the stop was last recalculated at, recalculate the stop from the
+        average cost once: cost stop = _design_stop_price(avg) when it sits below live - m (m = the median overnight
+        gap); else the price stop _design_stop_price(live), never lowering a still-valid stop; on a winner (live - avg
+        >= one 14-week ATR) a valid higher stop is kept. The in-place resize is confirmed by the replaced order's own
+        remaining quantity and stop price before the record is saved. None = nothing to do (the normal reconcile runs);
+        (skip_guard, block_loop) when it acted or must hold this cycle."""
+        if (pos.state != HoldState.ACTIVE or pos.direction != "long" or pos.stop_price <= 0
+                or pos.qty_filled <= 0 or pos.owner_add_stage):
+            return None
+        sym = pos.symbol.upper()
+        if pos.restop_qty is None or pos.qty_filled < pos.restop_qty:
+            # baseline: an existing hold's stop is not recalculated on deploy, and a sale or trim (fewer shares) only
+            # re-baselines (the design recalculates after ADDS; a trim never loosens a raised stop)
+            pos.restop_qty = pos.qty_filled   # in memory; persisted with QHM's next save (a restart re-baselines)
+            return None
+        if pos.restop_qty == pos.qty_filled:
+            return None
+        own = [o for o in order_snapshot
+               if str(getattr(o, "symbol", "") or "").upper() == sym
+               and str(getattr(o, "client_order_id", "") or "").startswith("QH-")]
+        if len(own) != 1:
+            return None   # the coverage paths first put one QH stop in place
+        shape = self._qh_stop_shape(own[0], pos, self._PROTECTIVE_OPEN_STATUSES)
+        if (shape is None or not shape["id"] or shape["remaining"] != pos.qty_filled
+                or round(shape["stop_price"], 2) != round(float(pos.stop_price), 2)):
+            return None   # the per-cycle reconcile sizes it to QHM's count first
+        inputs, _why = self._cover_inputs(pos)
+        if inputs is None:
+            return None
+        broker_qty, live = inputs
+        old = float(pos.stop_price)
+        if broker_qty < pos.qty_filled:
+            return None   # step a: the broker holds fewer shares than QHM's count; the coverage paths handle it
+        avg = float(pos.avg_entry_price or 0.0)
+        claimed = self._other_tier_claim(sym)
+        if broker_qty == pos.qty_filled and claimed is not None and claimed <= 0:
+            try:   # step b: QHM holds every broker share -> Alpaca's own position average
+                _bavg = float(getattr(self.broker.get_position(sym), "avg_entry_price", 0) or 0)
+                if math.isfinite(_bavg) and _bavg > 0:
+                    avg = _bavg
+            except Exception as exc:  # RC-3: keep QHM's own average
+                logger.warning("QHM %s broker average unreadable (%s) — using QHM's own", sym, exc)
+        m = self._overnight_gap_margin(sym, live)
+        if avg <= 0 or m is None:
+            if not old < live - (m or 0.0):   # step j: page only when the current stop is not safely below
+                self._restop_page(sym, "average or gap margin unreadable")
+            return None
+
+        def _valid(stop: Optional[float]) -> bool:
+            return stop is not None and stop < live - m
+
+        cost = self._design_stop_price(sym, avg)
+        if cost is None:
+            if not _valid(old):
+                self._restop_page(sym, "cost stop unreadable")
+            return None
+        if _valid(cost):
+            cand, rule = cost, "cost"
+        else:
+            price_stop = self._design_stop_price(sym, live)
+            if price_stop is None or not _valid(price_stop):   # step e2
+                self._restop_page(sym, "no stop level below the market")
+                return None
+            cand = max(price_stop, old) if _valid(old) else price_stop   # never lower a still-valid stop
+            rule = "price"
+        # step f (rev 3, round-2 review + owner rule "never a stop below entry on a well-in-profit lot"): a lot in
+        # profit (live above the average) keeps its valid higher stop; an add never loosens it
+        # round-3 review: any old stop still below the market counts here (m judges NEW placements only), so a
+        # profit-locked stop resting just under the market is never lowered by an add
+        if live > avg and old < live and old > cand:
+            cand, rule = old, "winner-keep"
+        cand = round(float(cand), 2)
+        if cand == round(old, 2):    # step g
+            pos.restop_qty = pos.qty_filled
+            pos.updated_at = self._now_et().isoformat()
+            self._save_state()
+            logger.info("QHM %s stop recalculated after add: unchanged $%.2f (rule %s, qty %d) "
+                        "[change=qhm-restop-1112]", sym, old, rule, pos.qty_filled)
+            return None
+        # Same in-place replace, same thread, as _reconcile_stop_coverage; it never cancels.
+        from execution.broker import replace_stop_order
+        replacement = replace_stop_order(sym, shape["id"], cand, qty=pos.qty_filled)
+        new_shape = (self._qh_stop_shape(replacement, pos, self._PROTECTIVE_OPEN_STATUSES)
+                     if replacement is not None else None)
+        if (new_shape is None or not new_shape["id"] or self._order_remaining(replacement) != pos.qty_filled
+                or round(new_shape["stop_price"], 2) != cand):
+            self._stop_coverage_pending(pos, "stop recalculation resize unconfirmed")
+            return True, True
+        prior_restop = pos.restop_qty
+        pos.stop_price = cand
+        pos.stop_order_id = new_shape["id"]
+        pos.restop_qty = pos.qty_filled
+        pos.updated_at = self._now_et().isoformat()
+        saved = self._save_state()
+        if not saved:
+            # The broker now holds the new stop: keep stop_price / stop_order_id equal to it in memory (so the next
+            # reconcile finds an exact match and saves it, never moving the stop back), and only re-arm the recalc.
+            pos.restop_qty = prior_restop
+            self._stop_coverage_pending(pos, "stop recalculation did not persist")
+        risk_before = round(pos.qty_filled * (avg - old), 2)
+        risk_after = round(pos.qty_filled * (avg - cand), 2)
+        logger.warning(
+            "QHM %s stop recalculated after add: avg $%.2f stop $%.2f -> $%.2f (cost %s price %.2f margin %.2f "
+            "rule %s) qty %d risk $%.2f -> $%.2f order %s -> %s [change=qhm-restop-1112]",
+            sym, avg, old, cand, cost, live, m, rule, pos.qty_filled, risk_before, risk_after, shape["id"],
+            new_shape["id"])
+        try:
+            _te = {"ts": datetime.now(PT).isoformat(), "event": "qhm_restop", "symbol": sym, "tier": "qhm",
+                   "size": pos.qty_filled, "avg": round(avg, 4), "stop_before": old, "stop_after": cand,
+                   "cost_stop": cost, "price": live, "margin": round(m, 4), "rule": rule,
+                   "risk_before": risk_before, "risk_after": risk_after, "change": "qhm-restop-1112"}
+            with open(_ROOT / "logs" / "trade_events.jsonl", "a") as fh:
+                fh.write(json.dumps(_te) + "\n")
+        except Exception as exc:  # RC-3: the audit row is best-effort
+            logger.warning("QHM %s restop audit row failed: %s", sym, exc)
+        if cand < old:   # step i: every lowering at the broker is visible to the owner (saved or not)
+            self._alert("HEADS-UP %s (QHM): stop lowered $%.2f -> $%.2f for %d shares after an add (new average $%.2f; "
+                        "dollars at risk $%.2f -> $%.2f)." % (sym, old, cand, pos.qty_filled, avg, risk_before,
+                                                              risk_after))
+        return True, True
+
+    def _record_adoption(self, pos: HoldPosition, added: int, total: int, old_stop: str, new_stop: str) -> None:
+        """Audit line in trade_events.jsonl for a proven-share adoption (decision explainability)."""
+        _te = {"ts": datetime.now(PT).isoformat(), "event": "qhm_proven_share_adoption", "symbol": pos.symbol,
+               "tier": "qhm", "size": added, "qty_after": total, "stop_price": pos.stop_price,
+               "stop_order_before": old_stop, "stop_order_after": new_stop, "change": "qhm-adopt-1111"}
+        path = _ROOT / "logs" / "trade_events.jsonl"
+        with open(path, "a") as fh:
+            fh.write(json.dumps(_te) + "\n")
+
     def _reconcile_stop_coverage(
         self, pos: HoldPosition, order_snapshot: list
     ) -> tuple[bool, bool]:
@@ -8122,6 +8448,26 @@ class QuarterlyHoldManager:
             self._stop_coverage_pending(pos, "ambiguous QH stop candidate")
             return True, True
 
+        if round(shape["stop_price"], 2) != round(float(pos.stop_price), 2):
+            # QHM-RESTOP-1112 (round-2 review): never move a QHM sell stop to a price at or above the market. When the
+            # recorded price would be at or above the live price but the broker's own QH stop rests below it (e.g. a
+            # replace whose reply was lost), the broker's price is adopted instead of moving the stop up through the
+            # market (the 11-12 NVDA near-sale shape).
+            _live = self._get_live_price(pos.symbol)
+            if _live is None or _live <= 0:
+                # cannot tell where the market is: never move a stop's PRICE blind (round-3 review); retry next cycle
+                logger.warning("QHM %s stop price change deferred: live price unreadable [change=qhm-restop-1112]",
+                               pos.symbol)
+                return True, True
+            if (float(pos.stop_price) >= _live
+                    and float(shape["stop_price"]) < _live):
+                logger.warning("QHM %s recorded stop $%.2f is at or above the market $%.2f; adopting the broker's QH "
+                               "stop $%.2f instead of moving it up [change=qhm-restop-1112]",
+                               pos.symbol, pos.stop_price, _live, shape["stop_price"])
+                self._alert("HEADS-UP %s (QHM): the stop at Alpaca is $%.2f; the bot's record said $%.2f, which is "
+                            "above the market ($%.2f), so the record now follows Alpaca's lower stop."
+                            % (pos.symbol, shape["stop_price"], pos.stop_price, _live))
+                pos.stop_price = round(float(shape["stop_price"]), 2)
         exact = (
             shape["remaining"] == desired_qty
             and round(shape["stop_price"], 2) == round(float(pos.stop_price), 2)
