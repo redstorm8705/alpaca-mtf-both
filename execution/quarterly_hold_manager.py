@@ -8233,8 +8233,10 @@ class QuarterlyHoldManager:
         Never raises."""
         try:
             import pandas as pd
+            import config as _cfg
             from data.fetcher import fetch_bars
-            bars = fetch_bars(symbol, "1Day", num_bars=260)
+            # about a year of sessions: the config's 12-month momentum lookback (no new number)
+            bars = fetch_bars(symbol, _cfg.TF_DAILY, num_bars=_cfg.MOMENTUM_LONG_LOOKBACK)
             if bars is None or bars.empty or len(bars) < 2:
                 return None
             gaps = (pd.to_numeric(bars["open"]) / pd.to_numeric(bars["close"]).shift(1) - 1).abs().dropna()
