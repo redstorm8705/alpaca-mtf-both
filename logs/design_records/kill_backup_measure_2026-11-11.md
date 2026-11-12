@@ -1,20 +1,53 @@
 # KILL-BACKUP-1111 — the kill switch never blocks on a measurement glitch; it measures from Alpaca instead
 
 Approval-ID: KILL-BACKUP-1111
-Covers: execution/risk_manager.py, tests/test_kill_backup_1111.py, tests/test_kill_switch_join.py, tests/test_run_cycle_kill_switch_exits.py
-Not changed: strategy/run_cycle.py, config.py, execution/ownership_guard.py, run_ledger_sync.py, data/fetcher.py
-Status: rev 3 approved by the owner 2026-11-11 (APPROVE KILL-BACKUP-1111); BUILD HELD, NOT SHIPPED (signed: Claude).
-Build review (cold-2nd + adversarial, verified at source on OCI): the production ledger never stamps
-`last_reconciled_utc` (sync_ledger starts from _empty_ledger(); run_ledger_sync.py:511 already notes it) and every
-tier claim's `last_fill_id` is None, so the checkpoint + fill journal this design depends on does not exist in
-production. Built as written, a QHM buy below the prior close not yet in the ledger counts as a Day/Swing loss (a false
-trip), and a routine Day/Swing full exit between syncs still blocks entries. Rev 4 needed: sync_ledger stamps the time
-it READ the fills (before its reads) as the checkpoint, which changes execution/ownership_guard.py / run_ledger_sync.py
-(outside this Covers) -> new owner approval. Also from the build review: price-free handling of pure same-day round
-trips (no bar fetch), count backup cycles per kill evaluation not per call, page per episode not per day, and the
-owner's untagged sale of QHM shares (inherited from the exact measure). Build branch: claude/kill-backup-1111 (local
-scratch worktree, uncommitted). Rev 1 was reviewed by two board seats and GAI; rev 2 addresses their
-findings, including GAI's: rev 1 counted QHM/F6 losses toward the 7%.
+Covers: execution/risk_manager.py, execution/ownership_guard.py, tests/test_kill_backup_1111.py, tests/test_ownership_ledger.py, tests/test_kill_switch_join.py, tests/test_run_cycle_kill_switch_exits.py
+Not changed: strategy/run_cycle.py, config.py, run_ledger_sync.py, data/fetcher.py, execution/ownership_ledger_codec.py
+Status: rev 4 (signed: Claude, 2026-11-11). Rev 3 was owner-approved; its build review (verified on OCI) found the
+production ledger never stamps `last_reconciled_utc` and every `last_fill_id` is None, so rev 3's checkpoint did not
+exist. Rev 4 changes:
+1. The ledger rebuild (`sync_ledger`) stamps `fills_through_utc` = the newest `transaction_time` among the fills it
+   replayed, compared as parsed UTC times (board Harris: string order breaks on mixed fraction lengths; one tolerant
+   parser accepts any fraction length on Python 3.10, used by both the writer and the backup), in the same save as the claims (a refused rebuild writes nothing, so claims and stamp always match). The
+   ledger codec keeps extra top-level keys.
+2. The backup's checkpoint is `fills_through_utc`; a ledger written before rev 4 (no stamp) means claims with an empty
+   journal, so shares the claims do not explain count only when losing (never as a gain).
+3. A same-day round trip (net zero today) needs no prior close: its fill terms reduce to realized cash.
+4. The escalation page fires once per episode (ended when the exact measure works again); the counter is "backup
+   checks today" (the kill check runs more than once per cycle).
+5. Inherited from the exact measure and unchanged: an owner's untagged sale of QHM shares counts like a Day/Swing fill.
+6. GAI round on rev 4 (APPROVE-WITH-CHANGES), folded in: a warning is logged whenever the backup runs on a ledger with no
+   stamp (claims only, no journal). Fill times are truncated to microseconds; a fill in the same microsecond as the
+   stamp is then "not after" it and, if the replay missed it, lands in the unexplained shares (counted only when
+   losing): the safe direction. The load/save round trip of the stamp is tested (tests/test_ownership_ledger.py).
+7. Read-only server run with the real ledger and today's real data: exact -0.66, backup -0.66 (126 tests pass).
+8. Build review fixes (rev 4 build, cold second agent + adversarial review, 2026-11-11 night; owner-approved rev 4,
+   every change below makes the backup stricter or removes a double count):
+   a. No stamped checkpoint (no ledger read yet, a ledger rebuilt before rev 4, a stamp from before today's PT
+      midnight, or a claim changed after the stamp with no fill id) -> the backup does not measure and the old
+      entries-only block stays. Reproduced inputs: QHM 10 long + Day short 4 read 0 against a true -$120; an
+      unstamped ledger after a QHM sale + Day buy read 0 against a true -$100. Item 2 above is replaced by this.
+   b. Incremental claim writers (QHM/F6 exact fill credit and reduction) record their source in
+      `credited_since_stamp`; the fill journal skips those order ids, so a QHM dip-add credited at once is not counted
+      twice (it read -$10 on a flat QHM book). Writers with no fill id (owner-buy assignment, tier reduction) set
+      `unkeyed_edit_since_stamp` (-> rule a). Each rebuild clears both in the same save as the stamp.
+   c. The backup reuses the positions the exact measure already read this check (no second fetch on the trading
+      thread). A zero or unreadable `lastday_price` falls through to the T1 daily close.
+   d. The escalation page fires when the ledger FILE was rewritten after the episode began (file time, not fill
+      time); the episode resets each PT day. The missing-stamp warning logs once per PT day.
+   e. Round 2 of the build review: an untagged fill (an owner app sale or buy) after the stamp in a symbol with
+      QHM/F6 shares -> the backup does not measure (an owner sale of 5 QHM NVDA at $210 read 0 against a true Day
+      loss of -$100); an untagged fill in a symbol with no protected shares still counts as Day/Swing. An unreadable
+      ledger keeps the last good claims but no checkpoint time (it could be from before midnight) -> no measure.
+   f. Round 3 (PASS) noted that a stamp from before midnight blocks the backup each morning until the day's first
+      fill is rebuilt. A rebuild-time stamp was tried and rejected in round 4 (a rebuild saves minutes after its fill
+      read, so its run time does not prove the read covered midnight; the exact fix needs run_ledger_sync, outside
+      this approval). Effect: after the day's first fill, if the exact measure fails, entries wait for the rebuild the
+      kill check requests (the ledger sync's every-minute --if-requested run), then the backup measures.
+   Honest limit: with the production ledger unstamped at deploy, the backup starts measuring after the first ledger
+   rebuild that runs on rev 4 (the ledger sync runs every 20 minutes); a ledger rebuild refused for a whole day still
+   blocks entries (and pages), as before.
+Rev 1-3 were reviewed by two board seats and GAI (rev 1 counted QHM/F6 losses; rev 2 trusted the drift row).
 
 ## Owner direction (2026-11-11, verbatim)
 "that should not be a reason to block all trades. That doesn't make any sense. The kill switch should only trigger when

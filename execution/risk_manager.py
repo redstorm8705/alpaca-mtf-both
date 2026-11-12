@@ -428,7 +428,7 @@ def _in_rth_now() -> bool:
 # from the fills never blends. Each cached tuple is (symbol, side, qty, price, tier). ALL symbols
 # remain represented; tier is exact or broker-confirmed untagged and qty is absolute.
 _INTRADAY_PNL_TTL_S = 120
-_intraday_cache: dict = {"ts": 0.0, "pt_date": "", "fills": (), "ok": False}
+_intraday_cache: dict = {"ts": 0.0, "pt_date": "", "fills": (), "fill_ts": (), "fill_oid": (), "ok": False}
 _intraday_order_tier_cache: dict = {"pt_date": "", "tiers": {}}
 _UNRESOLVED_FILL_TIER = "__unresolved_fill_tier__"
 
@@ -597,6 +597,239 @@ def _prior_session_close(symbol: str) -> "float | None":
         logger.warning("kill-switch prior close lookup failed for %s (%s) — degrading [change=kill-prior-close-1111]",
                        symbol, e)
         return None
+
+
+_PROTECTED_FILL_TIERS = frozenset({"qhm", "forever6"})   # the tags _today_fills gives QHM / F6 fills
+_LAST_GOOD_CHECKPOINT: dict = {}   # KILL-BACKUP-1111: {"claims": {SYM: (active, protected)}, "ts", "credited"}
+_BACKUP_STATE: dict = {"day": "", "cycles": 0, "first": None, "paged": False}
+
+
+def _source_order_id(source: object) -> str:
+    """The order id inside an incremental writer's source ("qhm_registered_stop:<id>", "f6_trim:<id>" or a bare id)."""
+    return str(source or "").rsplit(":", 1)[-1].strip()
+
+
+def _ledger_checkpoint() -> "tuple[dict, datetime | None, bool]":
+    """KILL-BACKUP-1111: ({SYM: (day+swing claim, qhm+forever_6 claim)}, last_reconciled_utc, from_file).
+    Reads the ledger FILE's tier claims only (never alpaca_net_qty or drift). An unreadable file returns the last
+    checkpoint this process read successfully (from_file False); with none, ({}, None, False). Never raises."""
+    try:
+        from execution.ownership_guard import load_ledger
+        from tier_names import canonical_tier
+        led = load_ledger()
+        claims: dict = {}
+        for sym, row in (led.get("positions") or {}).items():
+            tiers = row.get("tiers") if isinstance(row, dict) else None
+            if not isinstance(tiers, dict):
+                raise ValueError(f"{sym}: malformed ownership row")
+            act = prot = 0.0
+            for raw_tier, claim in tiers.items():
+                q = float((claim or {}).get("qty") or 0.0) if isinstance(claim, dict) else float("nan")
+                if not math.isfinite(q):
+                    raise ValueError(f"{sym}.{raw_tier}: non-finite claim")
+                if canonical_tier(raw_tier) in ("qhm", "forever_6"):
+                    prot += q
+                else:
+                    act += q
+            claims[str(sym).upper()] = (act, prot)
+        # rev 4: the newest fill the last rebuild replayed (sync_ledger stamps it); last_reconciled_utc is never
+        # stamped by the rebuild, so it is not used
+        from execution.ownership_guard import _parse_fill_time
+        raw_ts = led.get("fills_through_utc")
+        ts = _parse_fill_time(raw_ts) if isinstance(raw_ts, str) and raw_ts else None
+        if ts is None and _BACKUP_STATE.get("nostamp_day") != datetime.now(_PT).strftime("%Y-%m-%d"):
+            _BACKUP_STATE["nostamp_day"] = datetime.now(_PT).strftime("%Y-%m-%d")
+            logger.warning("kill-switch backup: ledger has no fills_through_utc stamp (rebuilt before rev 4, or the "
+                           "stamp is unreadable) — no checkpoint, so the backup cannot measure and the entries-only "
+                           "block stays [change=kill-backup-1111]")
+        if ts is not None and ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts is not None and led.get("unkeyed_edit_since_stamp"):
+            # a claim changed after the stamp with no order id to key it by (owner-buy assignment, tier reduction)
+            logger.warning("kill-switch backup: a ledger claim changed after its stamp with no fill id — no "
+                           "checkpoint until the next rebuild [change=kill-backup-1111]")
+            ts = None
+        if ts is not None and ts < datetime.now(_PT).replace(hour=0, minute=0, second=0, microsecond=0):
+            # the fill journal holds today's fills only, so a stamp from before today's PT midnight leaves a gap
+            # (round-4 review: a rebuild's run time does not prove its fill read covered midnight)
+            logger.warning("kill-switch backup: ledger stamp %s is before today — no checkpoint until a rebuild "
+                           "[change=kill-backup-1111]", ts.isoformat())
+            ts = None
+        _cred = led.get("credited_since_stamp")
+        credited = frozenset(_source_order_id(c) for c in _cred) if isinstance(_cred, list) else frozenset()
+        _LAST_GOOD_CHECKPOINT.update(claims=claims, ts=ts, credited=credited)
+        return claims, ts, True
+    except Exception as e:  # noqa: BLE001 — RC-3: logged; the caller uses the last good checkpoint
+        logger.critical("CRITICAL_LEDGER_UNREADABLE kill-switch backup: ledger file unreadable (%s) — using the last "
+                        "good checkpoint [change=kill-backup-1111]", e)
+        if _LAST_GOOD_CHECKPOINT.get("claims") is not None:
+            # the last good claims, but no checkpoint time: fills between that read and now are not all in today's
+            # journal (cold review 2026-11-11: an unreadable ledger past midnight), so the backup does not measure
+            return dict(_LAST_GOOD_CHECKPOINT["claims"]), None, False
+        return {}, None, False
+
+
+def _signed_fill_qty(side: str, qty: float) -> float:
+    return qty if side in ("buy", "buy_to_cover") else -qty
+
+
+def _fill_after(ts_text: str, checkpoint: "datetime | None") -> bool:
+    """True when a fill's transaction time is after the checkpoint (no checkpoint: never, the claims are empty).
+    An unparseable time counts as after (its shares then land in the active count, never silently dropped)."""
+    if checkpoint is None:
+        return False
+    from execution.ownership_guard import _parse_fill_time
+    t = _parse_fill_time(ts_text)
+    return True if t is None else t > checkpoint
+
+
+def _backup_trading_pnl(fills: tuple, fill_ts: tuple, positions: list,
+                        fill_oid: "tuple | None" = None) -> "tuple[float | None, list]":
+    """KILL-BACKUP-1111 (owner-approved; logs/design_records/kill_backup_measure_2026-11-11.md): the Day+Swing
+    intraday P&L when the exact join fails, from Alpaca alone plus the ledger checkpoint and the fill journal.
+
+    Per symbol, m = current - prior close: a = active claim + active fills after the checkpoint; p = protected claim
+    + protected fills after it; u = broker qty - (a + p) (fills the journal could not place). Open leg
+    m*a + min(0, m*u) (protected shares never enter; unbooked shares only when they lose); a symbol the broker does
+    not hold has open leg 0. Fill terms: every active-tagged fill of today repriced to the prior close, as in the
+    exact measure; protected-tagged fills excluded. No stamped checkpoint (no ledger read yet, or a ledger rebuilt
+    before rev 4): (None, terms), because the broker's net quantity can mix a protected long with an active short
+    (cold review 2026-11-11). Returns (None, terms) when a needed price is missing (the caller then fails closed).
+    Never raises."""
+    terms: list = []
+    try:
+        claims, ckpt, _from_file = _ledger_checkpoint()
+        if ckpt is None:
+            terms.append({"no_checkpoint": True})
+            return None, terms
+        held: dict = {}
+        held_prior: dict = {}
+        for pos in positions:
+            sym = str(pos.get("symbol") or "").upper()
+            if not sym:
+                continue
+            q = float(pos.get("qty"))
+            cur = float(pos.get("current_price"))
+            ld = pos.get("lastday_price")
+            if not (math.isfinite(q) and math.isfinite(cur)):
+                return None, terms
+            held[sym] = (q, cur)
+            _ld = float(ld) if ld is not None else None
+            held_prior[sym] = _ld if _ld is not None and math.isfinite(_ld) and _ld > 0 else None
+        journal_act: dict = {}
+        journal_prot: dict = {}
+        oids = tuple(fill_oid) if fill_oid is not None else ("",) * len(fills)
+        if len(fills) != len(fill_ts) or len(fills) != len(oids):   # the journal needs every fill's time and id
+            return None, terms
+        credited = _LAST_GOOD_CHECKPOINT.get("credited") or frozenset()
+        untagged: set = set()
+        for (sym, side, q, _px, tier), ts_text, oid in zip(fills, fill_ts, oids, strict=True):
+            if not _fill_after(ts_text, ckpt):
+                continue
+            if oid and str(oid) in credited:
+                continue   # already credited to its claim after the stamp by an incremental writer
+            if tier is None:
+                untagged.add(sym)
+            book = journal_prot if tier in _PROTECTED_FILL_TIERS else journal_act
+            book[sym] = book.get(sym, 0.0) + _signed_fill_qty(side, float(q))
+        for sym in untagged:
+            if abs(claims.get(sym, (0.0, 0.0))[1]) > 1e-9 or sym in journal_prot:
+                # an untagged fill (an owner app sale or buy) in a symbol with QHM/F6 shares cannot be placed in a
+                # tier: its P&L could offset a Day loss (cold review 2026-11-11), so the backup does not measure
+                terms.append({"symbol": sym, "untagged_fill_on_protected": True})
+                return None, terms
+        prior: dict = {}
+
+        def _pc(sym: str) -> "float | None":
+            if sym not in prior:
+                ld = held_prior.get(sym)
+                prior[sym] = ld if ld is not None else _prior_session_close(sym)
+            return prior[sym]
+
+        total = 0.0
+        for sym, (q, cur) in held.items():
+            ca, cp = claims.get(sym, (0.0, 0.0))
+            a = ca + journal_act.get(sym, 0.0)
+            p = cp + journal_prot.get(sym, 0.0)
+            u = q - (a + p)
+            pc = _pc(sym)
+            if pc is None:
+                return None, terms
+            m = cur - pc
+            open_leg = m * a + min(0.0, m * u)
+            total += open_leg
+            terms.append({"symbol": sym, "a": a, "p": p, "u": u, "m": round(m, 4), "open": round(open_leg, 2)})
+        # a symbol Alpaca does not report but the checkpoint + journal say is held (e.g. a Day short netting a QHM
+        # long to zero, so the broker sends no position and no price) cannot be priced: fail closed
+        for sym in set(claims) | set(journal_act) | set(journal_prot):
+            if sym in held:
+                continue
+            ca, cp = claims.get(sym, (0.0, 0.0))
+            if abs(ca + journal_act.get(sym, 0.0)) + abs(cp + journal_prot.get(sym, 0.0)) > 1e-9:
+                terms.append({"symbol": sym, "unpriceable": True})
+                return None, terms
+        fill_qty: dict = {}
+        fill_px_cash: dict = {}
+        for sym, side, q, px, tier in fills:
+            if tier in _PROTECTED_FILL_TIERS:
+                continue
+            signed = _signed_fill_qty(side, float(q))
+            fill_qty[sym] = fill_qty.get(sym, 0.0) + signed
+            fill_px_cash[sym] = fill_px_cash.get(sym, 0.0) + signed * float(px)
+        fill_cash: dict = {}
+        for sym, net_q in fill_qty.items():
+            # sum of signed*(pc - px) = pc*net_q - sum(signed*px): a net-zero same-day round trip needs no prior close
+            if abs(net_q) <= 1e-9:
+                fill_cash[sym] = -fill_px_cash[sym]
+                continue
+            pc = _pc(sym)
+            if pc is None:
+                return None, terms
+            fill_cash[sym] = pc * net_q - fill_px_cash[sym]
+        for sym, v in fill_cash.items():
+            total += v
+            terms.append({"symbol": sym, "fills": round(v, 2)})
+        if not math.isfinite(total):
+            return None, terms
+        return round(total, 2), terms
+    except Exception as e:  # noqa: BLE001 — RC-3: logged; the caller fails closed
+        logger.warning("kill-switch backup measure failed (%s) [change=kill-backup-1111]", e)
+        return None, terms
+
+
+def _backup_episode_end() -> None:
+    """The exact measure works again: the next failure starts a new episode (and may page again)."""
+    _BACKUP_STATE.update(first=None, paged=False)
+
+
+def _backup_escalate(reason: str, value: float, terms: list) -> None:
+    """Count backup checks per PT day and page once per episode (ended when the exact measure works again) when the
+    ledger file was rewritten after the episode's first backup check and the exact measure still fails. Never
+    raises."""
+    try:
+        now = datetime.now(timezone.utc)
+        day = now.astimezone(_PT).strftime("%Y-%m-%d")
+        st = _BACKUP_STATE
+        if st["day"] != day:
+            st.update(day=day, cycles=0, first=None, paged=False)
+        st["cycles"] += 1   # backup kill checks today (the kill check runs more than once per cycle)
+        if st["first"] is None:
+            st["first"] = now
+        logger.warning("[change=kill-backup-1111] kill-switch backup measure B=%+.2f attribution_exact=False "
+                       "reason=%s backup_checks_today=%d terms=%s", value, reason, st["cycles"], terms)
+        # a ledger rebuild (the file rewritten) after the episode began, and the exact measure still fails
+        from execution.ownership_guard import _LEDGER_PATH
+        rebuilt = datetime.fromtimestamp(_LEDGER_PATH.stat().st_mtime, timezone.utc) if _LEDGER_PATH.exists() else None
+        if rebuilt is not None and rebuilt > st["first"] and not st["paged"]:
+            st["paged"] = True   # once per episode; a repaired exact measure ends the episode (_backup_episode_end)
+            from alerts import notify
+            notify("heads_up", "", "loss limit still on its backup measure after a ledger rebuild",
+                   bot_is=(f"trading normally; today's Day+Swing result is measured from Alpaca fills "
+                           f"({value:+.2f} USD, {st['cycles']} backup checks today)"),
+                   you="nothing to trade; the exact measure needs a look (see the bot log)",
+                   tier="Loss limit", kind="kill_backup")
+    except Exception as e:  # noqa: BLE001 — RC-3
+        logger.warning("kill-switch backup escalation failed (%s) [change=kill-backup-1111]", e)
 
 
 def _kill_join_unresolved(
@@ -957,6 +1190,8 @@ def _today_fills() -> "tuple[tuple, bool]":
     try:
         from reporting.pnl_ledger import fetch_all_fills, _pt_date
         out = []
+        out_ts: list = []   # KILL-BACKUP-1111: each fill's transaction time, aligned with `out` (the fill journal)
+        out_oid: list = []  # KILL-BACKUP-1111: each fill's order id, aligned with `out`
         seq_rows: list = []
         # strict=True: a page that cannot be confirmed as the last one raises (→ ok=False) instead of silently
         # returning a truncated history (KILL-PARTIAL-1104 rev 2.2 item 3).
@@ -1016,10 +1251,13 @@ def _today_fills() -> "tuple[tuple, bool]":
                 px,
                 fill_tier,
             ))
+            out_ts.append(str(f.get("transaction_time", "")))
+            out_oid.append(str(order_id or "").strip())
         if not _fill_sequences_consistent(seq_rows, pt_today):
             return (), False
         fills = tuple(out)
-        _intraday_cache.update(ts=now, pt_date=pt_today, fills=fills, ok=True)
+        _intraday_cache.update(ts=now, pt_date=pt_today, fills=fills, fill_ts=tuple(out_ts),
+                              fill_oid=tuple(out_oid), ok=True)
         return fills, True
     except Exception as e:  # RC-3
         logger.warning("kill-switch fills fetch failed (%s) — degrading to the equity measure "
@@ -1589,6 +1827,7 @@ class RiskManager:
             positions = resp.json()
             if not isinstance(positions, list):
                 return 0.0, False
+            self._kill_positions: "list | None" = positions   # KILL-BACKUP-1111: the backup reuses this read (no second fetch)
             if not exact_protected:
                 # KILL-ATTR-1023: with the ownership guard off, measure Day + Swing by exact ledger shares per symbol
                 # instead of dropping every QHM-held symbol (which hid an open Day lot in a QHM name).
@@ -1734,6 +1973,32 @@ class RiskManager:
                            "(more sensitive).", e)
             return 0.0, False
 
+    def _backup_positions(self) -> "list | None":
+        """Alpaca positions for the KILL-BACKUP-1111 measure (T1 trading REST, read-only). None on any failure, so
+        the caller keeps the entries-only block. Reuses the positions the exact measure read this check. Never
+        raises."""
+        _cached = getattr(self, "_kill_positions", None)
+        if isinstance(_cached, list):
+            return _cached
+        try:
+            api_key = os.getenv("ALPACA_API_KEY", "")
+            secret = os.getenv("ALPACA_SECRET_KEY", "")
+            if not api_key or not secret:
+                return None
+            resp = requests.get(
+                f"{_ALPACA_BASE_URL}/v2/positions",
+                headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret},
+                timeout=10.0,
+            )
+            if resp.status_code != 200:
+                logger.warning("kill-switch backup: positions HTTP %d [change=kill-backup-1111]", resp.status_code)
+                return None
+            data = resp.json()
+            return data if isinstance(data, list) else None
+        except Exception as e:  # noqa: BLE001 — RC-3
+            logger.warning("kill-switch backup: positions unreadable (%s) [change=kill-backup-1111]", e)
+            return None
+
     def check_kill_switch(self) -> bool:
         """Returns True if daily loss limit has been breached. Halts all new trades.
         Measure is Alpaca-EQUITY based (phantom-proof) minus QHM unrealized, OR-guarded
@@ -1781,6 +2046,7 @@ class RiskManager:
         # last_equity carrying the LLY/GEV buy-and-hold drawdown. This measure has NO last_equity
         # dependence, so it is valid 24/7.
         self._kill_attr = {}
+        self._kill_positions = None   # KILL-BACKUP-1111: set by this check's own positions read
         _pos_pnl, _pos_ok = self._intraday_trading_pnl()
         # KILL-ATTR-1023 T1: "exact" = Day + Swing measured by proven per-tier shares (enforced path, or the flag-off
         # tiered path with no unproven symbol). Guard enforcement is a prerequisite for
@@ -1788,10 +2054,28 @@ class RiskManager:
         # unproven symbols into exact evidence. Only an explicitly exact measurement
         # feeds the dashboard gauge and typed verdict.
         _attr_exact = _pos_ok and self._kill_attr.get("exact") is True
+        _backup = False
+        if not _pos_ok and getattr(config, "OWNERSHIP_GUARD_ENFORCE", False):
+            # KILL-BACKUP-1111 (owner 2026-11-11: only a measured -7% may stop entries, never a measurement glitch):
+            # measure Day+Swing from Alpaca fills + the ledger checkpoint instead of blocking. Only when Alpaca
+            # itself cannot be read, or a needed price is missing, does the entries-only block below remain.
+            _b_val = None
+            _fills, _fills_ok = _today_fills()
+            _positions = self._backup_positions() if _fills_ok else None
+            if _fills_ok and _positions is not None:
+                _b_val, _b_terms = _backup_trading_pnl(_fills, tuple(_intraday_cache.get("fill_ts") or ()), _positions,
+                                                       tuple(_intraday_cache.get("fill_oid") or ()))
+                if _b_val is not None:
+                    _why = "ledger_unreadable" if self._kill_attr.get("ledger_unreadable") else "exact_join_unresolved"
+                    _backup_escalate(_why, _b_val, _b_terms)
+                    _pos_pnl, _pos_ok, _backup = _b_val, True, True
+                    _attr_exact = False
         if not _pos_ok and self._kill_attr.get("ledger_unreadable"):
             # F3: the ownership ledger itself is unreadable -> entries pause for this check (run_cycle and run_day_tier
             # turn this into an entries-only block; exits keep running; nothing latches).
             raise RuntimeError("kill-switch ownership ledger unreadable [change=kill-attr-1023]")
+        if _pos_ok and not _backup:
+            _backup_episode_end()
         if _pos_ok:
             intraday_equity_pnl = _pos_pnl
         else:
@@ -1824,7 +2108,7 @@ class RiskManager:
             logger.critical(
                 f"KILL SWITCH TRIGGERED: intraday trading loss (excl QHM/F6 buy&hold) {loss_pct:.2%} "
                 f"exceeds limit {config.MAX_DAILY_LOSS_PCT:.2%} (intraday P&L "
-                f"${intraday_equity_pnl:+.2f}{'' if _pos_ok else ' [equity-fallback]'}; "
+                f"${intraday_equity_pnl:+.2f}{' [backup measure]' if _backup else ('' if _pos_ok else ' [equity-fallback]')}; "
                 f"equity_pnl ${self.equity_pnl:+.2f}). Halting new entries."
             )
             self.killed = True
@@ -1834,7 +2118,7 @@ class RiskManager:
                 halt_entries=True,
                 cause=(
                     KillVerdictCause.GENUINE_TRADING_LOSS
-                    if _pos_ok
+                    if _pos_ok and not _backup   # a backup-measure trip never unlocks the F6 starter bypass
                     else KillVerdictCause.CONTROL_FAULT
                 ),
                 trading_pnl=intraday_equity_pnl,

@@ -1,0 +1,18 @@
+{
+  "change": "kill-backup-1111",
+  "tier": 1,
+  "paths": [
+    "execution/risk_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "\\[change=kill-backup-1111\\] kill-switch backup measure B="
+    }
+  ],
+  "expected_rate": "on every cycle where the exact per-tier kill measure fails (ledger lag after a fill: 6, 20 and 1 cycles on 11-05, 11-06, 11-10); none on a day without such a lag",
+  "window_sessions": 5,
+  "window_reason": "Ledger lags after a QHM or Day fill occur a few times a week, not daily.",
+  "reversal": "an 'exact tier attribution is unresolved' entries block on a cycle where Alpaca fills and positions were readable, or a backup B that differs from the fills-based Day+Swing P&L by more than the unbooked-share move",
+  "verification": "tests/test_kill_backup_1111.py"
+}
