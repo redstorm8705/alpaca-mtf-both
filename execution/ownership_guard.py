@@ -374,6 +374,23 @@ def _save_ledger_fenced(ledger: dict) -> None:
     tmp.replace(_LEDGER_PATH)
 
 
+def _mark_credited(ledger: dict, source: str) -> None:
+    """KILL-BACKUP-1111 (adversarial review 2026-11-11): an incremental writer credited a fill to a claim after the
+    rebuild's fills_through_utc stamp; record its source so the kill backup's fill journal does not count it twice.
+    The next rebuild clears the list (its replay includes the fill)."""
+    ids = ledger.get("credited_since_stamp")
+    ids = list(ids) if isinstance(ids, list) else []
+    if source not in ids:
+        ids.append(source)
+    ledger["credited_since_stamp"] = ids
+
+
+def _mark_unkeyed_edit(ledger: dict) -> None:
+    """KILL-BACKUP-1111: a claim changed after the stamp with no fill order id to key it by; the kill backup treats
+    the ledger as unstamped (no checkpoint) until the next rebuild."""
+    ledger["unkeyed_edit_since_stamp"] = True
+
+
 def save_ledger(ledger: dict) -> None:
     """Validate and atomically save inside the strict cross-process commit domain."""
     with _strict_ledger_write_lock():
@@ -699,6 +716,7 @@ def apply_authorized_owner_buy_assignment(
                 tiers["qhm"]["last_fill_id"] = final_fill_id
                 ent["alpaca_net_qty"] = float(net)
                 ent["drift"] = 0.0
+                _mark_unkeyed_edit(ledger)
                 save_ledger(ledger)
             # Only a committed row may change canonical replay attribution.  This
             # second fsynced publish happens after the ledger projection; if it
@@ -1276,6 +1294,7 @@ def apply_authorized_tier_reduction(
                 6,
             )
             try:
+                _mark_unkeyed_edit(ledger)
                 save_ledger(ledger)
             except Exception as _se:  # RC-3
                 logger.critical(
@@ -1365,6 +1384,7 @@ def apply_authorized_tier_fill_reduction(
             tiers[tier]["last_fill_id"] = source
             ent["alpaca_net_qty"] = round(net, 6)
             ent["drift"] = round(net - expected_net, 6)
+            _mark_credited(ledger, source)
             save_ledger(ledger)
             logger.warning(
                 "authorized exact fill reduction: %s/%s %g→%g fill=%g net=%g src=%s",
@@ -1444,6 +1464,7 @@ def apply_authorized_tier_fill_increase(
             tiers[tier]["last_fill_id"] = source
             ent["alpaca_net_qty"] = round(net, 6)
             ent["drift"] = round(net - expected_net, 6)
+            _mark_credited(ledger, source)
             save_ledger(ledger)
             logger.warning(
                 "authorized exact fill increase: %s/%s %g→%g fill=%g net=%g src=%s",
@@ -1509,6 +1530,26 @@ def _apply_tier_transfer(t: dict, tiers_qty: dict, lots: dict) -> bool:
     except (TypeError, ValueError) as e:
         logger.error("sync_ledger: tier transfer %s unreadable (%s) — skipped", t.get("ref"), e)
         return False
+
+
+def _parse_fill_time(raw: object) -> "datetime | None":
+    """KILL-BACKUP-1111 rev 4: an Alpaca fill time as an aware UTC datetime, whatever its fraction-of-second length
+    (Python 3.10's fromisoformat accepts only 3 or 6 digits). None when unparseable. Never raises."""
+    try:
+        text = str(raw or "").strip().replace("Z", "+00:00")
+        if not text:
+            return None
+        main, sep, rest = text.partition(".")
+        if sep:
+            n = 0
+            while n < len(rest) and rest[n].isdigit():
+                n += 1
+            digits, tz = rest[:n], rest[n:]
+            text = f"{main}.{(digits + '000000')[:6]}{tz}"
+        t = datetime.fromisoformat(text)
+        return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 def sync_ledger(
@@ -1912,6 +1953,13 @@ def sync_ledger(
                 _healed_down,
             )
 
+        # KILL-BACKUP-1111 rev 4: the newest fill this replay included. The kill switch's backup measure replays
+        # only fills AFTER it (a fill the API returns later, or one placed after the read, is not in these claims).
+        _times = [t for t in (_parse_fill_time(f.get("transaction_time")) for f in fills if isinstance(f, dict))
+                  if t is not None]
+        ledger["fills_through_utc"] = max(_times).isoformat() if _times else None
+        ledger["credited_since_stamp"] = []
+        ledger["unkeyed_edit_since_stamp"] = False
         save_ledger(ledger)
         _consume_heal_confirmations(_consumed)
         _drifted = {
