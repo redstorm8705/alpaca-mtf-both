@@ -8098,6 +8098,8 @@ class QuarterlyHoldManager:
                 if name in ("qhm", "swing_tracker"):
                     continue   # QHM itself; the core tracker is read from its trade log below
                 total += abs(float(fn().get(sym, 0.0) or 0.0))
+            # Any read or parse error here (missing, partly written, invalid JSON) reaches the except below -> None ->
+            # no adoption this cycle.
             from execution.portfolio_tracker import TRADE_LOG_FILE
             if TRADE_LOG_FILE.exists():
                 book = json.loads(TRADE_LOG_FILE.read_text())
@@ -8173,6 +8175,9 @@ class QuarterlyHoldManager:
                 logger.warning("QHM %s adoption: other open sells hold %d share(s) (broker=%d proved=%d) — no resize",
                                sym, open_sells, broker_qty, proved)
             return None
+        # The same in-place replace, on the same trading thread, that _reconcile_stop_coverage makes every cycle (it
+        # never cancels; on failure it returns None and the old stop stays). Like every broker call the SDK sets no
+        # HTTP timeout; this adds at most one call per cycle, and only while a proven, unadopted gap exists.
         from execution.broker import replace_stop_order
         replacement = replace_stop_order(sym, shape["id"], float(pos.stop_price), qty=proved)
         new_shape = (self._qh_stop_shape(replacement, pos, self._PROTECTIVE_OPEN_STATUSES)
