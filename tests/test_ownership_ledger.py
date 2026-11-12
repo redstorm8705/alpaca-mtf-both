@@ -35,6 +35,38 @@ class TestProtectedReplayBalances(unittest.TestCase):
         return {"symbol": "NVDA", "order_id": order_id, "side": side,
                 "qty": qty, "price": 200.0, "transaction_time": order_id}
 
+    def test_rebuild_stamps_the_newest_replayed_fill(self):
+        """KILL-BACKUP-1111 rev 4: the ledger keeps the newest fill time it replayed."""
+        fills = [
+            {"symbol": "NVDA", "order_id": "1", "side": "buy", "qty": 1, "price": 200.0,
+             "transaction_time": "2026-11-11T14:30:00Z"},
+            {"symbol": "NVDA", "order_id": "2", "side": "buy", "qty": 1, "price": 201.0,
+             "transaction_time": "2026-11-11T15:05:50Z"},
+        ]
+        coids = {"1": "QH-NVDA-b-1-a", "2": "QH-NVDA-b-2-a"}
+        result = guard.sync_ledger(fills, [{"symbol": "NVDA", "qty": "2"}],
+                                   coid_by_order_id=coids)
+        self.assertTrue(result.get("healed"))
+        stamp = guard.load_ledger().get("fills_through_utc")
+        self.assertEqual(stamp, "2026-11-11T15:05:50+00:00")
+        # an exact fill credited after the stamp is recorded by its source;
+        # the next rebuild clears the record
+        self.assertTrue(guard.apply_authorized_tier_fill_increase(
+            "NVDA", "qhm", 1, 3, "qhm_add:9"))
+        led = guard.load_ledger()
+        self.assertEqual(led.get("credited_since_stamp"), ["qhm_add:9"])
+        self.assertEqual(led.get("fills_through_utc"),
+                         "2026-11-11T15:05:50+00:00")
+        fills.append({"symbol": "NVDA", "order_id": "9", "side": "buy",
+                      "qty": 1, "price": 202.0,
+                      "transaction_time": "2026-11-11T16:00:00Z"})
+        coids["9"] = "QH-NVDA-b-9-a"
+        guard.sync_ledger(fills, [{"symbol": "NVDA", "qty": "3"}],
+                          coid_by_order_id=coids)
+        led = guard.load_ledger()
+        self.assertEqual(led.get("credited_since_stamp"), [])
+        self.assertIs(led.get("unkeyed_edit_since_stamp"), False)
+
     def test_negative_protected_replay_is_reclassified_without_changing_net(self):
         """A protected tier never persists as short when broker net is flat."""
         fills = [
