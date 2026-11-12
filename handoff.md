@@ -8,6 +8,22 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-11-11 Wed night, Claude signed) — pick up here
+
+- **Shipped tonight (OCI 94fc833, services restarted):** CARD-STATS-1111 (PR 947: midday/nightly audit cards were
+  blocked by the P&L-rewrite guard since 11-10 because the new trade-record figures were not allow-listed -> raw-text
+  fallback; fixed, replayed OK with real fills) and SLACK-UX-1109 part 3 (PR 948: unmanaged-position page in plain words,
+  states totals and the exact stop). Plus earlier: KILL-PRIOR-CLOSE-1111 (PR 943, exercised live after restart: QQQM
+  priced from 277.87, verdict CLEAR) and SLACK-UX-1109 parts 1-2 (PR 945).
+- **NEXT (P0): KILL-BACKUP-1111 rev 4.** Owner approved rev 3 but the build review proved its checkpoint does not exist in
+  production (ledger `last_reconciled_utc` None, `last_fill_id` None). Build HELD, not shipped
+  (`logs/design_records/kill_backup_measure_2026-11-11.md` status block lists every finding). Rev 4: sync_ledger stamps
+  its fills-read time as the checkpoint (ownership_guard.py / run_ledger_sync.py) -> board + GAI -> owner re-approval.
+  Until then a ledger lag after a fill still blocks entries for minutes (as before 11-11).
+- **Owner items:** NVDA 3rd share still needs a 1-share GTC sell stop ($163.07); QHM at its 40% cap (owner's number).
+- **First live checks 11-12:** 06:00 map + 06:46 one-line watchlist; slack_sent.jsonl rows; midday card posts as a card
+  (not raw text); kill "prior close" proof line when the trend-night QQQM lot sells.
+
 ## ⏩ LATEST (2026-11-11 Wed evening, Claude signed) — pick up here
 
 - **Shipped + deployed 11-11 evening (OCI a244d38, services restarted):**
