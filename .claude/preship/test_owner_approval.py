@@ -621,6 +621,26 @@ class SharedApprovalTests(Base):
             self.owner_says(text)
             self.assertFalse(self.approved(), text)
 
+    def test_several_decisions_on_one_line(self):
+        """APPROVE-MULTI-1111 (owner 2026-11-11): 'APPROVE KILL-BACKUP-1111 APPROVE QHM-ADOPT-1111' recorded nothing."""
+        sys.path.insert(0, HERE)
+        import owner_approval_capture as c
+        for text, want in (("APPROVE KILL-BACKUP-1111 APPROVE QHM-ADOPT-1111", ["KILL-BACKUP-1111", "QHM-ADOPT-1111"]),
+                           ("APPROVE KILL-BACKUP-1111. APPROVE QHM-ADOPT-1111", ["KILL-BACKUP-1111", "QHM-ADOPT-1111"]),
+                           ("APPROVE A-1, B-2 and C-3", ["A-1", "B-2", "C-3"]),
+                           ("APPROVE A-1 APPROVE B-2 thanks", ["A-1", "B-2"])):
+            self.assertEqual(c.ids_in(text)[0], want, text)
+            self.assertTrue(all(c.names_id(text, a) for a in want), text)
+        # the line-level exclusions still hold for every decision on the line
+        for text in ("> APPROVE A-1 APPROVE B-2", "APPROVE A-1 APPROVE B-2?", "APPROVE A-1 APPROVE B-2 if tests pass",
+                     "APPROVE A-1 NOT-YET", "APPROVE A-1 DO-NOT",
+                     "~~~\nAPPROVE A-1 APPROVE B-2\n~~~"):
+            self.assertEqual(c.ids_in(text)[0], [], text)
+        # an ID on the NEXT line is never joined to the approval (round-4 review)
+        for text in ("APPROVE Z-9\nA-1\nwait on that one", "APPROVE Z-9\n\nB-2 hold until Friday"):
+            self.assertNotIn("A-1", c.ids_in(text)[0], text)
+            self.assertNotIn("B-2", c.ids_in(text)[0], text)
+
     def test_courtesy_after_the_decision_is_fine(self):
         for text in ("Approve oci reset 1017, thanks", "APPROVE OCI-RESET-1017 please"):
             self.owner_says(text)

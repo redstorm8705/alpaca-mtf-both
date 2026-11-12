@@ -37,7 +37,13 @@ import sys
 from datetime import datetime, timezone
 
 _ID = r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+"
-_APPROVE = re.compile(r"(?m)^\s*APPROVE\s+((?:" + _ID + r")(?:\s*[,&]\s*(?:and\s+)?" + _ID + r")*)")
+# APPROVE-MULTI-1111 (owner 2026-11-11: "we need to be able to approve multiple in the same prompt"): one line may
+# carry several decisions ('APPROVE A-1 APPROVE B-2', 'APPROVE A-1, B-2 and C-3'); the line-level exclusions still apply.
+_ID_NUM = r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-[A-Z0-9]*[0-9]"   # an ID ending in a number (every design ID does)
+# comma/'&'-joined IDs as before; a space- or 'and'-joined extra ID must end in a number, so 'APPROVE A-1 NOT-YET'
+# is not an approval of A-1 (cold review 2026-11-11)
+_IDS = (r"(?:" + _ID + r")(?:\s*[,&]\s*(?:and\s+)?" + _ID + r"|[ \t]+(?:and[ \t]+)?" + _ID_NUM + r"(?![A-Za-z0-9-]))*")
+_APPROVE = re.compile(r"(?m)^\s*APPROVE\s+(" + _IDS + r"(?:[\s,.;]+(?:and\s+)?APPROVE\s+" + _IDS + r")*)")
 _REJECT = re.compile(r"(?m)^\s*REJECT\s+(" + _ID + r")")
 _NATURAL_ID = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{3,}$")   # e.g. GEX-1017, OCI-RESET-1017
 _TOK = re.compile(r"[a-z0-9]+")
