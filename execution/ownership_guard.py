@@ -1545,7 +1545,7 @@ def _parse_fill_time(raw: object) -> "datetime | None":
             while n < len(rest) and rest[n].isdigit():
                 n += 1
             digits, tz = rest[:n], rest[n:]
-            text = f"{main}.{(digits + '000000')[:6]}{tz}"
+            text = f"{main}.{digits:0<6.6}{tz}"   # microsecond text: right-padded with zeros, cut to six
         t = datetime.fromisoformat(text)
         return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
     except (TypeError, ValueError):
