@@ -1,0 +1,207 @@
+{
+  "audit_date": "2026-11-11",
+  "run_ts": "2026-11-11T10:30:02.435017-08:00",
+  "entry_analysis": {
+    "entry_count": 0,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": []
+  },
+  "mri_analysis": {
+    "samples": 37,
+    "levels": {
+      "STRESSED": 16,
+      "ELEVATED": 21
+    },
+    "last_score": 40,
+    "last_level": "ELEVATED"
+  },
+  "log_analysis": {
+    "error_count": 42,
+    "warning_count": 109,
+    "watchdog_count": 0,
+    "error_samples": [
+      "2026-11-11 14:35:11,726 | ERROR    | strategy.run_cycle | kill-switch evaluation failed (RuntimeError('kill-switch exact tier attribution is unresolve",
+      "2026-11-11 14:40:20,462 | ERROR    | strategy.run_cycle | kill-switch evaluation failed (RuntimeError('kill-switch exact tier attribution is unresolve",
+      "2026-11-11 14:45:28,991 | ERROR    | strategy.run_cycle | kill-switch evaluation failed (RuntimeError('kill-switch exact tier attribution is unresolve",
+      "2026-11-11 14:50:37,634 | ERROR    | strategy.run_cycle | kill-switch evaluation failed (RuntimeError('kill-switch exact tier attribution is unresolve",
+      "2026-11-11 14:55:51,093 | ERROR    | strategy.run_cycle | kill-switch evaluation failed (RuntimeError('kill-switch exact tier attribution is unresolve"
+    ],
+    "warning_samples": [
+      "2026-11-11 14:35:11,721 | WARNING  | execution.risk_manager | kill-switch exact join unresolved ({\"broker_qty\": 0.0, \"check\": \"ledger_row_without_brok",
+      "2026-11-11 14:35:12,040 | WARNING  | execution.unmanaged_positions | [unmanaged-position] [NVDA] still unmanaged: residual 1 (paged)",
+      "2026-11-11 14:35:19,402 WARNING ledger_sync ledger_sync: 4 reducing admission(s) remain unresolved",
+      "2026-11-11 14:35:19,411 WARNING ledger_sync ledger_sync wall-time 18.1s (fills=1003 orders=3359)",
+      "2026-11-11 14:36:19,184 WARNING ledger_sync ledger_sync: 4 reducing admission(s) remain unresolved"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "positions": {
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GE": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:01-10:01"
+        ],
+        "uncovered_windows_pt": [
+          "07:01-07:01"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "MSFT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "NAKED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 240,
+        "lapsed_min": 0,
+        "uncovered_at_close": true,
+        "uncovered_windows_et": [
+          "09:30-13:30"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-10:30"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "QQQM": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 4,
+        "uncovered_min": 2,
+        "lapsed_min": 1,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:31",
+          "09:33-09:33"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:31",
+          "06:33-06:33"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-11",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [
+      {
+        "severity": "critical",
+        "title": "NVDA NAKED (broker ground truth) \u2014 STILL UNCOVERED at the window end",
+        "detail": "NVDA: no broker stop for 240m of 240m held (06:30-10:30 PT); owners qhm"
+      }
+    ],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 1,
+    "symbols": [
+      "QQQM"
+    ],
+    "by_symbol": {
+      "QQQM": {
+        "buy": 0,
+        "sell": 1
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+Nightly Gemini Audit — 2026-11-11
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* `execution.unmanaged_positions` | NVDA residual 1 (paged) remains unmanaged for > 12 hours | NVDA
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **Kill-Switch Failure:** The `strategy.run_cycle` function is consistently failing with `RuntimeError('kill-switch exact tier attribution is unresolved')`. This has blocked all new entries since 14:35:11, effectively halting the strategy's ability to open new positions.
+* **Ledger Sync Latency:** `ledger_sync` is consistently reporting "4 reducing admission(s) remain unresolved" with wall-times exceeding 17-23 seconds. This indicates a persistent bottleneck in the ledger reconciliation process.
+* **Control Faults:** Multiple `CRITICAL | strategy.run_cycle | ⛔ CONTROL FAULT` events occurred throughout the session, confirming the strategy is in a "fail-closed" state due to the unresolved kill-switch attribution.
+
+### PERFORMANCE AUDIT
+* The bot has been in a "fail-closed" state for the duration of the provided log (14:35 to 21:00). No new entries were executed.
+* The only P&L activity recorded was the `QQQM` exit at 06:33:34 (P&L 5.69), which occurred before the kill-switch failure began.
+* The `all_time_stats` show a profit factor of 0.83 and a negative Sharpe ratio, indicating the strategy is currently underperforming its risk parameters.
+
+### TRADE INTEGRITY
+* No new trades were executed during the log period due to the `CONTROL FAULT`.
+* The `NVDA` residual position (1 share) is flagged as "unmanaged" and "paged" in every cycle log, indicating a failure in the `unmanaged_positions` cleanup logic.
+
+### MODIFIED FILE FINDINGS
+* No source files were modified in the last 24h.
+
+### P5 STATUS
+* P5-C1: UNTOUCHED
+* P5-C2: UNTOUCHED
+* P5-H1: OBSOLETE
+* P5-H2: UNTOUCHED
+* P5-H3: UNTOUCHED
+* P5-H4: UNTOUCHED
+* P5-H5: FIXED
+* P5-M1: UNTOUCHED
+* P5-M2: UNTOUCHED
+* P5-M3: UNTOUCHED
+* P5-L1: UNTOUCHED
+* P5-L2: UNTOUCHED
+* P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution.risk_manager | Kill-switch attribution failure | The `kill-switch` logic is unable to resolve tier attribution, causing a permanent "fail-closed" state. This prevents the bot from entering new trades even when market conditions (MRI) are favorable.**
+* **EXECUTION BUG | HIGH | execution.unmanaged_positions | Residual position leakage | The `NVDA` residual position (1 share) is not being cleared or managed, despite repeated cycles. This suggests a failure in the `unmanaged_positions` handler to reconcile or liquidate orphaned shares.**
+
+### FIX VALIDATION
+* No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **Immediate:** Investigate `execution.risk_manager` to determine why "exact tier attribution" is failing to resolve. This is the primary cause of the current trading halt.
+2. **Immediate:** Manually reconcile or liquidate the `NVDA` residual position (1 share) to clear the `unmanaged_positions` warning.
+3. **High:** Audit `ledger_sync` performance; the 20s+ wall-time suggests a database lock or inefficient query that is likely contributing to the `kill-switch` resolution timeout.
+4. **Medium:** Review `strategy.run_cycle` error handling to ensure that "fail-closed" states do not persist indefinitely if the underlying cause (ledger sync) is resolved.
+================================================================================
+BROKER GROUND TRUTH (2026-11-11, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=390m no-broker-stop=0m [07:01-07:01] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   NAKED                    owners=qhm exposed=390m no-broker-stop=390m [06:30-13:00] rejected_stop_orders=0
+  QQQM   COVERED                  owners=core exposed=4m no-broker-stop=2m [06:30-06:31, 06:33-06:33] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
