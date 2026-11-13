@@ -1,0 +1,62 @@
+Nightly Gemini Audit — 2026-11-12
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: ['alerts.py', 'scripts/audit_slack.py', 'scripts/morning_rundown.py', 'scripts/morning_watch.py', 'execution/unmanaged_positions.py', 'execution/risk_manager.py', 'execution/ownership_guard.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* execution/unmanaged_positions.py | NVDA is classed NAKED in BROKER GROUND TRUTH (32m exposure) | NVDA
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* `2026-11-12 20:57:49,450 | ERROR | strategy.run_cycle | kill-switch evaluation failed (RuntimeError('kill-switch exact tier attribution is unresolved'))` — This indicates the kill-switch is failing to evaluate due to the ledger sync issue, leaving the bot in a "fail-closed" state for new entries.
+* `2026-11-12 20:58:20,329 CRITICAL execution.ownership_guard sync_ledger: drift on 1 symbol(s) {'GGLL': -2.0}` — Ledger drift detected; sells are frozen for this symbol.
+* `2026-11-12 20:58:25,890 | CRITICAL | strategy.run_cycle | ⛔ CONTROL FAULT — no new entries this cycle` — The bot has entered a hard-stop state for new entries due to the unresolved ledger sync.
+
+### PERFORMANCE AUDIT
+* **Trade Integrity Check**: The `AMZN` trades on 2026-11-12 show a consistent P&L sign (negative) for long positions where the exit price (270.42/270.37) is lower than the entry price (272.63). This is correct.
+* **AMD Trade**: The `AMD` long entries (584.675) and exits (576.27/576.16) show a loss, which is correctly recorded.
+* **Score Correlation**: The `SMCI` short (score 10/12) and `COIN` short (score 12/12) are consistently identified as `strong_bear`. The bot is correctly identifying high-score setups, but the `CONTROL FAULT` is preventing execution.
+
+### TRADE INTEGRITY
+* **FIFO Orphan Warnings**: Multiple `FIFO orphan` warnings for `AMD` and `GE` appear in the logs (`2026-11-12 20:24:03`, `20:32:00`, `20:43:26`, `20:52:26`). This indicates the `portfolio_tracker` is failing to match closing fills to existing lots, likely due to the ledger sync drift.
+
+### MODIFIED FILE FINDINGS
+* **alerts.py**: The new `_scrub_slack` and `_log_sent` functions are well-implemented for security. However, the `_scrub_slack` function uses `re.sub` inside a loop. If a regex pattern is poorly formed, it could lead to catastrophic backtracking. The current patterns appear safe, but the `_SCRUB_PASSES` of 3 is a heuristic that may not catch deeply nested JSON.
+* **execution/ownership_guard.py**: The addition of `_mark_credited` and `_mark_unkeyed_edit` is critical for the new kill-switch backup logic. However, `_parse_fill_time` uses `datetime.fromisoformat` with a custom padding logic. If `text` is malformed, it could raise a `ValueError` that is caught, but the function returns `None`, which might lead to silent failures in the ledger sync.
+* **execution/risk_manager.py**: The `_backup_trading_pnl` function is highly complex. It relies on `_prior_session_close`, which performs network/data fetches. If `fetch_bars_window` hangs or returns unexpected data, the risk manager will "fail closed," which is safe but could lead to unnecessary trading halts.
+
+### P5 STATUS
+* P5-C1: UNTOUCHED
+* P5-C2: UNTOUCHED
+* P5-H1: FIXED (Deleted)
+* P5-H2: UNTOUCHED
+* P5-H3: UNTOUCHED
+* P5-H4: UNTOUCHED
+* P5-H5: FIXED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | CRITICAL | execution/unmanaged_positions.py | Ownership check fails to verify NVDA | The `check_unmanaged` function is failing to verify NVDA, resulting in a NAKED position. The logic for `_page` was updated, but the underlying broker position read is failing to reconcile with the ledger.**
+* **EXECUTION BUG | HIGH | execution/risk_manager.py | Ledger sync drift causes sell freeze | The `sync_ledger` function is detecting drift on `GGLL` and freezing sells, which prevents the bot from exiting positions even if the stop is hit.**
+
+### FIX VALIDATION
+* **FIX VALIDATION: N/A** (No prior fixes to validate).
+
+### RECOMMENDED ACTIONS
+1. **Immediate Ledger Rebuild**: Run `sync_ledger` manually to resolve the drift on `GGLL` and clear the `CONTROL FAULT`.
+2. **NVDA Ownership Audit**: Manually verify the `NVDA` position in Alpaca vs. the QHM ledger. The `NAKED` status is a high-risk condition.
+3. **Investigate Ledger Sync**: The `unresolved` reducing admissions in `ledger_sync` (log `20:40:21`) suggest a race condition in the ledger update process.
+4. **Monitor Kill-Switch**: Ensure the `kill-switch` backup measure is not triggering false positives due to the `no_checkpoint` state.
+5. **Review `_parse_fill_time`**: Add more robust error handling for the `datetime` parsing to ensure it doesn't return `None` for valid but oddly formatted timestamps.
+================================================================================
+BROKER GROUND TRUTH (2026-11-12, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AMD    COVERED                  owners=day exposed=77m no-broker-stop=0m [08:06-08:06] rejected_stop_orders=0
+  AMZN   COVERED                  owners=day exposed=299m no-broker-stop=0m [07:01-07:01, 08:16-08:16, 12:58-12:58] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GE     COVERED                  owners=qhm exposed=380m no-broker-stop=0m [-] rejected_stop_orders=0
+  GGLL   COVERED                  owners=day exposed=291m no-broker-stop=0m [08:07-08:07, 12:58-12:58] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [08:09-08:09] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   NAKED                    owners=qhm exposed=390m no-broker-stop=32m [06:30-07:02] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
