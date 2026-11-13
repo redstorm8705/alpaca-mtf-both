@@ -214,6 +214,48 @@ def _page_venue_uncertain_once(reason: str) -> None:
         logger.warning("venue-uncertain page state write failed: %s", _wr_err)
 
 
+_QHM_OPEN_PAGED: dict = {}   # QHM-OPENSTOP-1112: "<SYM>|<ET date>" -> an opening-window page was sent
+
+
+def _rearm_qhm_stops(_main, tag: str, page_unfixed: bool = False) -> int:
+    """QHM-OPENSTOP-1112 (owner-approved; logs/design_records/qhm_open_stop_rearm_2026-11-12.md): re-place the GTC stop
+    of every QHM hold in PENDING_STOP_REPLACE through QHM's own rearm-only `resubmit_pending_stops()` (one order-book
+    snapshot; adopts or resizes a live QH stop before it submits; never blind). Called from every run_cycle branch that
+    returns before QHM's 10:00 ET pass, so no branch can leave a missing stop unrepaired. With page_unfixed (the
+    9:30-10:00 ET opening window), a hold still pending afterwards sends one ACTION page per symbol per ET day (per bot
+    process: a restart in the window can page once more). No broker read when no hold is pending. Returns
+    the count rearmed. Never raises into the cycle."""
+    try:
+        qhm = getattr(_main, "qhm", None)
+        if qhm is None:
+            return 0
+        from execution.quarterly_hold_manager import HoldState
+        if not any(getattr(pos, "state", None) == HoldState.PENDING_STOP_REPLACE
+                   for pos in list((getattr(qhm, "_positions", None) or {}).values())):
+            return 0   # nothing to repair: no broker read (review)
+        n = int(qhm.resubmit_pending_stops() or 0)
+        if n:
+            logger.info("Rearmed %d QHM GTC stop(s) in PENDING_STOP_REPLACE (%s) [change=qhm-openstop-1112]", n, tag)
+        if page_unfixed:
+            today = datetime.now(ET).strftime("%Y-%m-%d")
+            for sym, pos in list((getattr(qhm, "_positions", None) or {}).items()):
+                if getattr(pos, "state", None) != HoldState.PENDING_STOP_REPLACE:
+                    continue
+                key = f"{sym}|{today}"
+                if _QHM_OPEN_PAGED.get(key):
+                    continue
+                _QHM_OPEN_PAGED[key] = True
+                from alerts import notify
+                notify("action", sym, f"{sym} (QHM) has no confirmed stop in the opening window",
+                       bot_is="trying to re-place QHM's stop every cycle; Alpaca has not accepted it yet",
+                       you=f"place a GTC sell stop for {sym} in the Alpaca app, or check why the stop is refused",
+                       tier="QHM", kind="qhm_open_stop")
+        return n
+    except Exception as exc:  # noqa: BLE001 — RC-3: a failed rearm never breaks the cycle
+        logger.warning("QHM stop rearm (%s) failed: %s", tag, exc)
+        return 0
+
+
 def run_cycle(
     risk: RiskManager,
     tracker: PortfolioTracker,
@@ -395,6 +437,9 @@ def run_cycle(
         # ── Cancel overnight GTC stops so they don't appear on L2 during RTH ──
         # Also reconcile: if a GTC stop was triggered overnight, close tracker record.
         _cancel_and_reconcile_gtc_stops(tracker, risk)   # C-2: pass risk
+        # QHM-OPENSTOP-1112: repair a missing QHM stop now, not at 10:00 ET (runs after the cancel above, which never
+        # touches QH- stops or a symbol QHM holds)
+        _rearm_qhm_stops(_main, "pre-market")
 
         from data.premarket import scan_premarket_movers, cache_premarket_movers
         from concurrent.futures import ThreadPoolExecutor as _PmTPE
@@ -572,13 +617,7 @@ def run_cycle(
         # if_needed) is unreachable below this closed-market return, leaving a hold NAKED all
         # weekend (verified 2026-08-09: NVDA PENDING_STOP_REPLACE, no live stop at the broker).
         # Rearm-only (no entries/trims); fully fail-safe.
-        try:
-            if _main.qhm is not None:
-                _n_rearm = _main.qhm.resubmit_pending_stops()  # type: ignore[attr-defined]
-                if _n_rearm:
-                    logger.info("Market closed: rearmed %d QHM GTC stop(s) in PENDING_STOP_REPLACE.", _n_rearm)
-        except Exception as _e_rearm:
-            logger.warning("Closed-market QHM stop rearm failed: %s", _e_rearm)
+        _rearm_qhm_stops(_main, "market closed")
         try:
             from scan_to_html import write_scan_html
             write_scan_html(
@@ -1083,9 +1122,14 @@ def run_cycle(
                 "VIX regime refresh failed (using stale cached VIX=%.2f): %s",
                 _main._last_vix, exc,
             )
-        _main.check_partial_exits(tracker, kelly, risk, mri, last_vix=_main._last_vix)
-        _main.check_exits(tracker, risk, mri_level=mri.level() if mri else "NORMAL",
-                    kelly=kelly, last_vix=_main._last_vix, gate_state=gate_state)
+        try:
+            _main.check_partial_exits(tracker, kelly, risk, mri, last_vix=_main._last_vix)
+            _main.check_exits(tracker, risk, mri_level=mri.level() if mri else "NORMAL",
+                        kelly=kelly, last_vix=_main._last_vix, gate_state=gate_state)
+        except Exception:
+            # QHM-OPENSTOP-1112: the QHM stop repair below still runs; the error propagates as before
+            _rearm_qhm_stops(_main, "opening window", page_unfixed=True)
+            raise
         # RC-4 (2026-07-16 root-cause fix — board + Gro + GAI): reconcile fills HERE too.
         # This block returns below, and the normal _run_fill_recon() call sits ~700 lines
         # further down — so before this, the reconciler NEVER ran during 9:30-10:00 ET.
@@ -1098,7 +1142,11 @@ def run_cycle(
         # decision, so it belongs in every path where check_exits ran. Safe here: this window
         # takes NO new entries, so the Kelly rebuild it may trigger cannot affect sizing this
         # cycle; cost is ~0.1s/symbol and only for trades flagged _fill_unverified.
-        _run_fill_recon(tracker, kelly=kelly, risk=risk)
+        try:
+            _run_fill_recon(tracker, kelly=kelly, risk=risk)
+        finally:
+            # QHM-OPENSTOP-1112: repair a missing QHM stop in the 9:30-10:00 ET window; page if it stays missing
+            _rearm_qhm_stops(_main, "opening window", page_unfixed=True)
         _touch_cycle_ts()
         return
 
