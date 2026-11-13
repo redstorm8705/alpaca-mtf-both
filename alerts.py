@@ -380,6 +380,33 @@ def _post_slack_payload(payload: dict) -> bool:
         return False
 
 
+_BLUF_JARGON = re.compile(r"\b\d+(?:\.\d+)?R\b|\b(?:PULLBACK|DRIVE|FADE|RIDE|TRACK_[A-Z]|Track [ABM])\b|change=|\$-\d")
+
+
+def bluf_problems(blocks: list) -> list:
+    """SLK16 (rules/slack_format.md, owner 2026-11-12: every report readable and actionable for a CEO): the problems a
+    Block Kit report has against the bottom-line-up-front rule. Empty = compliant. Checks: the first block after the
+    header is a section whose text opens with a bold bottom line; a "*Your action:*" line within the first four
+    sections; no internal codes (R-multiples, mode/track names, change IDs) and no "$-" money in those sections. Never
+    raises (a malformed block is itself reported)."""
+    try:
+        body = [b for b in (blocks or []) if isinstance(b, dict) and b.get("type") != "header"]
+        secs = [str(((b.get("text") or {}).get("text")) or "") for b in body if b.get("type") == "section"][:4]
+        out = []
+        if not body or body[0].get("type") != "section" or not secs or not secs[0].lstrip().startswith("*"):
+            out.append("no bold bottom line first")
+        if not any("*Your action:*" in t for t in secs):
+            out.append("no 'Your action' line in the first four sections")
+        for t in secs:
+            m = _BLUF_JARGON.search(t)
+            if m:
+                out.append(f"internal code in the summary: {m.group(0)!r}")
+                break
+        return out
+    except Exception as exc:  # noqa: BLE001
+        return [f"unreadable blocks ({type(exc).__name__})"]
+
+
 def send_slack_blocks(blocks: list, fallback_text: str) -> bool:
     """Send a Block Kit message per rules/slack_format.md (SLK01/SLK02): structured `blocks` plus a
     top-level `fallback_text` that carries the answer (the phone notification preview + screen-reader
@@ -405,6 +432,9 @@ def send_slack_blocks(blocks: list, fallback_text: str) -> bool:
         if not ok:
             logger.warning(f"send_slack_blocks failed (text fallback): {fallback_text[:120]}")
         return ok
+    _bluf = bluf_problems(blocks)
+    if _bluf:   # SLK16: measured, never blocking (a report that breaks the format still goes out)
+        logger.warning(f"[SLK16] report not in bottom-line-first format ({'; '.join(_bluf)}): {fallback_text[:80]}")
     CHUNK = 45   # headroom under Slack's 50-blocks/message hard limit
     groups = [blocks[i:i + CHUNK] for i in range(0, len(blocks), CHUNK)]
     n = len(groups)

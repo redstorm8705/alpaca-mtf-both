@@ -213,6 +213,7 @@ def build(date: str) -> dict:
             "conviction": d.get("conviction", r.get("confidence")), "ten_of_ten": d.get("ten_of_ten"),
             "reason": (d.get("reason") or "")[:240],
             "entry_pt": te.astimezone(PT).strftime("%H:%M") if te else None,
+            "exit_pt": tx.astimezone(PT).strftime("%H:%M"),
             "minutes_after_buffer": _minutes_after_buffer(te) if te else None,
             "entry": entry, "stop": stop, "target": tgt, "exit": exit_px, "qty": r.get("qty"),
             "exit_reason": r.get("exit_reason"), "realized_pnl": round(pnl, 2), "realized_R": _f(r.get("realized_R")),
@@ -227,6 +228,92 @@ def build(date: str) -> dict:
             "total_loss": round(sum(x["realized_pnl"] for x in losers), 2),
             "pattern_all_closed_trades": _pattern(records, dec),
             "change": "loss-pm-1112"}
+
+
+_CAUSE = {   # verdict -> (plain cause, what it means for the fix review)
+    "wrong_entry": ("Wrong entry: it never got going", "the entry was the mistake; the stop limited the loss"),
+    "gave_back": ("Gave back a winner", "it was up more than its risk first; a profit lock would have saved it"),
+    "noise_exit": ("Stopped out, then came back", "the stop was too close for this stock's normal moves"),
+    "unclear": ("No single clear cause", "see the detail line"),
+}
+_MODE_WORDS = {"PULLBACK": "pullback buy", "DRIVE": "momentum buy", "FADE": "fade trade", "RIDE": "breakout ride"}
+
+
+def _cause(row: dict) -> str:
+    v = row.get("verdict") or ""
+    if v.startswith("gave back"):
+        return "gave_back"
+    if v.startswith("noise"):
+        return "noise_exit"
+    if v.startswith("failed at once and did not come back"):
+        return "wrong_entry"
+    return "unclear"
+
+
+def _x(v) -> str:
+    return "?" if v is None else f"{v:+.2f}x"
+
+
+def _t12(hhmm) -> str:
+    try:
+        return datetime.strptime(str(hhmm), "%H:%M").strftime("%-I:%M %p")
+    except ValueError:
+        return str(hhmm)
+
+
+def _blocks(rep: dict) -> tuple[str, list]:
+    """LOSS-PM-1112 / SLK16 (owner 2026-11-12: "readable and actionable for a CEO"): bottom line first, plain words,
+    then one short card per trade (rules/slack_format.md SLK01-SLK16). Returns (notification text, Block Kit blocks)."""
+    trades = sorted(rep["losing_trades"], key=lambda t: t["realized_pnl"])   # biggest loss first (SLK13)
+    n, total = len(trades), rep["total_loss"]
+    day = datetime.strptime(rep["date"], "%Y-%m-%d").strftime("%a %b %-d")
+    counts: dict = {}
+    for t in trades:
+        counts[_cause(t)] = counts.get(_cause(t), 0) + 1
+    parts = []
+    for key, words in (("wrong_entry", "wrong entr{}"), ("gave_back", "winner{} given back"),
+                       ("noise_exit", "stop{} hit then recovered"), ("unclear", "unclear")):
+        k = counts.get(key, 0)
+        if k:
+            parts.append(f"{k} " + words.format(("ies" if k > 1 else "y") if key == "wrong_entry" else
+                                                ("s" if k > 1 and key != "unclear" else "")))
+    saved = -sum(t["realized_pnl"] for t in trades if _cause(t) == "gave_back")
+    bluf = f"*{n} losing trade{'s' if n != 1 else ''} today: ${-total:.2f} lost.* " + ", ".join(parts) + "."
+    means = []
+    if counts.get("gave_back"):
+        means.append(f"• A break-even profit lock could have saved up to about *${saved:.2f}* (being tested on past trades).")
+    if counts.get("wrong_entry"):
+        means.append("• Wrong entries: the stop did its job; the entry rule is under review.")
+    if counts.get("noise_exit"):
+        means.append("• Stops hit then recovered: stop distance for those stocks is under review.")
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"Loss review · {day}"}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": bluf}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(means) if means else "• See the trades below."}},
+        {"type": "section", "text": {"type": "mrkdwn",
+                                     "text": "*Your action:* none. Every loss is filed for a fix review; no change "
+                                             "goes live without your approval."}},
+        {"type": "divider"},
+    ]
+    for t in trades:
+        cause = _CAUSE[_cause(t)][0]
+        style = _MODE_WORDS.get(str(t.get("mode") or "").upper(), "trade")
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text":
+                       f"🔴 *{t['symbol']}*  *−${-t['realized_pnl']:.2f}*\n{cause}\n"
+                       f"{str(t.get('side') or 'trade').capitalize()} {_t12(t.get('entry_pt'))} → out {_t12(t.get('exit_pt'))} PT"}})
+        blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text":
+                       f"{(t.get('tier') or '').replace('daytrade', 'Day tier')} · {style} · "
+                       f"best {_x(t.get('mfe_R'))} risk · after exit {_x(t.get('after_exit_best_R'))}"}]})
+    weak = [(k, v) for k, v in rep["pattern_all_closed_trades"].items()
+            if k.startswith("entry ") and v["n"] >= 5 and v["sum_R"] < 0]
+    foot = []
+    if weak:
+        k, v = weak[0]
+        foot.append(f"Weakest entry time so far: {k[6:]}, {v['n']} trades, {v['sum_R']:+.1f}x risk")
+    foot.append(f"Source: Alpaca fills + 1-min bars · {datetime.now(PT).strftime('%-I:%M %p')} PT")
+    blocks += [{"type": "divider"}, {"type": "context", "elements": [{"type": "mrkdwn", "text": " · ".join(foot)}]}]
+    text = f"Loss review {day}: {n} losing trade{'s' if n != 1 else ''}, ${-total:.2f} lost · " + ", ".join(parts)
+    return text, blocks
 
 
 def _slack_text(rep: dict) -> tuple[str, str]:
@@ -256,6 +343,8 @@ def main(argv=None) -> int:
     print(head)
     print(body)
     if a.dry_run:
+        if rep["losing_trades"]:
+            print(json.dumps(_blocks(rep), indent=1))
         return 0
     _OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = _OUT_DIR / f"{a.date}.json"
@@ -263,9 +352,9 @@ def main(argv=None) -> int:
     tmp.write_text(json.dumps(rep, indent=2, default=str))
     os.replace(tmp, out)
     if rep["losing_trades"] and not a.no_slack:
-        from alerts import notify
-        notify("heads_up", "", head, bot_is=body, you="nothing to trade; each loss is queued for a fix review",
-               tier="Loss review", kind="loss_postmortem")
+        from alerts import send_slack_blocks
+        text, blocks = _blocks(rep)
+        send_slack_blocks(blocks, text)
     return 0
 
 

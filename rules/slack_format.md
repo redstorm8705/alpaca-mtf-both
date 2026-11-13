@@ -1,4 +1,4 @@
-# SLACK OUTPUT FORMAT — full text (canonical definition site for SLK01–SLK15)
+# SLACK OUTPUT FORMAT — full text (canonical definition site for SLK01–SLK16)
 <!-- Rafael mandate 2026-08-23: the QHM status report rendered as an unreadable wall on his phone.
      Root cause (verified vs docs.slack.dev): reports were built from markdown `#` headings + `| pipe
      tables |` (NEITHER renders in Slack) plus lines packing many ` | `-separated fields that wrap on
@@ -87,6 +87,21 @@ section blocks so no single section exceeds ~3000 chars. A CLICKABLE dashboard U
 (`<https://…|View full dashboard>`) may be added as an EXTRA convenience — NEVER as a substitute for
 the readable content. For an unavoidably long list, order by attention (SLK13) so the most important
 items lead, but STILL send all of it.
+
+## SLK16 — BLUF: the bottom line up front, in a CEO's words (Rafael 2026-11-12)
+<!-- Owner 2026-11-12, on the first loss post-mortem: "This post mortem is just a bunch of text ... optimize not only
+     for the UX, but the BLUF (bottom line up front exec summary). This needs to be readable and actionable for a
+     CEO. This needs to apply to all slack generated reports." -->
+Every report and alert opens with three blocks, in this order, before any detail:
+1. **Bottom line** — one bold sentence: what happened and how much (`*4 losing trades today: $41.34 lost.*`),
+   followed by the cause in plain words (`2 wrong entries, 2 winners given back.`).
+2. **What it means** — at most three short bullet lines (typed `•`, not markdown `-`): the consequence and what the
+   bot or the team is already doing about it.
+3. **Your action** — `*Your action:* ...` naming the one thing the owner must do, or `none` with the reason.
+Then the detail cards (SLK03–SLK13), then the footer.
+Language: no internal codes in blocks 1–3 (no R-multiples, track letters, mode names, change IDs, log keys);
+translate them (`1.1x its risk`, `pullback buy`). Codes may appear only in muted `context` lines. Money is signed
+as `−$16.91` / `+$9.40`, never `$-16.91`. The notification `text` (SLK02) is the bottom line in one line.
 
 ## SLK15 — PT timestamps + semantic header
 All times in PT (project rule §Timezone). Use the semantic `header` block for the title (not bold text

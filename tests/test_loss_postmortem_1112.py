@@ -113,20 +113,20 @@ class Build(unittest.TestCase):
 class MainOutput(unittest.TestCase):
     def test_writes_report_and_sends_one_slack_message(self):
         rep = {"date": "2026-11-12", "losing_trades": [{"symbol": "AMZN", "tier": "daytrade", "mode": "PULLBACK",
-               "side": "long", "entry_pt": "07:01", "realized_pnl": -13.41, "realized_R": -1.0,
+               "side": "long", "entry_pt": "07:01", "exit_pt": "07:20", "realized_pnl": -13.41, "realized_R": -1.0,
                "stop_in_daily_atr": 0.22, "mfe_R": 0.17, "after_exit_best_R": 0.4, "verdict": "x"}],
                "total_loss": -13.41, "pattern_all_closed_trades": {}}
         with tempfile.TemporaryDirectory() as d, mock.patch.object(lp, "_OUT_DIR", Path(d)), \
-                mock.patch.object(lp, "build", return_value=rep), mock.patch("alerts.notify") as n:
+                mock.patch.object(lp, "build", return_value=rep), mock.patch("alerts.send_slack_blocks") as n:
             lp.main(["--date", "2026-11-12"])
             self.assertEqual(json.loads((Path(d) / "2026-11-12.json").read_text())["total_loss"], -13.41)
         self.assertEqual(n.call_count, 1)
-        self.assertIn("1 losing trade", n.call_args[0][2])
+        self.assertIn("1 losing trade", n.call_args[0][1])
 
     def test_dry_run_writes_and_sends_nothing(self):
         rep = {"date": "2026-11-12", "losing_trades": [], "total_loss": 0, "pattern_all_closed_trades": {}}
         with tempfile.TemporaryDirectory() as d, mock.patch.object(lp, "_OUT_DIR", Path(d)), \
-                mock.patch.object(lp, "build", return_value=rep), mock.patch("alerts.notify") as n:
+                mock.patch.object(lp, "build", return_value=rep), mock.patch("alerts.send_slack_blocks") as n:
             lp.main(["--date", "2026-11-12", "--dry-run"])
             self.assertEqual(list(Path(d).iterdir()), [])
         n.assert_not_called()
