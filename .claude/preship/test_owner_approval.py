@@ -82,6 +82,14 @@ class Base(unittest.TestCase):
             f.write(json.dumps({"type": "assistant", "uuid": f"a{self.n_msgs}", "timestamp": self._ts(),
                                 "message": {"role": "assistant", "content": [{"type": "text", "text": text}]}}) + "\n")
 
+    def agent_asks_in_box(self, text, ask):
+        """The agent's closing text plus the desktop app's next-step box question (its wrap-up tool call's `ask`)."""
+        with open(self.transcript, "a") as f:
+            f.write(json.dumps({"type": "assistant", "uuid": f"b{self.n_msgs}", "timestamp": self._ts(),
+                                "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "t1",
+                                            "name": "mcp__ccd_turn__wrap_up", "input": {"recap": "r", "ask": ask}}]}}) + "\n")
+        self.agent_says(text)
+
     def owner_says(self, text, real=True):
         if real:
             with open(self.transcript, "a") as f:
@@ -620,6 +628,27 @@ class SharedApprovalTests(Base):
                      "~~~\nAPPROVE OCI-RESET-1017\n~~~", "Example:\n\n    APPROVE OCI-RESET-1017"):
             self.owner_says(text)
             self.assertFalse(self.approved(), text)
+
+    def test_app_box_question_lets_a_plain_approved_record(self):
+        """APPROVE-BOX-1112: the question is only in the app box; the owner clicks "Approved"."""
+        self.agent_asks_in_box("Ready. Covers the cycle and its tests.",
+                               "Do you approve OCI-RESET-1017, the stop repair before 10:00 ET?")
+        self.owner_says("Approved")
+        self.assertTrue(self.approved())
+
+    def test_a_later_agent_message_replaces_the_box_question(self):
+        """Review: a correction posted after the box question (no owner message between) must end it."""
+        self.agent_asks_in_box("Ready.", "Do you approve OCI-RESET-1017?")
+        self.agent_says("Correction: the review of OCI-RESET-1017 failed; it is not ready.")
+        self.owner_says("approved")
+        self.assertFalse(self.approved())
+
+    def test_old_box_question_does_not_carry_to_a_later_turn(self):
+        self.agent_asks_in_box("Ready.", "Do you approve OCI-RESET-1017?")
+        self.owner_says("not yet, one question first")
+        self.agent_says("Here is the answer to your question.")
+        self.owner_says("approved")
+        self.assertFalse(self.approved())
 
     def test_several_decisions_on_one_line(self):
         """APPROVE-MULTI-1111 (owner 2026-11-11): 'APPROVE KILL-BACKUP-1111 APPROVE QHM-ADOPT-1111' recorded nothing."""
