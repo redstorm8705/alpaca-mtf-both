@@ -1,0 +1,40 @@
+Midday Gemini Audit — 2026-11-12
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   Naked position detected (Broker Ground Truth: NVDA is NAKED) | NVDA
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **P&L Integrity:** The `CLOSED TRADE DETAILS` show three trades. AMZN ($-6.78), AMD ($-8.40), and AMZN (+$1.04). The P&L signs are mathematically correct for the entry/exit prices provided.
+*   **Win Rate/Profit Factor:** The session win rate is 33% (1/3). The average loss ($-7.59) significantly outweighs the average win ($1.04), indicating a negative expectancy for this specific session.
+*   **Recording/Accounting:** The `execution.portfolio_tracker` reports an `EOD P&L DRIFT` of `$-30.33` between Alpaca and the tracker. This indicates a significant synchronization failure between the bot's internal ledger and the broker's actual state.
+
+### ENTRY QUALITY
+*   **No issues:** Entries appear to follow the logic provided in the logs, though the `entry`-EVENT log is degraded as noted in the `KNOWN D1` context.
+
+### EXIT QUALITY
+*   **Partial Exits:** The `AMZN` and `AMD` trades were closed via `partial_exit`. The `portfolio_tracker` log at `18:26:19,679` reports a `FIFO orphan` for `AMD`, suggesting the bot failed to correctly map the exit fill to an existing lot, which is a failure in the tracking logic.
+
+### MRI ALIGNMENT
+*   The MRI session distribution is exclusively `ELEVATED` (24/24 samples). The bot continued to trade despite this elevated risk environment, which may have contributed to the poor win rate and negative P&L.
+
+### LOG ANOMALIES
+*   `WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for AMD has no prior lot and no tracker record — fill unmatched.`
+*   `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-30.33 tracker=$0.00 drift=$-30.33`
+*   `WARNING | confluence | [DRAM] No daily data — long/short entry blocked (fail-closed)` (Repeated warning)
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | FIFO/Tracker Desync |** The `portfolio_tracker` is failing to reconcile Alpaca fills with internal lots, resulting in `FIFO orphan` errors and a `$-30.33` EOD P&L drift.
+*   **EXECUTION BUG | HIGH | Stop Protection Failure |** `NVDA` is marked as `NAKED` in the `BROKER GROUND TRUTH`. The bot is holding a position without a broker-side stop, violating the safety invariant.
+*   **INFRASTRUCTURE | MEDIUM | Data Feed/Config Issue |** `[DRAM]` is triggering repeated `No daily data` warnings, indicating a failure in the data provider or symbol mapping for this ticker.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Immediate investigation into the `NVDA` naked position. Verify if the `rejected_stop_orders` count is accurate or if the stop submission logic is failing silently.
+2.  **EXECUTION:** Audit the `portfolio_tracker` FIFO logic. The `FIFO orphan` error for `AMD` indicates that the tracker is losing state, which is likely the root cause of the `$-30.33` P&L drift.
+3.  **ALPHA:** Review the `ELEVATED` MRI threshold logic. The bot's performance during this session suggests that the current `ELEVATED` state should trigger a more aggressive reduction in position sizing or a temporary halt in trading.
