@@ -426,6 +426,20 @@ def transcript_agent_text(entry: dict) -> str:
     return ""
 
 
+def transcript_box_ask(entry: dict) -> str:
+    """APPROVE-BOX-1112 (owner 2026-11-12: "If it's in the app box, me selected approved should register"): the question
+    the agent put in the desktop app's next-step box — the `ask` field of its wrap-up tool call in a Claude assistant
+    entry. Agent-authored like assistant text, so it is read with the same rules (a request sentence naming the ID)."""
+    if entry.get("type") != "assistant":
+        return ""
+    c = (entry.get("message") or {}).get("content")
+    if not isinstance(c, list):
+        return ""
+    asks = [str((p.get("input") or {}).get("ask") or "") for p in c
+            if isinstance(p, dict) and p.get("type") == "tool_use" and str(p.get("name") or "").endswith("__wrap_up")]
+    return "\n".join(a for a in asks if a.strip())
+
+
 def _entry_identity(entry: dict) -> str:
     if entry.get("type") == "user":
         return str(entry.get("uuid") or "")
@@ -445,6 +459,8 @@ def _entry_ts(entry: dict) -> float:
 def iter_turns(path: str, with_ts: bool = False):
     """Yield (user_text, user_identity, preceding_agent_text[, ts]) for each authentic user message in a transcript."""
     last_agent = ""
+    box_ask = ""   # APPROVE-BOX-1112: the app-box question asked since the last owner message
+    texts_after = 0   # agent texts after that question: the closing text (1) keeps it; any later text ends it
     try:
         fh = open(path, encoding="utf-8")
     except OSError:
@@ -457,13 +473,22 @@ def iter_turns(path: str, with_ts: bool = False):
                 continue
             if not isinstance(e, dict):
                 continue
+            b = transcript_box_ask(e)
             a = transcript_agent_text(e)
+            if b:
+                box_ask, texts_after = b, 0
+            elif a.strip() and box_ask:
+                texts_after += 1
+                if texts_after > 1:
+                    box_ask = ""   # a later agent message (e.g. a correction) replaces the box question
             if a.strip():
                 last_agent = a
                 continue
             u = transcript_user_text(e)
             if u:
-                yield (u, _entry_identity(e), last_agent, _entry_ts(e)) if with_ts else (u, _entry_identity(e), last_agent)
+                shown = f"{last_agent}\n{box_ask}" if box_ask else last_agent
+                box_ask, texts_after = "", 0
+                yield (u, _entry_identity(e), shown, _entry_ts(e)) if with_ts else (u, _entry_identity(e), shown)
 
 
 # ── store ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -795,18 +820,31 @@ def _last_turn(transcript_path: str, prompt: str):
         if agent_after:
             ident = ""
     if not ident:
+        box_ask, texts_after = "", 0
         try:
             with open(transcript_path, encoding="utf-8") as fh:
                 for line in fh:
                     try:
-                        a = transcript_agent_text(json.loads(line))
+                        e = json.loads(line)
                     except ValueError:
                         continue
+                    if not isinstance(e, dict):
+                        continue
+                    b = transcript_box_ask(e)
+                    a = transcript_agent_text(e)
+                    if b:
+                        box_ask, texts_after = b, 0
+                    elif a.strip() and box_ask:
+                        texts_after += 1
+                        if texts_after > 1:
+                            box_ask = ""   # a later agent message replaces the box question
                     if a.strip():
                         last_agent = a
+                    elif transcript_user_text(e):
+                        box_ask, texts_after = "", 0   # a box question belongs to the turn it was asked in
         except (OSError, TypeError):
             pass
-        agent = last_agent
+        agent = f"{last_agent}\n{box_ask}" if box_ask else last_agent
     return ident, agent
 
 
