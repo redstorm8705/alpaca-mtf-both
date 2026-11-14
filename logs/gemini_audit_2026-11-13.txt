@@ -1,0 +1,68 @@
+Nightly Gemini Audit — 2026-11-13
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['alerts.py', 'scripts/loss_postmortem.py', 'strategy/run_cycle.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there are recurring ledger synchronization issues and persistent "FIFO orphan" warnings that indicate a breakdown in the portfolio tracker's ability to match fills to open positions.
+
+### LOG ANOMALIES
+*   **Ledger Sync/Orphans**: `ledger_sync` consistently reports unresolved reducing admissions (e.g., "6 reducing admission(s) remain unresolved"). Simultaneously, `execution.portfolio_tracker` reports "FIFO orphan" errors for `AMD`, `PLTD`, and `NVD` throughout the session. This indicates the tracker is failing to link exit fills to existing lots, likely causing the observed P&L drift.
+*   **QHM Fail-Closed**: Multiple `WARNING` events in `execution.quarterly_hold_manager` (e.g., `QHM overnight room unavailable`, `QHM tranche-2: GOOGL QHM cap check unavailable`) indicate that the Quarterly Hold Manager is failing to execute intended trades due to data unavailability.
+*   **Kill-Switch Unresolved**: `execution.risk_manager` reported a `kill-switch exact join unresolved` for `MUD` (ledger qty 44.0 vs broker 0.0), triggering a rebuild.
+
+### PERFORMANCE AUDIT
+*   **P&L Integrity**: The `pnl_today` of -$9.37 is consistent with the `_pnl_selfcheck_telemetry` provided in the EOD snapshot.
+*   **Stop/Exit Analysis**: The `MSFT` exit at 20:53:28 (`realized_pnl` -1.71) appears to be a time-based exit (`exit_reason: "time"`). The `NVD` and `PLTD` trades were stopped out at their respective stop levels, confirming the stop-protection logic is functioning.
+*   **Score Correlation**: The system is currently in a "STRESSED" MRI state (score 43), which is correctly triggering the 0.70x size floor. The entry logic is correctly blocking longs due to the "Rule 1 — PREMARKET RED LOCKOUT" (13/14 movers red).
+
+### TRADE INTEGRITY
+*   **Recording Bug**: The `FIFO orphan` warnings in `execution.portfolio_tracker` are a significant concern. While the EOD snapshot notes these are "pre-heal" and "not catastrophic," the persistence of these orphans across multiple cycles suggests a logic error in how the tracker reconciles fills against the ledger, potentially leading to inaccurate position sizing in future cycles.
+
+### MODIFIED FILE FINDINGS
+*   **alerts.py**: The new `bluf_problems` function is well-implemented. It correctly identifies the need for a bold bottom line and "Your action" text. The regex `_BLUF_JARGON` correctly flags internal codes (like R-multiples) that should be excluded from the summary.
+*   **scripts/loss_postmortem.py**: The logic for `_after_exit_best` and `_verdict` is sound. The use of `_reconstruct_mae_mfe` to rebuild data from 1-min bars is a robust approach to handling sparse logging.
+*   **strategy/run_cycle.py**: The introduction of `_rearm_qhm_stops` is a necessary fix for the "naked stop" issue identified in previous sessions. The logic correctly handles both the pre-market and market-closed states. The `page_unfixed=True` parameter in the opening window is a good safety mechanism.
+
+### P5 STATUS
+*   **P5-C1**: UNTOUCHED
+*   **P5-C2**: UNTOUCHED
+*   **P5-H1**: FIXED (Deleted)
+*   **P5-H2**: UNTOUCHED
+*   **P5-H3**: UNTOUCHED
+*   **P5-H4**: UNTOUCHED
+*   **P5-H5**: FIXED
+*   **P5-M1**: UNTOUCHED
+*   **P5-M2**: UNTOUCHED
+*   **P5-M3**: UNTOUCHED
+*   **P5-L1**: UNTOUCHED
+*   **P5-L2**: UNTOUCHED
+*   **P5-L3**: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/portfolio_tracker.py | FIFO Orphan Reconciliation Failure | The tracker fails to match exit fills to existing lots for symbols like AMD, PLTD, and NVD, resulting in "FIFO orphan" warnings and P&L drift.**
+*   **EXECUTION BUG | LOW | execution/quarterly_hold_manager.py | Data dependency failure | QHM cap checks are failing due to "equity/price unreadable," causing valid QHM trades to be blocked (fail-closed).**
+
+### FIX VALIDATION
+*   **FIX VALIDATION: PASS** (The `_rearm_qhm_stops` implementation in `strategy/run_cycle.py` successfully addresses the risk of missing GTC stops for QHM positions during market-closed and pre-market phases.)
+
+### RECOMMENDED ACTIONS
+1.  **Investigate Portfolio Tracker**: Prioritize debugging the `FIFO orphan` logic in `portfolio_tracker.py`. The tracker must be able to link exit fills to the correct ledger lots to prevent P&L drift and potential sizing errors.
+2.  **QHM Data Reliability**: Investigate why `quarterly_hold_manager` is receiving unreadable equity/price data, causing it to fail-closed on valid trades.
+3.  **Monitor Ledger Sync**: The "unresolved reducing admissions" in `ledger_sync` should be monitored; if the count increases, it may indicate a deeper issue with the order-fill reconciliation loop.
+================================================================================
+BROKER GROUND TRUTH (2026-11-13, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AMD    COVERED                  owners=day/other exposed=67m no-broker-stop=1m [07:06-07:06, 08:11-08:12, 08:13-08:14] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [07:02-07:02] rejected_stop_orders=0
+  MSFT   COVERED                  owners=core exposed=383m no-broker-stop=0m [12:53-12:53] rejected_stop_orders=0
+  MUD    COVERED                  owners=day exposed=343m no-broker-stop=0m [07:06-07:06] rejected_stop_orders=0
+  NVD    COVERED                  owners=day exposed=120m no-broker-stop=0m [07:26-07:26] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTD   COVERED                  owners=day exposed=112m no-broker-stop=0m [07:16-07:16] rejected_stop_orders=0
+  QQQM   BROKER-STOP-LAPSED       owners=core exposed=0m no-broker-stop=0m [12:59-13:00] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

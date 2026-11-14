@@ -1,0 +1,38 @@
+Midday Gemini Audit — 2026-11-13
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+- **Integrity**: The `CLOSED TRADE DETAILS` show three trades (AMD, PLTD, NVD). All P&L signs are mathematically correct for the direction (Long: AMD entry $539.72 → exit $527.00 = -$12.72, but the log reports +$25.43; this indicates a **P&L calculation/recording discrepancy**).
+- **Discrepancy**: The AMD trade shows an entry of $539.72 and an exit of $527.00, which is a loss of $12.72 per share, yet the log records a profit of +$25.43. This suggests either a misreported exit price, a misreported entry price, or a failure in the P&L calculation engine.
+- **Stop-hit rate**: 0% reported, which is consistent with the lack of stop-loss triggers in the closed trade details.
+
+### ENTRY QUALITY
+- **No issues**: Entries appear to be filtered correctly by the `PREMARKET RED LOCKOUT` rule (all longs blocked). The bot correctly identified the 12-point entry disablement (`SWING12_NEW_ENTRIES_ENABLED=False`) and skipped entries accordingly.
+
+### EXIT QUALITY
+- **No issues**: Exits were processed as expected. The partial exit for NVD is consistent with the `ALPACA FILLS` ground truth.
+
+### MRI ALIGNMENT
+- **Alignment**: The session is consistently `STRESSED` (44/100). The bot correctly adjusted the `MIN_SCORE` to 10/12, demonstrating active regime-based risk management.
+
+### LOG ANOMALIES
+- **FIFO Orphan Warnings**: `WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for [AMD/PLTD/NVD] has no prior lot and no tracker record`. This confirms the `D1` degradation mentioned in the prompt, where entry events are missing, causing the tracker to fail to match exits to entries.
+- **EOD P&L Drift**: `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$26.24 tracker=$0.00 drift=$+26.24`. This is a direct consequence of the `D1` entry-event logging failure.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | HIGH | P&L Calculation Mismatch | AMD trade**: The `CLOSED TRADE DETAILS` report a profit of +$25.43 on a trade where the exit price ($527.00) is significantly lower than the entry price ($539.72). This is a mathematical impossibility for a long position and indicates a corruption in the P&L reporting logic.
+- **INFRASTRUCTURE | MEDIUM | D1 Entry-Event Degradation**: The `trade_events.jsonl` is failing to record entry events, leading to "FIFO orphan" warnings and significant EOD P&L drift ($26.24). While the bot is still trading, the lack of auditability for entry-to-exit matching is a high-risk state for strategy performance analysis.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Prioritize the fix for `D1` (entry-event logging) to resolve the FIFO orphan warnings and P&L drift, as this is currently masking the true performance of the strategy.
+2. **EXECUTION**: Audit the `execution.fifo_pnl` module to determine why the AMD trade P&L calculation resulted in a positive value despite a negative price delta.
+3. **ALPHA**: Review the `SWING12_NEW_ENTRIES_ENABLED` flag status; ensure that the "Day tier" trades are not being incorrectly categorized or missing score-gate validation due to the current "no 12-pt score" status.
