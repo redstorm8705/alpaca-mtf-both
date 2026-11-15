@@ -1,0 +1,33 @@
+{
+  "change": "qhm-ownerstop-1113",
+  "tier": 2,
+  "paths": [
+    "execution/quarterly_hold_manager.py",
+    "scripts/qhm_owner_stop.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "change=qhm-ownerstop-1113\\] QHM [A-Z.]+ stop set by owner"
+    }
+  ],
+  "expected_rate": "once on the first QHM cycle after the owner runs scripts/qhm_owner_stop.py set for a held symbol; zero on days with no owner request",
+  "window_sessions": 10,
+  "window_reason": "The code runs only after the owner sets a stop by hand; ten sessions is the longest window the engine allows.",
+  "reversal": "while an owner stop is applied and before its end date, the broker stop for that hold rests at any price other than the owner's; or a QHM raise step moves it; or the stop is still the owner's price on the session after the end date without a 'your last price kept' page; or any hold is left without a broker stop",
+  "metrics": [
+    {
+      "name": "broker stop equals owner price while applied",
+      "source": "Alpaca open orders for the hold vs data/state/qhm_owner_stops.json",
+      "direction": "none",
+      "bound": "difference of $0.00 on every cycle between apply and end"
+    },
+    {
+      "name": "QHM holds without a resting stop",
+      "source": "Alpaca open orders vs positions",
+      "direction": "none",
+      "bound": "0"
+    }
+  ],
+  "verification": "tests/test_qhm_owner_stop_1113.py"
+}
