@@ -174,6 +174,10 @@ _EARNINGS_TRIM_STATE_PATH           = _ROOT / "data" / "state" / "qhm_earnings_t
 _OWNER_TRIM_PATH                    = _ROOT / "data" / "state" / "qhm_owner_trims.json"
 _OWNER_TRIM_LOCK_RETRIES = 5                    # x 0.1 s: the CLI holds the lock for milliseconds
 _OWNER_TRIM_FILL_POLL_TIMEOUT_SECONDS = 15.0   # same bounded fill poll as the earnings trim (trading-thread budget)
+# QHM-OWNERSTOP-1113 (owner-approved; logs/design_records/qhm_owner_stop_2026-11-13.md, rev 3): an owner stop price per
+# hold with an end date, written by scripts/qhm_owner_stop.py (tmp + os.replace under a lock). QHM reads it lock-free
+# once per cycle and keeps the hold's stop there until the date; QHM itself never writes this file.
+_OWNER_STOP_PATH                    = _ROOT / "data" / "state" / "qhm_owner_stops.json"
 # Earnings-date source log + UNKNOWN page, once per symbol per ET day (design record
 # logs/design_records/qhm_earnings_dates_fix_2026-10-12.md).
 _EARNINGS_SRC_LOGGED: dict = {}
@@ -216,6 +220,8 @@ _quarterly_hold_symbols: set[str] = set()
 _QHM_STATE_FILE = _ROOT / "data" / "state" / "quarterly_holds.json"
 _RESTOP_PAGE_DAY: dict = {}   # QHM-RESTOP-1112: "<SYM>|<ET date>" -> CRITICAL page sent (once a day)
 _ADOPT_LOG_DAY: dict = {}   # QHM-ADOPT-1111: "<SYM>|<ET date>" -> last no-adoption reason logged (once a day)
+_OWNER_STOP_DAY: dict = {}   # QHM-OWNERSTOP-1113: "<SYM>|<ET date>|<kind>" -> page / log / row already sent
+_OWNER_STOP_GAP_DAY: dict = {}   # QHM-OWNERSTOP-1113: "<SYM>|<ET date>" -> median overnight gap as a fraction of price
 # MUST match the in-process registration set exactly (the HoldStates that add a
 # symbol to _quarterly_hold_symbols — see reconcile/init, incl. PENDING_EARNINGS,
 # a fully-open position whose GTC stop is cancelled pre-earnings). Excludes only
@@ -417,6 +423,10 @@ class HoldPosition:
     # QHM-RESTOP-1112: the share count at which the stop was last recalculated from the average cost; a different
     # qty_filled means shares were added (or removed) since, so the stop is recalculated once. None = not yet baselined.
     restop_qty: Optional[int] = None
+    # QHM-OWNERSTOP-1113: the end date (ET, YYYY-MM-DD) of the owner stop override QHM applied to this hold; None = no
+    # override applied. Marks only that one was applied: the request file stays the source of truth (a missing or
+    # unreadable file freezes a marked hold's stop instead of ending the override).
+    owner_stop_until: Optional[str] = None
     closed_reason: Optional[str] = None        # why the hold closed; "owner_app_sale"/"owner_confirmed" = owner's exit
     # QHM-REENTRY-1108: the re-entry lock written with QHM's own close (same _save_state as the CLOSED transition),
     # and, on a re-added hold, the release that let it back in. Defaults keep older state files loadable; a CLOSED
@@ -656,6 +666,8 @@ class QuarterlyHoldManager:
         self._gf_shares: dict[str, int] = self._init_grandfathered_baseline()
         self._tranche_add_day: dict[str, str] = {}  # symbol -> ET date of its last tranche add
         self._tranche_cycle_attempts = 0
+        # QHM-OWNERSTOP-1113: this cycle's read of the owner-stop file (set and cleared once per cycle)
+        self._owner_stop_cycle: "Optional[tuple[Optional[dict], str]]" = None
 
         if dry_run:
             _run_beck_tests(self)
@@ -1011,7 +1023,16 @@ class QuarterlyHoldManager:
     def run_weekly_check(self) -> None:
         """Once per RTH cycle: external close detection + resync + max-hold exit.
         GTC stop is the primary exit path. _initiate_exit() is the 13-week backstop.
+        QHM-OWNERSTOP-1113: the owner-stop request file is read once for the whole cycle.
         """
+        self._owner_stop_cycle = self._load_owner_stops()
+        try:
+            self._run_weekly_check()
+        finally:
+            self._owner_stop_cycle = None
+
+    def _run_weekly_check(self) -> None:
+        """The body of run_weekly_check (one cycle)."""
         # Prove QHM-owned quantity and stop coverage from ONE order-book snapshot
         # before the stray-sell guard.  This lets a valid replacement stop be
         # durably adopted before the guard decides which sell id is legitimate.
@@ -1048,6 +1069,9 @@ class QuarterlyHoldManager:
                         or _pos.ambiguous_add_client_order_id):
                     _guard_skip.add(_sym)
                     continue
+                # QHM-OWNERSTOP-1113: the owner's stop goes into the record first; the reconcile below moves the broker
+                # stop to it in place, using the same live price this pass read (never raises)
+                _owner_live = self._maybe_apply_owner_stop(_pos, _order_snapshot)
                 try:
                     _adopt = self._maybe_adopt_proven_shares(_pos, _order_snapshot)
                 except Exception as exc:  # RC-3: one symbol must not suppress the rest
@@ -1071,8 +1095,11 @@ class QuarterlyHoldManager:
                         _coverage_blocked.add(_sym)
                     continue
                 try:
-                    _skip_guard, _block_loop = self._reconcile_stop_coverage(
-                        _pos, _order_snapshot
+                    # the owner pass's live read is passed only when it made one (no override: unchanged call)
+                    _skip_guard, _block_loop = (
+                        self._reconcile_stop_coverage(_pos, _order_snapshot, live=_owner_live)
+                        if _owner_live is not None
+                        else self._reconcile_stop_coverage(_pos, _order_snapshot)
                     )
                 except Exception as exc:  # one symbol must not suppress the rest
                     logger.exception(
@@ -3626,6 +3653,7 @@ class QuarterlyHoldManager:
             stop_price = round(stop_price, 2)
             if stop_price <= 0:
                 stop_price = round(floor_stop, 2)
+            stop_price = self._use_owner_stop(pos, stop_price, "post-earnings stop", current_price)
             pos.stop_price = stop_price
             stop_side = "sell"  # direction == "long" confirmed above
             order = self._dispatcher.submit_gtc_stop(
@@ -4479,6 +4507,7 @@ class QuarterlyHoldManager:
             raise_stop_to is not None
             and _actual_after_add > _orig_qty
             and pos.stop_price < raise_stop_to < live_price * 0.98
+            and not self._owner_stop_skip(pos, "tranche-add stop raise")
         ):
             logger.info(
                 "QHM %s: %s stop raised $%.2f -> $%.2f for the new average",
@@ -5072,6 +5101,8 @@ class QuarterlyHoldManager:
         OPEN AN UNINTENDED SHORT in this long-only tier (cold-2nd round 2, defect 3).
         """
         _r = None
+        if qty >= 1 and stop_px > 0:
+            stop_px = self._use_owner_stop(pos, stop_px, "stop after a trim")   # QHM-OWNERSTOP-1113; never raises
         try:
             if qty >= 1 and stop_px > 0:
                 _r = self._dispatcher.submit_gtc_stop(
@@ -5492,6 +5523,8 @@ class QuarterlyHoldManager:
             # SAFETY: the raised stop must stay strictly BELOW market with a buffer so it
             # cannot instant-fire. With MIN_GAIN 5% + FRACTION 0.5 this holds; guard it anyway.
             if new_stop >= live_price * (1 - _TRAIL_LOCK_MIN_BUFFER_PCT):
+                return
+            if self._owner_stop_skip(pos, "trailing lock"):   # QHM-OWNERSTOP-1113: the owner's stop holds
                 return
 
             from execution.broker import (
@@ -5964,6 +5997,7 @@ class QuarterlyHoldManager:
                 )
                 stop_price = round(floor_stop, 2)
 
+            stop_price = self._use_owner_stop(pos, stop_price, "first stop")
             pos.stop_price = stop_price
             stop_side = "sell" if pos.direction == "long" else "buy"
 
@@ -8278,6 +8312,8 @@ class QuarterlyHoldManager:
             return None
         if pos.restop_qty == pos.qty_filled:
             return None
+        if self._owner_stop_skip(pos, "stop recalculation after add"):   # QHM-OWNERSTOP-1113
+            return None   # restop_qty stays: the end of the override recalculates and re-baselines it
         own = [o for o in order_snapshot
                if str(getattr(o, "symbol", "") or "").upper() == sym
                and str(getattr(o, "client_order_id", "") or "").startswith("QH-")]
@@ -8382,6 +8418,325 @@ class QuarterlyHoldManager:
                                                               risk_after))
         return True, True
 
+    # -----------------------------------------------------------------------
+    # QHM-OWNERSTOP-1113 — owner stop override (logs/design_records/qhm_owner_stop_2026-11-13.md, rev 3)
+    # -----------------------------------------------------------------------
+
+    def _load_owner_stops(self) -> "tuple[Optional[dict], str]":
+        """(requests, "") or (None, why). Lock-free: scripts/qhm_owner_stop.py writes tmp + os.replace, so a reader sees
+        the old or the new file, never a partial one. A missing file is a fault for a hold whose override was applied
+        (the script never deletes it; `clear` rewrites it). Never raises."""
+        try:
+            if not _OWNER_STOP_PATH.exists():
+                return None, "the owner-stop file is missing"
+            d = json.loads(_OWNER_STOP_PATH.read_text())
+        except Exception as e:  # RC-3
+            logger.critical("QHM owner-stop: %s unreadable (%s) — no owner stop applied this cycle "
+                            "[change=qhm-ownerstop-1113]", _OWNER_STOP_PATH, e)
+            return None, f"the owner-stop file is unreadable ({e})"
+        if not isinstance(d, dict):
+            logger.critical("QHM owner-stop: %s is not a JSON object — no owner stop applied this cycle "
+                            "[change=qhm-ownerstop-1113]", _OWNER_STOP_PATH)
+            return None, "the owner-stop file is not a JSON object"
+        return d, ""
+
+    def _owner_stops(self) -> "tuple[Optional[dict], str]":
+        """This cycle's read of the request file (run_weekly_check reads it once); outside a cycle, a fresh read."""
+        cached = getattr(self, "_owner_stop_cycle", None)
+        return cached if cached is not None else self._load_owner_stops()
+
+    def _owner_stop_entry(self, pos: HoldPosition) -> "tuple[str, Optional[float], Optional[date], str]":
+        """(status, price, until, why) of this hold's override: "active" while QHM's own ET date <= until, "expired"
+        after it, "none" when the readable file has no entry, "fault" when the file or the entry cannot be read."""
+        data, why = self._owner_stops()
+        if data is None:
+            return "fault", None, None, why
+        rec = data.get(pos.symbol.upper())
+        if rec is None:
+            return "none", None, None, ""
+        if isinstance(rec, dict) and rec.get("entry_day") and pos.entry_day and rec["entry_day"] != pos.entry_day:
+            return "none", None, None, ""   # set for an earlier hold of this symbol: never carried over to a new one
+        try:
+            price = float(rec["price"])
+            until = date.fromisoformat(str(rec["until"]))
+        except (TypeError, ValueError, KeyError) as e:
+            return "fault", None, None, f"bad owner-stop entry ({e})"
+        if not math.isfinite(price) or price <= 0:
+            return "fault", None, None, f"bad owner-stop price {rec.get('price')!r}"
+        return ("active" if self._now_et().date() <= until else "expired"), price, until, ""
+
+    def _owner_stop_margin(self, symbol: str, live: float) -> Optional[float]:
+        """m, the QHM-RESTOP-1112 gap margin (_overnight_gap_margin: median overnight gap x live). The median is read
+        once per ET day per symbol (its daily bars change once a day) and scaled by each read's live price."""
+        if not live > 0:
+            return None
+        key = f"{symbol}|{self._now_et().strftime('%Y-%m-%d')}"
+        gap_frac = _OWNER_STOP_GAP_DAY.get(key)
+        if gap_frac is None:
+            m = self._overnight_gap_margin(symbol, live)
+            if m is None:
+                return None
+            _OWNER_STOP_GAP_DAY[key] = m / live
+            return m
+        return gap_frac * live
+
+    def _owner_stop_until(self, pos: HoldPosition, live: Optional[float] = None) -> "Optional[tuple[float, str]]":
+        """(price, until) of the active override when its price sits below live - m, else None. Reads the live price
+        only when an override is active and none was passed; an unreadable price -> None."""
+        status, price, until, _why = self._owner_stop_entry(pos)
+        if status != "active" or price is None or until is None:
+            return None
+        if live is None or not live > 0:
+            live = self._get_live_price(pos.symbol)
+        if live is None or not live > 0:
+            return None
+        m = self._owner_stop_margin(pos.symbol, live)
+        if m is None or not price < live - m:
+            return None
+        return round(price, 2), until.isoformat()
+
+    def _owner_stop(self, pos: HoldPosition, live: Optional[float] = None) -> Optional[float]:
+        """The active, below-market owner stop price (below live - m), or None. Every QHM stop writer reads the override
+        through here or _owner_stop_skip, so the rule lives in one place. Never raises."""
+        try:
+            got = self._owner_stop_until(pos, live)
+        except Exception as e:  # RC-3: no override -> QHM's own stop
+            logger.warning("QHM %s owner stop unreadable (%s) — QHM's own stop is used", pos.symbol, e)
+            return None
+        return got[0] if got else None
+
+    def _use_owner_stop(self, pos: HoldPosition, own: float, where: str, live: Optional[float] = None) -> float:
+        """Fresh-stop submitters: the owner's price instead of QHM's own when the override is active and below live - m;
+        else QHM's own (including when the live price is unreadable; the per-cycle pass re-applies it). A hold frozen by
+        an unreadable or missing file keeps its recorded (owner's) price while that price is below live - m. Never
+        raises."""
+        try:
+            got = self._owner_stop_until(pos, live)
+            if got is None:
+                if pos.owner_stop_until and pos.stop_price > 0 and self._owner_stop_entry(pos)[0] == "fault":
+                    _live = live if live is not None and live > 0 else self._get_live_price(pos.symbol)
+                    _m = self._owner_stop_margin(pos.symbol, _live) if _live is not None and _live > 0 else None
+                    if _live is not None and _m is not None and pos.stop_price < _live - _m:
+                        logger.warning("QHM %s %s at the frozen owner stop $%.2f (owner-stop file unreadable) "
+                                       "[change=qhm-ownerstop-1113]", pos.symbol, where, pos.stop_price)
+                        return round(float(pos.stop_price), 2)
+                return own
+            price, until = got
+            pos.owner_stop_until = until
+            logger.warning("[change=qhm-ownerstop-1113] QHM %s %s at the owner's $%.2f (until %s) instead of QHM's "
+                           "$%.2f", pos.symbol, where, price, until, own)
+            self._owner_stop_event(pos, "fresh_stop", writer=where, owner_price=price, qhm_price=own, until=until)
+            return price
+        except Exception as e:  # RC-3
+            logger.warning("QHM %s owner stop not used for the %s (%s) — QHM's own stop", pos.symbol, where, e)
+            return own
+
+    def _owner_stop_blocks(self, pos: HoldPosition) -> bool:
+        """True while an override is APPLIED to this hold and has not been ended by the per-cycle pass (a fault freezes
+        it): QHM's own raise writers then leave the stop alone. A request that was refused (too close to the market) or
+        not yet applied changes nothing: QHM's own stop rules keep running (claims review 11-14)."""
+        return bool(pos.owner_stop_until)
+
+    def _owner_stop_once(self, sym: str, kind: str) -> bool:
+        """True the first time `kind` happens for `sym` on this ET day (one page / row a day)."""
+        key = f"{sym}|{self._now_et().strftime('%Y-%m-%d')}|{kind}"
+        if _OWNER_STOP_DAY.get(key):
+            return False
+        _OWNER_STOP_DAY[key] = True
+        return True
+
+    def _owner_stop_skip(self, pos: HoldPosition, writer: str) -> bool:
+        """A QHM raise writer asks whether to skip: True while the owner's stop holds (logged + one trade_events row a
+        day per writer)."""
+        if not self._owner_stop_blocks(pos):
+            return False
+        if self._owner_stop_once(pos.symbol.upper(), f"skip {writer}"):
+            logger.info("QHM %s %s skipped: owner stop active (stop $%.2f) [change=qhm-ownerstop-1113]",
+                        pos.symbol, writer, pos.stop_price)
+            self._owner_stop_event(pos, "skip", writer=writer)
+        return True
+
+    def _owner_stop_event(self, pos: HoldPosition, action: str, **extra: Any) -> None:
+        """One trade_events.jsonl row (event qhm_owner_stop) with the broker stop order id. Best-effort."""
+        try:
+            row = {"ts": datetime.now(PT).isoformat(), "event": "qhm_owner_stop", "symbol": pos.symbol.upper(),
+                   "tier": "qhm", "action": action, "size": pos.qty_filled, "stop_price": pos.stop_price,
+                   "stop_order_id": pos.stop_order_id, "owner_stop_until": pos.owner_stop_until,
+                   "avg": pos.avg_entry_price, "change": "qhm-ownerstop-1113"}
+            row.update(extra)
+            with open(_ROOT / "logs" / "trade_events.jsonl", "a") as fh:
+                fh.write(json.dumps(row, default=str) + "\n")
+        except Exception as exc:  # RC-3: the audit row is best-effort
+            logger.warning("QHM %s owner-stop audit row failed: %s", pos.symbol, exc)
+
+    def _owner_stop_risk(self, pos: HoldPosition, price: float) -> str:
+        """The loss at the owner's stop in dollars and as a share of equity (shown, never hidden)."""
+        loss = round(pos.qty_filled * (float(pos.avg_entry_price or 0.0) - price), 2)
+        equity = self._get_account_equity()
+        share = "{:.1%}".format(loss / equity) if math.isfinite(equity) and equity > 0 else "unknown share"
+        return ("owner stop: $%.2f at risk (%s of equity) at $%.2f; QHM losses are outside the daily kill switch"
+                % (loss, share, price))
+
+    def _maybe_apply_owner_stop(self, pos: HoldPosition, order_snapshot: Optional[list]) -> Optional[float]:
+        """QHM-OWNERSTOP-1113 per-cycle pass, before the stop reconcile (which moves the broker stop in place to the
+        record). Returns the live price it read so the reconcile uses the same one (None = not read). Never raises."""
+        if pos.state != HoldState.ACTIVE or pos.direction != "long" or pos.qty_filled <= 0:
+            return None
+        sym = pos.symbol.upper()
+        try:
+            status, price, until, why = self._owner_stop_entry(pos)
+            if status == "fault":
+                if pos.owner_stop_until:   # freeze: no recompute, raise writers stay skipped, record unchanged
+                    logger.critical("QHM %s owner stop frozen at $%.2f (applied until %s): %s [change=qhm-ownerstop-1113]",
+                                    sym, pos.stop_price, pos.owner_stop_until, why)
+                    if self._owner_stop_once(sym, "fault"):
+                        self._alert("🚨 ACTION %s (QHM): %s. Your stop stays at $%.2f and the bot will not change it "
+                                    "until the file is fixed (scripts/qhm_owner_stop.py show)."
+                                    % (sym, why, pos.stop_price))
+                        self._owner_stop_event(pos, "freeze", reason=why)
+                return None
+            if status != "active" or price is None or until is None:
+                if pos.owner_stop_until:
+                    return self._end_owner_stop(pos, "was cleared" if status == "none" else "expired")
+                return None
+            live = self._get_live_price(sym)
+            if live is None or not live > 0:
+                logger.warning("QHM %s owner stop $%.2f not checked this cycle: live price unreadable", sym, price)
+                return None
+            m = self._owner_stop_margin(sym, live)
+            if m is None:
+                logger.warning("QHM %s owner stop $%.2f not checked this cycle: gap margin unreadable", sym, price)
+                return live
+            until_s = until.isoformat()
+            if not price < live - m:   # never through (or within one usual overnight gap of) the market
+                logger.warning("QHM %s owner stop $%.2f not applied: price $%.2f, it must be below $%.2f (margin $%.2f); "
+                               "the stop stays $%.2f [change=qhm-ownerstop-1113]",
+                               sym, price, live, live - m, m, pos.stop_price)
+                if self._owner_stop_once(sym, "refused"):
+                    self._alert("🚨 ACTION %s (QHM): your stop $%.2f is above or too close to the price $%.2f (it must "
+                                "be below $%.2f: the price less one usual overnight gap); not applied. The stop stays "
+                                "$%.2f." % (sym, price, live, live - m, pos.stop_price))
+                    self._owner_stop_event(pos, "refused", owner_price=price, price=live, margin=round(m, 4),
+                                           until=until_s)
+                return live
+            if self._now_et().date() == _prev_weekday(until) and self._owner_stop_once(sym, "expiring"):
+                self._alert("HEADS-UP %s (QHM): your owner stop $%.2f ends after %s; then the bot recalculates its own "
+                            "stop from the average (kept below the market)." % (sym, price, until_s))
+            prior = float(pos.stop_price)
+            if pos.owner_stop_until == until_s and round(prior, 2) == round(price, 2):
+                self._owner_stop_check_broker(pos, order_snapshot, price)
+                self._owner_stop_avg_notice(pos, price)
+                return live
+            prior_until = pos.owner_stop_until
+            pos.stop_price = round(price, 2)
+            pos.owner_stop_until = until_s
+            pos.updated_at = self._now_et().isoformat()
+            if not self._save_state():
+                pos.stop_price, pos.owner_stop_until = prior, prior_until
+                logger.warning("QHM %s owner stop $%.2f not saved — retried next cycle", sym, price)
+                return live
+            risk = self._owner_stop_risk(pos, price)
+            logger.warning("[change=qhm-ownerstop-1113] QHM %s stop set by owner $%.2f until %s (was $%.2f); %s",
+                           sym, price, until_s, prior, risk)
+            if self._owner_stop_once(sym, f"apply {price:.2f} {until_s}"):   # a re-apply after a drift pages once a day
+                self._alert("HEADS-UP %s (QHM): stop set by owner $%.2f until %s (was $%.2f); %s."
+                            % (sym, price, until_s, prior, risk))
+            self._owner_stop_event(pos, "apply", owner_price=price, until=until_s, stop_before=prior, price=live,
+                                   margin=round(m, 4), risk=risk)
+            return live
+        except Exception as exc:  # RC-3: one symbol must not suppress the rest
+            logger.warning("QHM %s owner-stop pass failed: %s", sym, exc)
+            return None
+
+    def _owner_stop_check_broker(self, pos: HoldPosition, order_snapshot: Optional[list], price: float) -> None:
+        """Q40 machine check: the broker's sole QH stop equals the applied override; a mismatch pages (once a day) and
+        the reconcile that follows moves it."""
+        sym = pos.symbol.upper()
+        own = [o for o in (order_snapshot or [])
+               if str(getattr(o, "symbol", "") or "").upper() == sym
+               and str(getattr(o, "client_order_id", "") or "").startswith("QH-")]
+        if len(own) != 1:
+            return   # no stop or several: the coverage paths handle it
+        try:
+            broker_px = float(getattr(own[0], "stop_price", None))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return
+        if round(broker_px, 2) == round(price, 2):
+            return
+        logger.warning("QHM %s broker stop $%.2f differs from the owner stop $%.2f — the reconcile moves it "
+                       "[change=qhm-ownerstop-1113]", sym, broker_px, price)
+        if self._owner_stop_once(sym, "mismatch"):
+            self._alert("🚨 ACTION %s (QHM): the stop at Alpaca is $%.2f but your owner stop is $%.2f; the bot is moving "
+                        "it back to $%.2f." % (sym, broker_px, price, price))
+            self._owner_stop_event(pos, "mismatch", owner_price=price, broker_stop=broker_px)
+
+    def _owner_stop_avg_notice(self, pos: HoldPosition, price: float) -> None:
+        """The average changed since the owner set the stop: the override keeps applying; page once per new average
+        with the new loss at the stop."""
+        data, _why = self._owner_stops()
+        rec = (data or {}).get(pos.symbol.upper()) or {}
+        try:
+            avg_set = round(float(rec["avg_at_set"]), 2)
+        except (TypeError, ValueError, KeyError):
+            return
+        avg_now = round(float(pos.avg_entry_price or 0.0), 2)
+        if avg_now == avg_set:
+            return
+        key = f"{pos.symbol.upper()}|avg|{avg_now}"
+        if _OWNER_STOP_DAY.get(key):
+            return
+        _OWNER_STOP_DAY[key] = True
+        risk = self._owner_stop_risk(pos, price)
+        self._alert("HEADS-UP %s (QHM): the average is now $%.2f (it was $%.2f when you set the stop); your stop stays "
+                    "$%.2f; %s." % (pos.symbol, avg_now, avg_set, price, risk))
+        self._owner_stop_event(pos, "avg_change", owner_price=price, avg_at_set=avg_set, risk=risk)
+
+    def _end_owner_stop(self, pos: HoldPosition, why: str) -> Optional[float]:
+        """Expiry or clear: QHM's design stop from the current average is used only if it is below live - m; otherwise
+        the owner's last price stays as QHM's stop (never raised through the market). Re-baselines the restop count so
+        QHM's own trail and restop rules take over from here. Returns the live price read (None = not read)."""
+        sym = pos.symbol.upper()
+        live = self._get_live_price(sym)
+        if live is None or not live > 0:
+            logger.warning("QHM %s owner stop %s; live price unreadable — the stop stays $%.2f until the next cycle",
+                           sym, why, pos.stop_price)
+            return None
+        m = self._owner_stop_margin(sym, live)
+        if m is None:
+            logger.warning("QHM %s owner stop %s; gap margin unreadable — the stop stays $%.2f until the next cycle",
+                           sym, why, pos.stop_price)
+            return live
+        old = float(pos.stop_price)
+        design = self._design_stop_price(sym, float(pos.avg_entry_price or 0.0))
+        if design is None and float(pos.avg_entry_price or 0.0) > 0:
+            logger.warning("QHM %s owner stop %s; QHM's own stop unreadable — the stop stays $%.2f until the next cycle",
+                           sym, why, pos.stop_price)
+            return live
+        if design is not None and design < live - m:
+            new, rule = round(float(design), 2), "the bot's own stop from the average"
+        else:
+            new, rule = round(old, 2), "your last price kept (the bot's own stop would be too close to the market)"
+        # cold review 11-14 + owner rule "never a stop below entry on a well-in-profit lot" (same keep as the restop
+        # rule's step f): a lot in profit keeps its higher stop when the override ends; the end never lowers it
+        if live > float(pos.avg_entry_price or 0.0) and old < live and old > new:
+            new, rule = round(old, 2), "your last price kept (the position is in profit, so the stop is not lowered)"
+        prior = (pos.stop_price, pos.owner_stop_until, pos.restop_qty)
+        pos.stop_price = new
+        pos.owner_stop_until = None
+        pos.restop_qty = pos.qty_filled
+        pos.updated_at = self._now_et().isoformat()
+        if not self._save_state():
+            pos.stop_price, pos.owner_stop_until, pos.restop_qty = prior
+            logger.warning("QHM %s owner stop end not saved — retried next cycle", sym)
+            return live
+        logger.warning("[change=qhm-ownerstop-1113] QHM %s owner stop %s: stop $%.2f -> $%.2f (%s; design %s, price "
+                       "%.2f, margin %.2f)", sym, why, old, new, rule, design, live, m)
+        self._alert("HEADS-UP %s (QHM): your owner stop %s; the stop moves $%.2f -> $%.2f (%s)."
+                    % (sym, why, old, new, rule))
+        self._owner_stop_event(pos, "end", reason=why, stop_before=old, stop_after=new, design_stop=design, price=live,
+                               margin=round(m, 4))
+        return live
+
     def _record_adoption(self, pos: HoldPosition, added: int, total: int, old_stop: str, new_stop: str) -> None:
         """Audit line in trade_events.jsonl for a proven-share adoption (decision explainability)."""
         _te = {"ts": datetime.now(PT).isoformat(), "event": "qhm_proven_share_adoption", "symbol": pos.symbol,
@@ -8392,9 +8747,10 @@ class QuarterlyHoldManager:
             fh.write(json.dumps(_te) + "\n")
 
     def _reconcile_stop_coverage(
-        self, pos: HoldPosition, order_snapshot: list
+        self, pos: HoldPosition, order_snapshot: list, live: Optional[float] = None
     ) -> tuple[bool, bool]:
-        """Reconcile one QHM stop from a caller-owned immutable book snapshot.
+        """Reconcile one QHM stop from a caller-owned immutable book snapshot. ``live`` (QHM-OWNERSTOP-1113): the price
+        the owner-stop pass already read this cycle, so both use one live read; None = read it here.
 
         Returns (skip_stray_guard_for_symbol, block_remaining_qhm_loop_for_symbol).
         """
@@ -8453,7 +8809,7 @@ class QuarterlyHoldManager:
             # recorded price would be at or above the live price but the broker's own QH stop rests below it (e.g. a
             # replace whose reply was lost), the broker's price is adopted instead of moving the stop up through the
             # market (the 11-12 NVDA near-sale shape).
-            _live = self._get_live_price(pos.symbol)
+            _live = live if live is not None and live > 0 else self._get_live_price(pos.symbol)
             if _live is None or _live <= 0:
                 # cannot tell where the market is: never move a stop's PRICE blind (round-3 review); retry next cycle
                 logger.warning("QHM %s stop price change deferred: live price unreadable [change=qhm-restop-1112]",
@@ -8464,9 +8820,10 @@ class QuarterlyHoldManager:
                 logger.warning("QHM %s recorded stop $%.2f is at or above the market $%.2f; adopting the broker's QH "
                                "stop $%.2f instead of moving it up [change=qhm-restop-1112]",
                                pos.symbol, pos.stop_price, _live, shape["stop_price"])
-                self._alert("HEADS-UP %s (QHM): the stop at Alpaca is $%.2f; the bot's record said $%.2f, which is "
+                self._alert("HEADS-UP %s (QHM): %s $%.2f; the bot's record said $%.2f, which is "
                             "above the market ($%.2f), so the record now follows Alpaca's lower stop."
-                            % (pos.symbol, shape["stop_price"], pos.stop_price, _live))
+                            % (pos.symbol, "owner stop: the broker stop is" if pos.owner_stop_until
+                               else "the stop at Alpaca is", shape["stop_price"], pos.stop_price, _live))
                 pos.stop_price = round(float(shape["stop_price"]), 2)
         exact = (
             shape["remaining"] == desired_qty
