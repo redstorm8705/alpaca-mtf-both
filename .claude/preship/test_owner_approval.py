@@ -1213,5 +1213,163 @@ class NewMarkerTests(unittest.TestCase):
         self.assertFalse(self.cov("strategy/x.py", self.recs("execution/")))
 
 
+class BoxValidTests(SharedApprovalTests):
+    """APPROVE-BOX-VALID-1114: an approval the hook records must also pass the gate (the recorder's two text forms,
+    and an owner message stored with an app-added reminder part)."""
+    FILE = {"file_path": "execution/thing.py"}
+
+    def hook_first(self, text, parts=None):
+        """Production order: the prompt hook runs BEFORE the owner's entry is written (so no message identity)."""
+        out = run(CAPTURE, {"prompt": text, "session_id": "s", "transcript_path": self.transcript}, self.root)
+        self.owner_entry(text if parts is None else parts)
+        return out
+
+    def owner_entry(self, content, **extra):
+        with open(self.transcript, "a") as f:
+            f.write(json.dumps(dict({"type": "user", "uuid": f"u{self.n_msgs}", "timestamp": self._ts(),
+                                     "origin": {"kind": "human"},
+                                     "message": {"role": "user", "content": content}}, **extra)) + "\n")
+
+    def rec(self, aid="OCI-RESET-1017"):
+        with open(os.path.join(self.adir, f"{aid}.json")) as fh:
+            return json.load(fh)
+
+    def text_of(self, content):
+        return self.cap.transcript_user_text({"type": "user", "uuid": "u", "origin": {"kind": "human"},
+                                              "message": {"role": "user", "content": content}})
+
+    @staticmethod
+    def part(text):
+        return {"type": "text", "text": text}
+
+    REM = "<system-reminder>\nYou are operating in a git worktree.\n</system-reminder>"
+
+    # ── the recorder's two forms ──
+    def test_typed_approval_after_a_box_question_passes_the_gate(self):
+        self.agent_asks_in_box("OCI-RESET-1017 is ready.", "Do you approve OCI-RESET-1017?")
+        self.hook_first("APPROVE OCI-RESET-1017")
+        self.assertEqual(self.rec()["message_identity"], "")
+        self.assertEqual(self.gate("Edit", self.FILE), 0)
+
+    def test_plain_record_without_a_box_question_still_passes(self):
+        self.agent_says("OCI-RESET-1017 is ready for your decision.")
+        self.hook_first("APPROVE OCI-RESET-1017")
+        self.assertEqual(self.gate("Edit", self.FILE), 0)
+
+    def test_plain_form_record_passes_when_a_box_question_was_on_screen(self):
+        """The shape of the records stored before APPROVE-BOX-1112: hashed without the box question."""
+        self.agent_asks_in_box("OCI-RESET-1017 is ready.", "Anything else first?")
+        self.hook_first("APPROVE OCI-RESET-1017")
+        rec = self.rec()
+        rec["agent_sha256"] = hashlib.sha256(b"OCI-RESET-1017 is ready.").hexdigest()
+        self.cap._write(self.root, rec)
+        self.assertEqual(self.gate("Edit", self.FILE), 0)
+
+    def test_record_matching_neither_form_is_refused(self):
+        self.agent_asks_in_box("OCI-RESET-1017 is ready.", "Do you approve OCI-RESET-1017?")
+        self.hook_first("APPROVE OCI-RESET-1017")
+        rec = self.rec()
+        rec["agent_sha256"] = hashlib.sha256(b"some other screen").hexdigest()
+        self.cap._write(self.root, rec)
+        self.assertEqual(self.gate("Edit", self.FILE), 2)
+
+    def test_box_click_without_identity_passes_the_gate(self):
+        self.agent_asks_in_box("Ready. Covers the cycle and its tests.", "Do you approve OCI-RESET-1017?")
+        self.hook_first("Approved")
+        self.assertEqual(self.rec()["mode"], "affirmative")
+        self.assertEqual(self.gate("Edit", self.FILE), 0)
+
+    def test_box_click_after_a_replacing_agent_message_records_nothing(self):
+        self.agent_asks_in_box("Ready.", "Do you approve OCI-RESET-1017?")
+        self.agent_says("Correction: the review of OCI-RESET-1017 failed; it is not ready.")
+        self.hook_first("approved")
+        self.assertFalse(self.approved())
+        self.assertEqual(self.gate("Edit", self.FILE), 2)
+
+    def test_box_asks_about_another_design_than_the_one_typed(self):
+        self.design("b.md", "OTHER-2002", covers="execution/other.py")
+        self.agent_asks_in_box("Both designs are written up.", "Do you approve OTHER-2002?")
+        self.hook_first("APPROVE OCI-RESET-1017")
+        self.assertTrue(self.approved())
+        self.assertFalse(self.approved("OTHER-2002"))
+        self.assertEqual(self.gate("Edit", {"file_path": "execution/other.py"}), 2)
+
+    def test_click_counts_only_for_the_design_the_recorded_form_requests(self):
+        """Agent text asks about one design, the box about another: the click is ambiguous and records nothing."""
+        self.design("b.md", "OTHER-2002", covers="execution/other.py")
+        self.agent_asks_in_box("Do you approve OCI-RESET-1017?", "Do you approve OTHER-2002?")
+        self.hook_first("Approved")
+        self.assertFalse(self.approved())
+        self.assertFalse(self.approved("OTHER-2002"))
+
+    def test_same_owner_text_under_two_box_questions_is_pinned_to_its_own_turn(self):
+        """A record hashed for the second turn's screen is not provable from the first turn, and the reverse."""
+        self.agent_asks_in_box("Ready.", "Do you approve OCI-RESET-1017?")
+        self.owner_entry("Approved")                       # turn 1: typed, never captured
+        self.agent_asks_in_box("Ready.", "Shall I also run the replay?")
+        self.owner_entry("Approved")                       # turn 2: a yes to a different question
+        rec = {"id": "OCI-RESET-1017", "status": "APPROVED", "mode": "affirmative", "message_identity": "",
+               "transcript_path": self.transcript,
+               "prompt_sha256": hashlib.sha256(b"Approved").hexdigest(),
+               "agent_sha256": hashlib.sha256(b"Ready.\nShall I also run the replay?").hexdigest()}
+        self.assertFalse(self.cap.approval_valid(rec, self.root))      # turn 2's screen never asked about this design
+        rec["agent_sha256"] = hashlib.sha256(b"Ready.\nDo you approve OCI-RESET-1017?").hexdigest()
+        self.assertTrue(self.cap.approval_valid(rec, self.root))       # turn 1's screen did
+
+    def test_unreadable_bytes_in_the_transcript_fall_back_to_the_plain_form(self):
+        """Cold review: a bad UTF-8 byte must not raise; a plain-form record stays valid, as before this change."""
+        self.agent_says("OCI-RESET-1017 is ready for your decision.")
+        self.hook_first("APPROVE OCI-RESET-1017")
+        with open(self.transcript, "ab") as f:
+            f.write(b'{"type": "assistant", "note": "\xe2\x82"}\n')      # half of a multi-byte character
+        self.assertTrue(self.cap.approval_valid(self.rec(), self.root))
+
+    def test_record_with_identity_and_box_form_hash_is_valid(self):
+        """Cold review: the owner's entry was already written when the hook ran (identity recorded)."""
+        self.agent_asks_in_box("Ready. Covers the cycle and its tests.", "Do you approve OCI-RESET-1017?")
+        self.owner_says("Approved")
+        rec = self.rec()
+        self.assertTrue(rec["message_identity"])
+        self.assertTrue(self.cap.approval_valid(rec, self.root))
+
+    def test_number_only_reply_is_proven_against_the_box_question(self):
+        self.agent_asks_in_box("The design is written up.", "Do you approve OCI-RESET-1017?")
+        self.hook_first("approve 1017")
+        self.assertTrue(self.approved())
+        self.assertEqual(self.gate("Edit", self.FILE), 0)
+
+    # ── owner message stored with an app-added reminder part ──
+    def test_reminder_part_before_the_owner_words(self):
+        self.assertEqual(self.text_of([self.part(self.REM), self.part("APPROVE OCI-RESET-1017")]), "APPROVE OCI-RESET-1017")
+
+    def test_several_reminder_parts_and_one_after_the_words(self):
+        self.assertEqual(self.text_of([self.part(self.REM), self.part("  " + self.REM + "\n"), self.part("yes"),
+                                       self.part(self.REM)]), "yes")
+
+    def test_reminder_inside_the_owner_part_is_refused(self):
+        self.assertEqual(self.text_of([self.part(self.REM), self.part("ok " + self.REM + " APPROVE OCI-RESET-1017")]), "")
+        self.assertEqual(self.text_of(self.REM + " APPROVE OCI-RESET-1017"), "")
+        self.assertEqual(self.text_of([self.part(self.REM + " APPROVE OCI-RESET-1017")]), "")
+
+    def test_unclosed_or_doubled_reminder_part_is_refused(self):
+        self.assertEqual(self.text_of([self.part("<system-reminder>\nnote"), self.part("APPROVE OCI-RESET-1017")]), "")
+        self.assertEqual(self.text_of([self.part(self.REM + self.REM), self.part("APPROVE OCI-RESET-1017")]), "")
+
+    def test_only_reminder_parts_is_not_owner_text(self):
+        self.assertEqual(self.text_of([self.part(self.REM), self.part(self.REM)]), "")
+        self.assertEqual(self.text_of([self.part(self.REM)]), "")
+
+    def test_tool_result_or_slash_command_is_still_refused(self):
+        self.assertEqual(self.text_of([self.part(self.REM), {"type": "tool_result", "content": "x"},
+                                       self.part("APPROVE OCI-RESET-1017")]), "")
+        self.assertEqual(self.text_of([self.part(self.REM), self.part(
+            "<command-name>/session-start</command-name><command-args>APPROVE OCI-RESET-1017</command-args>")]), "")
+
+    def test_reminder_message_approval_passes_the_gate(self):
+        self.agent_says("OCI-RESET-1017 is ready for your decision.")
+        self.hook_first("APPROVE OCI-RESET-1017", parts=[self.part(self.REM), self.part("APPROVE OCI-RESET-1017")])
+        self.assertEqual(self.gate("Edit", self.FILE), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
