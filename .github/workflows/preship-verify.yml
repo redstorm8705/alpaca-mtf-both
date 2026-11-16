@@ -262,6 +262,8 @@ jobs:
           python3 .claude/preship/test_reviewer_swap.py
           # the owner-approval parser itself (REVIEWER-SWAP-1025 changed it: codex exec sessions are never owner text)
           python3 .claude/preship/test_owner_approval.py
+          # an investigation reply must carry a fix, a prevention and a tracked item (INVESTIGATE-GATE-1113; added to CI by APPROVE-BOX-VALID-1114)
+          python3 .claude/preship/test_investigate_propose_gate.py
           # four tier names only — Day / Swing / QHM / F6 (CEO 2026-10-07); fails on a retired name in person-facing text
           python3 tests/test_tier_names.py
           python3 .claude/preship/gai_health.py canary

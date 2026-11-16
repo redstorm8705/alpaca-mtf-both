@@ -359,6 +359,17 @@ def ids_requested(agent_text: str, candidates: list) -> list:
 
 # ── transcripts (Claude and Codex) ───────────────────────────────────────────────────────────────────────────────
 
+_REMINDER_OPEN, _REMINDER_CLOSE = "<system-reminder>", "</system-reminder>"
+
+
+def _is_reminder_part(text: str) -> bool:
+    """APPROVE-BOX-VALID-1114: True when a text part is wholly ONE app-added reminder block (surrounding whitespace
+    allowed). A part with words outside the block, two blocks, or an unclosed tag is not one."""
+    s = (text or "").strip()
+    return (s.startswith(_REMINDER_OPEN) and s.endswith(_REMINDER_CLOSE)
+            and s.count(_REMINDER_OPEN) == 1 and s.count(_REMINDER_CLOSE) == 1)
+
+
 def _claude_text(entry: dict) -> str:
     raw = entry.get("message")
     msg = raw if isinstance(raw, dict) else entry
@@ -368,7 +379,13 @@ def _claude_text(entry: dict) -> str:
     if isinstance(c, list):
         if any(isinstance(p, dict) and p.get("type") == "tool_result" for p in c):
             return ""                                   # tool output, not the owner
-        return "".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+        texts = [p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text"]
+        if len(texts) > 1:
+            # APPROVE-BOX-VALID-1114: the app can store the owner's message as [its own reminder part, the owner's
+            # words]. A part that is wholly a reminder block is not the owner's text; what is left is still checked by
+            # _NOT_HUMAN in transcript_user_text, so a reminder tag inside the owner's own part still refuses the entry.
+            texts = [t for t in texts if not _is_reminder_part(t)]
+        return "".join(texts)
     return ""
 
 
@@ -774,19 +791,28 @@ def approval_valid(rec: dict, root: str) -> bool:
     if not tp or not want or not aid or not os.path.exists(tp) or not transcript_allowed(tp):
         return False
     ident = rec.get("message_identity")
+    stored = str(rec.get("agent_sha256") or "")
+    boxed: "dict | None" = None            # owner entry identity -> agent text + box question (read only if needed)
     for text, identity, agent_text, _ts, _presented in _turns_with_presented(tp, [aid]):
         if hashlib.sha256(text.encode("utf-8")).hexdigest() != want:
             continue
         if ident and identity != ident:
             continue
-        if not ident and rec.get("agent_sha256") \
-                and hashlib.sha256(agent_text.encode("utf-8")).hexdigest() != rec.get("agent_sha256"):
+        # APPROVE-BOX-VALID-1114: the recorder hashes what was on screen before THIS owner entry — the agent text, or
+        # the agent text plus the app-box question (_last_turn / iter_turns). Both forms belong to this one entry.
+        if boxed is None:
+            try:
+                boxed = {i: shown for _u, i, shown in iter_turns(tp)}
+            except (OSError, ValueError):   # e.g. a half-written multi-byte character while the app appends
+                boxed = {}                  # plain form only, exactly as before this change
+        forms = {hashlib.sha256(t.encode("utf-8")).hexdigest(): t for t in (agent_text, boxed.get(identity, agent_text))}
+        if not ident and stored and stored not in forms:
             continue                       # no message id recorded: pin to the turn by the agent message before it
-        if _named_by_word(text, aid) or (names_id(text, aid) and aid in _mentions(agent_text, [aid])):
+        shown = forms.get(stored, agent_text)
+        if _named_by_word(text, aid) or (names_id(text, aid) and aid in _mentions(shown, [aid])):
             return True
-        if rec.get("mode") == "affirmative" and is_affirmative(text) \
-                and hashlib.sha256(agent_text.encode("utf-8")).hexdigest() == rec.get("agent_sha256") \
-                and aid in ids_requested(agent_text, [aid]):
+        if rec.get("mode") == "affirmative" and is_affirmative(text) and stored in forms \
+                and aid in ids_requested(forms[stored], [aid]):
             return True
     return False
 
