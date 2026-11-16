@@ -8,6 +8,20 @@ always current per the DURABLE SYNC RULE (CLAUDE.md). Pushed the moment alignmen
 > `logs/qhm_v2_design_2026-07-11.md` + `logs/ownership_ledger_design_2026-07-10.md` (active design).
 > Master Brain: `notebooklm use $(cat ~/.claude/master_brain_id)`.
 
+## ⏩ LATEST (2026-11-16 Mon, Claude signed) — pick up here
+
+- **Merged since the 11-11 block:** PR 951 KILL-BACKUP-1111 (11-12), PR 972 QHM-OWNERSTOP-1113 and PR 973
+  INVESTIGATE-GATE-1113 (both 11-15). origin/main is 306564e. The "NEXT (P0)" line in the 11-11 block below is out of
+  date: `fills_through_utc` is at `execution/ownership_guard.py:1960` and `execution/risk_manager.py:638` on main.
+- **Server, checked 2026-11-16 18:16 UTC:** git HEAD ee27059; mtf-bot, mtf-writer, mtf-http and nginx all `active`.
+- **Open designs. Each has a design record with an Approval-ID and no valid owner approval record yet:**
+  1. APPROVE-BOX-VALID-1114: `logs/design_records/approve_box_valid_2026-11-16.md`.
+  2. QHM-OWNERBUY-1113: `logs/design_records/qhm_owner_buy_2026-11-13.md`.
+  3. HOLD-NEWS-REVIEW-1113: `logs/design_records/hold_news_review_2026-11-13.md`.
+  4. QHM-OVERWEIGHT-1113: `logs/design_records/qhm_overweight_2026-11-13.md` (its ceiling is an owner choice).
+- **Uncommitted local files (this Mac only):** `.claude/worktrees/vix-slice-1-continue-e9b763/research/day_orb_data.py`
+  and `day_orb_replay.py`; `.claude/worktrees/_carryover_1114/bt_engine/` (9 files).
+
 ## ⏩ LATEST (2026-11-11 Wed night, Claude signed) — pick up here
 
 - **Shipped tonight (OCI 94fc833, services restarted):** CARD-STATS-1111 (PR 947: midday/nightly audit cards were
