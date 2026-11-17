@@ -1,0 +1,64 @@
+Nightly Gemini Audit — 2026-11-16
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there is a persistent, recurring ledger synchronization failure and a potential logic error in the `execution.portfolio_tracker` regarding GOOGL.
+
+### LOG ANOMALIES
+*   **Persistent Ledger Sync Failure:** `execution.ownership_guard sync_ledger` reports "impossible negative protected replay GOOGL/qhm=-2" repeatedly (e.g., 2026-11-16 20:35:20, 20:37:20, 20:39:19, 20:40:20, 20:41:19, 20:42:20, 20:48:19, 20:49:20, 20:55:20, 20:56:20, 21:00:20, 21:02:20). This indicates a state mismatch between the `quarterly_hold_manager` (QHM) and the `portfolio_tracker`.
+*   **Unresolved Admissions:** `ledger_sync` consistently reports "9 reducing admission(s) remain unresolved" (dropping to 8 at 21:00:20). This suggests a leak in the ledger reconciliation process.
+*   **FIFO Orphan:** `execution.portfolio_tracker` reports "FIFO orphan: closing fill for GOOGL has no prior lot and no tracker record" at multiple timestamps (20:35:08, 20:42:02, 20:49:07, 20:55:52). This confirms the tracker is failing to associate fills with the QHM-managed GOOGL position.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity:** The PLTR trade (2026-11-16 12:26:35) shows an entry at 159.44 and an exit at 160.04 (size 8). The realized P&L is recorded as -4.8. Calculation: (160.04 - 159.44) * 8 = +4.8. The bot recorded a loss of -4.8 instead of a gain of +4.8. This is a **P&L sign/calculation error**.
+*   **Stop-Hit Rate:** The recent day-trade performance is heavily skewed toward stop-outs (e.g., AMZN, AMD, PLTR, NVD, MUD). The win rate is low, and the bot is frequently hitting protective stops.
+*   **Score Correlation:** The system is currently in a "STRESSED" MRI state, and the "PREMARKET RED LOCKOUT" is blocking all longs. The bot is correctly adhering to these constraints, but the resulting short-only bias is not yielding positive P&L in the current sample.
+
+### TRADE INTEGRITY
+*   **PLTR (2026-11-16 12:58:10):** As noted above, the P&L sign is inverted. The exit price (160.04) is higher than the entry price (159.44) for a short position, which should result in a profit, but the ledger shows a loss.
+
+### MODIFIED FILE FINDINGS
+No source files were modified in the last 24 hours.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H1: OBSOLETE
+*   P5-H2: UNTOUCHED
+*   P5-H3: UNTOUCHED
+*   P5-H4: UNTOUCHED
+*   P5-H5: FIXED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+*   P5-L1: UNTOUCHED
+*   P5-L2: UNTOUCHED
+*   P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | HIGH | execution.portfolio_tracker | P&L calculation inversion for short positions |** The `realized_pnl` for the PLTR short trade (entry 159.44, exit 160.04) was calculated as -4.8. For a short, (Entry - Exit) * Qty = (159.44 - 160.04) * 8 = -4.8. The logic is using (Exit - Entry) * Qty, which is correct for longs but incorrect for shorts.
+*   **INFRASTRUCTURE | MEDIUM | execution.ownership_guard | QHM/Ledger state desync |** The `sync_ledger` function is failing to reconcile QHM positions, leading to "impossible negative protected replay" errors. This indicates the `ownership_guard` is not correctly accounting for QHM-managed lots.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Immediate Audit of P&L Logic:** Review `execution.portfolio_tracker` to ensure `realized_pnl` calculation correctly accounts for the `direction` (long vs. short) of the trade.
+2.  **Ledger Reconciliation:** Investigate why `execution.ownership_guard` is failing to sync with `quarterly_hold_manager` for GOOGL. The "impossible negative" suggests the tracker thinks the position is closed or smaller than the QHM believes.
+3.  **Address Ledger Admissions:** The "9 reducing admission(s) remain unresolved" warning indicates a memory or state leak in the `ledger_sync` process; this needs to be cleared to prevent P&L drift.
+4.  **Review Stop-Out Frequency:** Given the high frequency of stop-outs in the last 24h, evaluate if the `INTRADAY_STOP_ATR_MULT` is too tight for the current "STRESSED" market regime.
+================================================================================
+BROKER GROUND TRUTH (2026-11-16, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=334m no-broker-stop=0m [07:26-07:26] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=day/qhm exposed=17m no-broker-stop=0m [07:30-07:30] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  PLTR   COVERED                  owners=day exposed=32m no-broker-stop=0m [12:26-12:26, 12:58-12:58] rejected_stop_orders=0
+  QQQM   COVERED                  owners=core exposed=6m no-broker-stop=3m [06:30-06:31, 06:33-06:34, 06:36-06:36] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
