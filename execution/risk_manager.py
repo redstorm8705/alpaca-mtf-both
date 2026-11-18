@@ -604,6 +604,33 @@ _LAST_GOOD_CHECKPOINT: dict = {}   # KILL-BACKUP-1111: {"claims": {SYM: (active,
 _BACKUP_STATE: dict = {"day": "", "cycles": 0, "first": None, "paged": False}
 
 
+def _qhm_closed_exits(pt_date: str) -> "dict[str, tuple[str, int]] | None":
+    """KILL-EXIT-JOIN-1117 (owner-approved; logs/design_records/kill_exit_join_2026-11-17.md, rev 4): QHM's own
+    record of how each CLOSED hold was closed, {SYM: (exit_order_id, exit_qty)}, read-only from QHM's state file (the
+    path constant QHM's cross-process readers use). A CLOSED record without both fields is left out (its exit fill
+    then stays unresolved). Missing file, I/O error or unparseable JSON (for example a read while QHM writes) -> None
+    and one WARNING per distinct error per PT day; the caller keeps the join unresolved. Never raises."""
+    try:
+        from execution.quarterly_hold_manager import _QHM_STATE_FILE
+        raw = json.loads(Path(_QHM_STATE_FILE).read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("QHM state root is not a JSON object")
+        out: dict[str, tuple[str, int]] = {}
+        for sym, rec in raw.items():
+            if not isinstance(rec, dict) or rec.get("state") != "CLOSED":
+                continue
+            oid = rec.get("exit_order_id")
+            qty = _whole_positive(rec.get("exit_qty"))
+            if isinstance(oid, str) and oid.strip() and qty is not None:
+                out[str(sym).upper()] = (oid.strip(), qty)
+        return out
+    except Exception as e:  # noqa: BLE001 — RC-3: logged; the join stays unresolved
+        if _once_today(pt_date, f"kej-unreadable:{type(e).__name__}:{e}"):
+            logger.warning("[change=kill-exit-join-1117] closed-record unreadable (%s) — the protected fill stays "
+                           "unresolved", e)
+        return None
+
+
 def _source_order_id(source: object) -> str:
     """The order id inside an incremental writer's source ("qhm_registered_stop:<id>", "f6_trim:<id>" or a bare id)."""
     return str(source or "").rsplit(":", 1)[-1].strip()
@@ -1915,11 +1942,50 @@ class RiskManager:
             buy_qty: dict = defaultdict(float)
             sell_qty: dict = defaultdict(float)
             traded: set = set()
-            for sym, side, q, px, fill_tier in fills:
+            # KILL-EXIT-JOIN-1117: each fill's order id (aligned with `fills` only when they are the same cached read)
+            _fill_oids = _intraday_cache.get("fill_oid") if _intraday_cache.get("fills") is fills else None
+            if _fill_oids is not None and len(_fill_oids) != len(fills):
+                _fill_oids = None
+            _exits_read: dict = {}   # QHM's closed records, read at most once in this check
+
+            def _qhm_own_exit(idx: int, sym: str, side: str, fill_tier: Any) -> bool:
+                """True only for QHM's own full exit of `sym`: a qhm-tagged sell whose order is the exit order on
+                QHM's CLOSED record, whose total filled quantity today equals that record's exit_qty, while the
+                broker holds no position in `sym`. Anything else (F6 included) stays unresolved."""
+                if fill_tier != "qhm" or side != "sell" or _fill_oids is None:
+                    return False
+                if sym in broker_net_by_sym:
+                    return False
+                oid = str(_fill_oids[idx] or "").strip()
+                if not oid:
+                    return False
+                pt_day = datetime.now(_PT).strftime("%Y-%m-%d")
+                if "rows" not in _exits_read:
+                    _exits_read["rows"] = _qhm_closed_exits(pt_day)
+                rows = _exits_read["rows"]
+                rec = rows.get(sym) if rows is not None else None
+                if rec is None or rec[0] != oid:
+                    return False
+                order_qty = sum(
+                    fq for (_s, _sd, fq, _p, _t), fo in zip(fills, _fill_oids, strict=True)
+                    if str(fo or "").strip() == oid
+                )
+                if order_qty != rec[1]:
+                    if _once_today(pt_day, f"kej-mismatch:{sym}:{oid}:{order_qty}"):
+                        logger.warning(
+                            "[change=kill-exit-join-1117] QHM exit quantity mismatch: %s order %s filled %s today, "
+                            "closed record exit_qty %s — unresolved", sym, oid, order_qty, rec[1])
+                    return False
+                if _once_today(pt_day, f"kej-excluded:{sym}"):
+                    logger.info("[change=kill-exit-join-1117] QHM own exit excluded: %s order %s qty %s",
+                                sym, oid, order_qty)
+                return True
+
+            for idx, (sym, side, q, px, fill_tier) in enumerate(fills):
                 # Exact protected-tier fills belong to the long-horizon book.
                 # Unknown/unreadable ownership is included, never excluded.
                 if exact_protected and fill_tier in {"qhm", "forever6"}:
-                    if sym not in (protected_qty or {}):
+                    if sym not in (protected_qty or {}) and not _qhm_own_exit(idx, sym, side, fill_tier):
                         _kill_join_unresolved(
                             "protected_fill_on_ledger_flat_symbol", sym, 0.0,
                             broker_net_by_sym.get(sym, 0.0), fills, positions,
