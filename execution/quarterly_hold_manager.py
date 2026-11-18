@@ -382,6 +382,14 @@ def _prev_weekday(d: date) -> date:
 # ---------------------------------------------------------------------------
 @dataclass
 class HoldPosition:
+    """One quarterly hold's persisted record (data/state/quarterly_holds.json).
+
+    exit_order_id / exit_qty (KILL-EXIT-JOIN-1117): when QHM's own stop closes the hold (registered-stop or
+    external-close path), the id of that stop order and the QHM shares it closed, written in the same save as the
+    CLOSED transition. The kill check reads both, read-only, to recognise QHM's own exit fill on a symbol the
+    ownership ledger already shows flat. None = not recorded (an older state file, or a close that was not QHM's
+    own stop); the kill check then leaves that fill unresolved.
+    """
     symbol: str
     direction: str                         # "long" (all current picks)
     target_equity_pct: float               # 0.20 / 0.15 / 0.10
@@ -437,6 +445,8 @@ class HoldPosition:
     # "fields": dict, or None = remove the request}); applied by the next sweep, kept here so a restart keeps it.
     owner_buy_settle: Optional[dict] = None
     closed_reason: Optional[str] = None        # why the hold closed; "owner_app_sale"/"owner_confirmed" = owner's exit
+    exit_order_id: Optional[str] = None        # KILL-EXIT-JOIN-1117: QHM's own stop that closed the hold
+    exit_qty: Optional[int] = None             # KILL-EXIT-JOIN-1117: QHM shares that stop closed
     # QHM-REENTRY-1108: the re-entry lock written with QHM's own close (same _save_state as the CLOSED transition),
     # and, on a re-added hold, the release that let it back in. Defaults keep older state files loadable; a CLOSED
     # hold from a QHM close path without these fields is treated as locked (lock-only).
@@ -2604,12 +2614,17 @@ class QuarterlyHoldManager:
             pos.updated_at = self._now_et().isoformat()
             if pos.qty_filled <= 0:
                 pos.state = HoldState.CLOSED
+                # KILL-EXIT-JOIN-1117: the closing stop and its QHM shares go into the same save as CLOSED.
+                _prior_exit = (pos.exit_order_id, pos.exit_qty)
+                pos.exit_order_id, pos.exit_qty = (
+                    (str(prior_stop_order_id), stopped_qty) if stopped_qty else (None, None))
                 # QHM-REENTRY-1108: the lock goes into the same save as the CLOSED transition.
                 _rx_px, _rx_day = self._fill_price_day(terminal_order)
                 _rx_snap = self._arm_reentry_lock(
                     pos, self._reentry_route(pos, "qhm_stop_out"), _rx_px, _rx_day)
                 if not self._save_state():
                     self._restore_reentry_lock(pos, _rx_snap)
+                    pos.exit_order_id, pos.exit_qty = _prior_exit
                     pos.qty_filled = prior_qty_filled
                     pos.qty_total = prior_qty_total
                     pos.stop_order_id = prior_stop_order_id
@@ -3317,6 +3332,10 @@ class QuarterlyHoldManager:
                 # Position closed (our GTC stop fired, or an external/manual close)
                 pos.state = HoldState.CLOSED
                 pos.closed_reason = _exit_reason
+                # KILL-EXIT-JOIN-1117: QHM's own filled stop and the QHM shares it closed (QHM's count, so a stale
+                # stop that also sold another tier's share never matches); any other close records none.
+                pos.exit_order_id, pos.exit_qty = (
+                    (str(pos.stop_order_id), int(pos.qty_filled)) if _stop_filled else (None, None))
                 pos.updated_at = self._now_et().isoformat()  # RC-1
                 if _stop_filled:
                     # QHM-REENTRY-1108: QHM's own stop (or its trailing profit-lock stop) filled — lock it, saved in
