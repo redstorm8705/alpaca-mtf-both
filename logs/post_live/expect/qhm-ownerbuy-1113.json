@@ -1,0 +1,15 @@
+{
+  "change": "qhm-ownerbuy-1113",
+  "tier": 2,
+  "paths": ["execution/quarterly_hold_manager.py", "scripts/qhm_owner.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "\\[change=qhm-ownerbuy-1113\\]"}],
+  "expected_rate": "only when the owner writes a buy request with scripts/qhm_owner.py; zero on days with no request",
+  "window_sessions": 10,
+  "reversal": "an owner request is bought twice or above the owner's price, a filled share is left without a QH stop covering it, an owner buy executes while the persisted kill state, a news halt or a venue halt blocks new entries, or a Slack line states a fill quantity, price or stop that differs from the Alpaca order and position",
+  "metrics": [
+    {"name": "owner_buy_filled_vs_requested", "source": "logs/trade_events.jsonl event qhm_owner_buy filled_total vs request_qty", "direction": "none", "bound": "filled_total <= request_qty for every request"},
+    {"name": "qh_stop_qty_after_fill", "source": "Alpaca open QH stop orders vs QHM qty_filled after each qhm_owner_buy fill row", "direction": "none", "bound": "equal by the next QHM cycle, or a stop_mismatch ACTION page"}
+  ],
+  "verification": "tests/test_qhm_owner_buy_1113.py",
+  "baseline_exempt_reason": ""
+}

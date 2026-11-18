@@ -1026,8 +1026,9 @@ class AllocatorTests(unittest.TestCase):
             text = (root / filename).read_text()
             self.assertGreaterEqual(text.count("live_admit("), count, filename)
         qhm = (root / "execution/quarterly_hold_manager.py").read_text()
-        # One implementation, used by both dip-add and ACTIVE tranche adds.
-        self.assertEqual(qhm.count("_stop_safe_add("), 3)
+        # One implementation (the definition), used by dip-add, ACTIVE tranche adds and the owner buy
+        # (QHM-OWNERBUY-1113); every call runs live_admit inside _stop_safe_add, so no QHM add skips the allocator.
+        self.assertEqual(qhm.count("_stop_safe_add("), 4)
         self.assertIn(
             'live_release(_capital.lease, "stop_filled_before_add_submit")', qhm
         )

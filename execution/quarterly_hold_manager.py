@@ -40,6 +40,7 @@ RC compliance:
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import math
@@ -178,6 +179,11 @@ _OWNER_TRIM_FILL_POLL_TIMEOUT_SECONDS = 15.0   # same bounded fill poll as the e
 # hold with an end date, written by scripts/qhm_owner_stop.py (tmp + os.replace under a lock). QHM reads it lock-free
 # once per cycle and keeps the hold's stop there until the date; QHM itself never writes this file.
 _OWNER_STOP_PATH                    = _ROOT / "data" / "state" / "qhm_owner_stops.json"
+# QHM-OWNERBUY-1113 (owner-approved; logs/design_records/qhm_owner_buy_2026-11-13.md, rev 2): owner buy requests per
+# hold (at market, or held until the live ask is at or below the owner's price), written by scripts/qhm_owner.py (tmp +
+# os.replace under a lock). QHM reads the file once per cycle, buys through _stop_safe_add in market hours and
+# rewrites a request (same lock) only to reserve it, record a fill or remove it. No buy order ever rests at the broker.
+_OWNER_BUY_PATH                     = _ROOT / "data" / "state" / "qhm_owner_buys.json"
 # Earnings-date source log + UNKNOWN page, once per symbol per ET day (design record
 # logs/design_records/qhm_earnings_dates_fix_2026-10-12.md).
 _EARNINGS_SRC_LOGGED: dict = {}
@@ -427,6 +433,9 @@ class HoldPosition:
     # override applied. Marks only that one was applied: the request file stays the source of truth (a missing or
     # unreadable file freezes a marked hold's stop instead of ending the override).
     owner_stop_until: Optional[str] = None
+    # QHM-OWNERBUY-1113: a confirmed owner-buy result whose request-file rewrite failed ({"token": created_at,
+    # "fields": dict, or None = remove the request}); applied by the next sweep, kept here so a restart keeps it.
+    owner_buy_settle: Optional[dict] = None
     closed_reason: Optional[str] = None        # why the hold closed; "owner_app_sale"/"owner_confirmed" = owner's exit
     # QHM-REENTRY-1108: the re-entry lock written with QHM's own close (same _save_state as the CLOSED transition),
     # and, on a re-added hold, the release that let it back in. Defaults keep older state files loadable; a CLOSED
@@ -668,6 +677,10 @@ class QuarterlyHoldManager:
         self._tranche_cycle_attempts = 0
         # QHM-OWNERSTOP-1113: this cycle's read of the owner-stop file (set and cleared once per cycle)
         self._owner_stop_cycle: "Optional[tuple[Optional[dict], str]]" = None
+        # QHM-OWNERBUY-1113: this cycle's read of the owner-buy file (set and cleared once per cycle)
+        self._owner_buy_cycle: "Optional[tuple[Optional[dict], str]]" = None
+        self._owner_buy_halt_cycle: Optional[str] = None   # this cycle's entry-halt reason ("" = none); None = unread
+        self._last_add_proven_fill: Optional[int] = None   # the last stop-safe add's proven order fill, if any
 
         if dry_run:
             _run_beck_tests(self)
@@ -1024,12 +1037,18 @@ class QuarterlyHoldManager:
         """Once per RTH cycle: external close detection + resync + max-hold exit.
         GTC stop is the primary exit path. _initiate_exit() is the 13-week backstop.
         QHM-OWNERSTOP-1113: the owner-stop request file is read once for the whole cycle.
+        QHM-OWNERBUY-1113: so is the owner-buy request file.
         """
         self._owner_stop_cycle = self._load_owner_stops()
+        self._owner_buy_cycle = self._load_owner_buys()
+        # the previous cycle's start bounds the search for THIS cycle's halt_eval row (owner-buy entry-halt check)
+        self._owner_buy_prev_cycle_at = self.__dict__.get("_owner_buy_cycle_at")
+        self._owner_buy_cycle_at = datetime.now(timezone.utc)
         try:
             self._run_weekly_check()
         finally:
             self._owner_stop_cycle = None
+            self._owner_buy_cycle = None
 
     def _run_weekly_check(self) -> None:
         """The body of run_weekly_check (one cycle)."""
@@ -1126,6 +1145,8 @@ class QuarterlyHoldManager:
             logger.warning(
                 "QuarterlyHoldManager run_weekly_check: stray-sell guard error: %s", e
             )
+        # QHM-OWNERBUY-1113: refuse, expire or acknowledge owner buy requests before the per-hold loop (never raises)
+        self._owner_buy_sweep(_coverage_blocked)
         for symbol, pos in list(self._positions.items()):
             if symbol in _coverage_blocked:
                 continue
@@ -1174,6 +1195,11 @@ class QuarterlyHoldManager:
                 # OWNER TRIM: an operator-armed partial sale. When it runs this cycle, no other stop-mutating
                 # work runs on this hold until the next cycle (it just cancelled and restored the stop).
                 if self._maybe_owner_trim(pos):
+                    continue
+
+                # OWNER BUY (QHM-OWNERBUY-1113): an owner request bought through the stop-safe add. When it placed
+                # a buy (or left the stop pending) no other stop-mutating work runs on this hold this cycle.
+                if self._maybe_owner_buy(pos):
                     continue
 
                 # EARNINGS PROFIT-TAKE: evaluated BEFORE the day-5 stop-cancel below so it has
@@ -1236,7 +1262,9 @@ class QuarterlyHoldManager:
         """
         entered: list[str] = []
         today_str = self._now_et().strftime("%Y-%m-%d")  # RC-1
-        self._tranche_cycle_attempts = 0  # stop-safe tranche adds attempted this call
+        # stop-safe adds attempted this cycle. QHM-OWNERBUY-1113: owner buys made in this cycle's run_weekly_check
+        # (which runs first) use the same budget, so a cycle never makes more add attempts than before.
+        self._tranche_cycle_attempts = int(self.__dict__.pop("_owner_buy_cycle_adds", 0) or 0)
 
         for symbol, pos in list(self._positions.items()):
             if pos.state not in (HoldState.PENDING_ENTRY, HoldState.AWAITING_FILL,
@@ -3958,9 +3986,13 @@ class QuarterlyHoldManager:
             logger.warning("QHM dip-add error for %s: %s", pos.symbol, e)
 
     def _stop_safe_add(self, pos: HoldPosition, add_qty: int, live_price: float,
-                       label: str = "dip-add", raise_stop_to: Optional[float] = None) -> AddOutcome:
+                       label: str = "dip-add", raise_stop_to: Optional[float] = None,
+                       max_limit_price: Optional[float] = None, stamp_add_date: bool = True) -> AddOutcome:
         """Allocator-gated, idempotent stop-safe QHM add with exact recovery. Returns an AddOutcome
-        (submitted, filled_qty, open_buy) so callers can tell a pre-submit refusal from a buy that reached the broker."""
+        (submitted, filled_qty, open_buy) so callers can tell a pre-submit refusal from a buy that reached the broker.
+        QHM-OWNERBUY-1113 (defaults leave every earlier caller unchanged): ``max_limit_price`` caps the buy's limit
+        price (an owner's "@price" is never exceeded); ``stamp_add_date=False`` leaves last_dip_add_date alone, so an
+        owner buy does not delay the bot's own dip-add / tranche spacing."""
         # The protected-ownership ledger represents QHM as nonnegative long
         # shares. A short add would require a signed-credit protocol and cannot
         # reuse the long BUY proof below. Refuse before touching its buy-stop.
@@ -4015,6 +4047,8 @@ class QuarterlyHoldManager:
             )
             return AddOutcome(False, 0)
         limit_price = round(live_price * (1 + _LIMIT_PRICE_TOLERANCE), 2)
+        if max_limit_price is not None:
+            limit_price = min(limit_price, float(max_limit_price))   # QHM-OWNERBUY-1113: never above the owner's price
         # Capital admission precedes stop cancellation.  A denied add leaves the
         # existing protective stop untouched and cannot create a naked window.
         from execution.tier_capital_allocator import live_admit, live_bind, live_release, live_order_id
@@ -4027,6 +4061,7 @@ class QuarterlyHoldManager:
                               stop_price=pos.stop_price, exempt_existing_notional=_gf_notional)
         if not _capital.approved:
             logger.warning("QHM dip-add: %s allocator blocked: %s", pos.symbol, _capital.reason)
+            self._last_add_refusal = "the capital allocator refused it (%s)" % _capital.reason   # QHM-OWNERBUY-1113
             return AddOutcome(False, 0)
         _add_coid = live_order_id(_capital.lease)
         if _add_coid is None:
@@ -4306,7 +4341,8 @@ class QuarterlyHoldManager:
         # the broker accepts the buy still blocks a repeat add the same day (both callers read this date).
         pos.stop_recovery_add_submitted = True
         _prior_add_date = pos.last_dip_add_date
-        pos.last_dip_add_date = self._now_et().strftime("%Y-%m-%d")
+        if stamp_add_date:   # QHM-OWNERBUY-1113: an owner buy does not use the bot's own add-spacing date
+            pos.last_dip_add_date = self._now_et().strftime("%Y-%m-%d")
         if not self._save_state():
             pos.stop_recovery_add_submitted = False
             pos.last_dip_add_date = _prior_add_date
@@ -4373,6 +4409,7 @@ class QuarterlyHoldManager:
         if _add_id is None:
             _hold_ambiguous_add("add-order-proof-invalid")
             return AddOutcome(True, 0)
+        self._last_add_order_id = _add_id   # QHM-OWNERBUY-1113: lets the owner-buy pass read this order's fill price
         # Poll for fill: 2s initial + 1s polls to a 15s monotonic deadline.
         _deadline = _time.monotonic() + 15.0
         _time.sleep(2)
@@ -4456,6 +4493,8 @@ class QuarterlyHoldManager:
                     "add-cancel-not-terminal", _max_proven_filled
                 )
                 return AddOutcome(True, 0)
+        # QHM-OWNERBUY-1113: from here the add order's own fill is proven (a full fill, or a confirmed terminal cancel)
+        self._last_add_proven_fill = _filled
         # Credit the confirmed fill to QHM's ledger claim NOW (2026-10-15 NVDA): the ledger otherwise catches up only
         # on the 20-minute sync, and the next cycle's ownership read would cut QHM back to the pre-add count and
         # shrink the stop. Refused (net moved by anything else) -> the hint path below still protects this add.
@@ -8736,6 +8775,883 @@ class QuarterlyHoldManager:
         self._owner_stop_event(pos, "end", reason=why, stop_before=old, stop_after=new, design_stop=design, price=live,
                                margin=round(m, 4))
         return live
+
+    # -----------------------------------------------------------------------
+    # QHM-OWNERBUY-1113 — owner buy requests (logs/design_records/qhm_owner_buy_2026-11-13.md, rev 2)
+    # -----------------------------------------------------------------------
+
+    def _load_owner_buys(self) -> "tuple[Optional[dict], str]":
+        """(requests, "") or (None, why). Lock-free: every writer uses tmp + os.replace, so a reader sees the old or
+        the new file, never a partial one. A missing file means no requests. Never raises."""
+        try:
+            if not _OWNER_BUY_PATH.exists():
+                return {}, ""
+            d = json.loads(_OWNER_BUY_PATH.read_text())
+        except Exception as e:  # RC-3
+            logger.critical("QHM owner-buy: %s unreadable (%s) — no owner buy this cycle [change=qhm-ownerbuy-1113]",
+                            _OWNER_BUY_PATH, e)
+            return None, f"the owner-buy file is unreadable ({e})"
+        if not isinstance(d, dict):
+            logger.critical("QHM owner-buy: %s is not a JSON object — no owner buy this cycle "
+                            "[change=qhm-ownerbuy-1113]", _OWNER_BUY_PATH)
+            return None, "the owner-buy file is not a JSON object"
+        return d, ""
+
+    def _owner_buys(self) -> "tuple[Optional[dict], str]":
+        """This cycle's read of the request file (run_weekly_check reads it once); outside a cycle, a fresh read."""
+        cached = getattr(self, "_owner_buy_cycle", None)
+        return cached if cached is not None else self._load_owner_buys()
+
+    def _update_owner_buy(self, symbol: str, token: Any, fields: Optional[dict],
+                          expect: Optional[dict] = None) -> bool:
+        """Under the lock scripts/qhm_owner.py takes: re-read the file and, only if `symbol`'s request is still the one
+        whose created_at is `token` (a request the owner cancelled or replaced meanwhile is never overwritten), merge
+        `fields` into it (a None value removes that key), or remove the request when `fields` is None; atomic tmp +
+        os.replace. NON-BLOCKING lock with a short bounded retry (this runs on the trading thread). True only on a
+        confirmed write; otherwise self._owner_buy_write_why says why ("gone": the owner cancelled it, "replaced": the
+        owner replaced it, "busy" / "error": retry). Never raises."""
+        import fcntl
+        self._owner_buy_write_why = "error"
+        try:
+            _OWNER_BUY_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _lk = open(str(_OWNER_BUY_PATH) + ".lock", "w")
+        except Exception as e:  # RC-3
+            logger.error("QHM owner-buy: lock unavailable for %s: %s", symbol, e)
+            return False
+        try:
+            for _attempt in range(_OWNER_TRIM_LOCK_RETRIES):
+                try:
+                    fcntl.flock(_lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.1)
+            else:
+                logger.warning("QHM owner-buy: request file busy — %s not updated this cycle", symbol)
+                self._owner_buy_write_why = "busy"
+                return False
+            d = json.loads(_OWNER_BUY_PATH.read_text()) if _OWNER_BUY_PATH.exists() else {}
+            if not isinstance(d, dict) or symbol not in d:
+                logger.warning("QHM owner-buy: %s request is gone (cancelled) — not rewritten", symbol)
+                self._owner_buy_write_why = "gone" if isinstance(d, dict) else "error"
+                return False
+            cur = d[symbol]
+            if (cur.get("created_at") if isinstance(cur, dict) else None) != token:
+                logger.warning("QHM owner-buy: %s request was replaced by the owner — not overwritten", symbol)
+                self._owner_buy_write_why = "replaced"
+                return False
+            # An owner cancel of a buy in flight leaves a `cancelled_unresolved` tombstone under the SAME token. Only a
+            # write that explicitly expects the tombstone (its resolver) may touch it; every other write (settle,
+            # re-arm, seen_at, removal) is treated as the owner having cancelled ("gone"), so it can never re-arm the
+            # request or buy for it again.
+            if (isinstance(cur, dict) and cur.get("status") == "cancelled_unresolved"
+                    and not (expect and expect.get("status") == "cancelled_unresolved")):
+                logger.warning("QHM owner-buy: %s request was cancelled by the owner while its buy ran — not rewritten",
+                               symbol)
+                self._owner_buy_write_why = "gone"
+                return False
+
+            def _cur_value(key: str) -> Any:
+                if key != "filled_qty":
+                    return cur.get(key)
+                try:
+                    return int(cur.get(key) or 0)
+                except (TypeError, ValueError, OverflowError):
+                    return None          # a malformed count never matches, so the write is refused as stale
+
+            # compare-and-set: `expect` = {key: value} the request must still hold (e.g. its status and filled_qty)
+            if expect and any(_cur_value(k) != v for k, v in expect.items()):
+                logger.warning("QHM owner-buy: %s request changed since this write was computed (%s) — not written",
+                               symbol, {k: cur.get(k) for k in expect})
+                self._owner_buy_write_why = "stale"
+                return False
+            if fields is None:
+                del d[symbol]
+            else:
+                rec = dict(cur) if isinstance(cur, dict) else {}
+                for _k, _v in fields.items():
+                    if _v is None:
+                        rec.pop(_k, None)
+                    else:
+                        rec[_k] = _v
+                rec["updated_at"] = datetime.now(PT).isoformat()
+                d[symbol] = rec
+            tmp = _OWNER_BUY_PATH.with_suffix(f".json.{os.getpid()}.tmp")
+            with open(tmp, "w") as f:
+                json.dump(d, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp), str(_OWNER_BUY_PATH))
+            if getattr(self, "_owner_buy_cycle", None) is not None:
+                self._owner_buy_cycle = (d, "")   # later holds in this cycle see the written state, with no re-read
+            self._owner_buy_write_why = ""
+            return True
+        except Exception as e:  # RC-3
+            logger.error("QHM owner-buy: request write failed for %s: %s", symbol, e)
+            return False
+        finally:
+            try:
+                fcntl.flock(_lk, fcntl.LOCK_UN)
+                _lk.close()
+            except Exception as _ue:  # RC-3
+                logger.warning("QHM owner-buy: lock release failed: %s", _ue)
+
+    def _owner_buy_event(self, sym: str, action: str, pos: Optional[HoldPosition] = None, **extra: Any) -> None:
+        """One trade_events.jsonl row (event qhm_owner_buy). `price` is an actual fill price or None. Best-effort."""
+        try:
+            row: dict = {"ts": datetime.now(PT).isoformat(), "event": "qhm_owner_buy", "symbol": sym, "tier": "qhm",
+                         "action": action, "price": None, "size": 0, "score": 0, "mri_level": "N/A",
+                         "data_source": "alpaca_data", "change": "qhm-ownerbuy-1113"}
+            if pos is not None:
+                row.update(qty_held=pos.qty_filled, stop_price=pos.stop_price, stop_order_id=pos.stop_order_id,
+                           avg=pos.avg_entry_price, owner_stop_until=pos.owner_stop_until)
+            row.update(extra)
+            with open(_ROOT / "logs" / "trade_events.jsonl", "a") as fh:
+                fh.write(json.dumps(row, default=str) + "\n")
+        except Exception as exc:  # RC-3: the audit row is best-effort
+            logger.warning("QHM %s owner-buy audit row failed: %s", sym, exc)
+
+    @staticmethod
+    def _owner_buy_int(value: Any) -> Optional[int]:
+        """A whole-number request field, or None (bool, fraction, inf / nan, too large, unreadable). Never raises."""
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            f = float(value)
+            if not math.isfinite(f) or f != int(f):
+                return None
+            return int(f)
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    @classmethod
+    def _owner_buy_fields(cls, rec: Any) -> "Optional[tuple[int, Optional[float], date, int, int]]":
+        """(shares still to buy, limit price or None for a market buy, last ET date, shares the owner asked for, shares
+        bought so far) of a request; None if malformed (a hand edit such as 1e999 included). Never raises."""
+        if not isinstance(rec, dict) or not rec.get("created_at"):
+            return None
+        qty = cls._owner_buy_int(rec.get("qty"))
+        requested = cls._owner_buy_int(rec.get("requested_qty", rec.get("qty")))
+        filled = cls._owner_buy_int(rec.get("filled_qty") or 0)
+        raw_limit = rec.get("limit")
+        try:
+            if isinstance(raw_limit, bool):
+                return None
+            limit = None if raw_limit is None else float(raw_limit)
+            until = date.fromisoformat(str(rec.get("until")))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if (qty is None or requested is None or filled is None or qty < 1 or filled < 0 or qty + filled > requested
+                or (limit is not None and not (math.isfinite(limit) and limit > 0))):
+            return None
+        return qty, limit, until, requested, filled
+
+    @staticmethod
+    def _owner_buy_text(qty: int, limit: Optional[float]) -> str:
+        return "%d at market" % qty if limit is None else "%d when the ask is $%.2f or lower" % (qty, limit)
+
+    @staticmethod
+    def _owner_buy_stop_text(pos: HoldPosition) -> str:
+        """What is true about the stop now: its price and size, or that the bot's stop recovery is re-placing it."""
+        if (getattr(pos.state, "value", pos.state) == HoldState.ACTIVE.value and pos.stop_order_id
+                and pos.stop_price > 0):
+            return "the stop is $%.2f for %d sh" % (pos.stop_price, pos.qty_filled)
+        return ("the stop is being repaired by the bot's stop recovery (see the stop alert for %s)"
+                % pos.symbol.upper())
+
+    def _owner_buy_wait(self, pos: HoldPosition, kind: str, why: str, qty: int, limit: Optional[float],
+                        action: str = "deferred", **extra: Any) -> None:
+        """A request that could not run this cycle stays as it is: one HEADS-UP line and one row per reason per day."""
+        sym = pos.symbol.upper()
+        logger.info("QHM %s owner buy %s waiting: %s [change=qhm-ownerbuy-1113]", sym,
+                    self._owner_buy_text(qty, limit), why)
+        if self._owner_stop_once(sym, f"owner-buy wait {kind}"):
+            self._alert("HEADS-UP %s (QHM): owner buy %s is waiting: %s. Nothing was bought this cycle; %s."
+                        % (sym, self._owner_buy_text(qty, limit), why, self._owner_buy_stop_text(pos)))
+            self._owner_buy_event(sym, action, pos, reason=why, request_qty=qty, limit=limit, **extra)
+
+    def _owner_buy_row_once(self, pos: HoldPosition, kind: str, **extra: Any) -> None:
+        """A routine non-action (ask above the owner's price, add budget used this cycle): one trade_events row per
+        reason per day, no page."""
+        sym = pos.symbol.upper()
+        logger.debug("QHM %s owner buy not run this cycle: %s %s", sym, kind, extra)
+        if self._owner_stop_once(sym, f"owner-buy row {kind}"):
+            self._owner_buy_event(sym, "deferred", pos, reason=kind, **extra)
+
+    _OWNER_BUY_RESULT_TEXT = {
+        "open": "its result is not confirmed: the buy order may still be open at the broker and the bot's add "
+                "recovery is tracking it",
+        "not_sent": "it did not reach the broker: an error stopped it before the order was sent, so nothing was bought",
+    }
+
+    def _owner_buy_review_page(self, sym: str, rec: dict, pos: Optional[HoldPosition], qty: Any,
+                               kind: Optional[str] = None) -> None:
+        """A buy whose result is not proven: the request stays 'reserved' (never retried, so it can never buy more
+        than the owner asked for) and the owner is paged ONCE (recorded in the request; if that write fails, at most
+        once a day). `kind`: "open" (its cancel was not confirmed), "not_sent" (provably never sent), else unknown."""
+        kind = kind or str(rec.get("attempt_result") or "unknown")
+        if rec.get("review_paged"):
+            return
+        marked = self._update_owner_buy(sym, rec.get("created_at"),
+                                        {"review_paged": datetime.now(PT).isoformat(), "attempt_result": kind})
+        cancelled = not marked and getattr(self, "_owner_buy_write_why", "") in ("gone", "replaced")
+        if not marked and not cancelled and not self._owner_stop_once(sym, "owner-buy reserved"):
+            return
+        what = self._OWNER_BUY_RESULT_TEXT.get(kind, "it was sent but its result is not confirmed")
+        if cancelled:
+            self._alert("🚨 ACTION %s (QHM): owner buy %s: %s. You cancelled or replaced the request while it ran. "
+                        "Check %s in Alpaca; the bot's stop recovery protects the shares it can prove."
+                        % (sym, qty, what, sym))
+        else:
+            self._alert("🚨 ACTION %s (QHM): owner buy %s: %s. Nothing more is bought for this request; the bot's stop "
+                        "recovery protects the shares it can prove. Check %s in Alpaca, then clear the request with: "
+                        "python3 scripts/qhm_owner.py cancel %s buy" % (sym, qty, what, sym, sym))
+        self._owner_buy_event(sym, "unconfirmed", pos, reason=what, attempt_result=kind, request=rec,
+                              owner_cancelled=cancelled)
+
+    def _owner_buy_resolve_tombstone(self, sym: str, rec: Any, pos: Optional[HoldPosition]) -> None:
+        """A request the owner cancelled while its buy's result was open or unknown (status 'cancelled_unresolved',
+        written by scripts/qhm_owner.py; `buy SYM` is refused while it exists). The bot never buys for it. It is
+        resolved once QHM's add recovery has finished for the hold (ACTIVE, no ambiguous add, no add or stop recovery
+        pending, no owner-add stage) or the hold is no longer held; then the bot removes it (compare-and-set on its
+        token and status) and pages the change in QHM's share count since the buy was sent."""
+        token = rec.get("created_at") if isinstance(rec, dict) else None
+        before = self._owner_buy_int(rec.get("qty_before")) if isinstance(rec, dict) else None
+        held = pos is not None and pos.state != HoldState.CLOSED
+        settled = (pos is not None and getattr(pos.state, "value", pos.state) == HoldState.ACTIVE.value
+                   and not pos.ambiguous_add_client_order_id and not pos.stop_recovery_add_submitted
+                   and not pos.stop_recovery_requires_qty_proof and pos.owner_add_stage is None)
+        if held and not settled:
+            if pos is not None:
+                self._owner_buy_row_once(pos, "cancelled request waiting for its earlier buy to resolve")
+            return
+        if not self._update_owner_buy(sym, token, None, expect={"status": "cancelled_unresolved"}):
+            if getattr(self, "_owner_buy_write_why", "") not in ("gone", "replaced", "stale"):
+                return   # busy / unreadable: retried next cycle
+        if pos is not None and isinstance(pos.owner_buy_settle, dict) and pos.owner_buy_settle.get("token") == token:
+            pos.owner_buy_settle = None   # a remembered result for the cancelled request is not applied
+            self._save_state()
+        if pos is not None and held and before is not None:
+            outcome = ("QHM holds %d sh now, %d when that buy was sent (%+d; any other QHM change since is included)"
+                       % (pos.qty_filled, before, pos.qty_filled - before))
+        elif held and pos is not None:
+            outcome = "QHM holds %d sh now (the count when it was sent was not recorded)" % pos.qty_filled
+        else:
+            outcome = "QHM no longer holds %s" % sym
+        self._alert("HEADS-UP %s (QHM): the earlier owner buy you cancelled while its result was unconfirmed is now "
+                    "resolved: %s. A new `buy %s` is accepted again. [change=qhm-ownerbuy-1113]" % (sym, outcome, sym))
+        self._owner_buy_event(sym, "tombstone_resolved", pos, reason=outcome, qty_before=before, request=rec)
+
+    def _owner_buy_remember(self, pos: HoldPosition, token: Any, fields: Optional[dict], base_filled: int) -> None:
+        """A confirmed result whose request rewrite failed: kept in the hold record (atomic state save, survives a
+        restart) and applied by the next sweep, so it is never paged as unconfirmed. It records the request it was
+        computed from (token, 'reserved', filled_qty = `base_filled`) for the compare-and-set in
+        _owner_buy_apply_settles."""
+        pos.owner_buy_settle = {"token": token, "base_filled": int(base_filled), "fields": fields}
+        pos.updated_at = self._now_et().isoformat()
+        if not self._save_state():
+            logger.critical("QHM %s owner-buy result could not be saved to the hold record; it is retried from memory "
+                            "this run only [change=qhm-ownerbuy-1113]", pos.symbol)
+
+    def _owner_buy_apply_settles(self) -> None:
+        """Apply each remembered owner-buy result to the request file at most once, by compare-and-set: only while the
+        request still has the same token, is still 'reserved' and still has the filled_qty the result was computed
+        from. A changed request (newer progress, a cancel, a replacement) discards the result with a log line and a
+        row, writing nothing. The remembered result is cleared after the write succeeded; if saving that clear fails,
+        the compare-and-set still refuses a second application (the request no longer matches)."""
+        for sym, pos in list(self._positions.items()):
+            st = pos.owner_buy_settle
+            if not isinstance(st, dict):
+                continue
+            fields = st.get("fields")
+            base = self._owner_buy_int(st.get("base_filled"))
+            wrote = base is not None and self._update_owner_buy(
+                sym, st.get("token"), fields if isinstance(fields, dict) else None,
+                expect={"status": "reserved", "filled_qty": base})
+            why_w = getattr(self, "_owner_buy_write_why", "") if base is not None else "stale"
+            if not wrote and why_w not in ("gone", "replaced", "stale"):
+                continue   # busy / unreadable: retried next cycle
+            if not wrote:
+                logger.warning("QHM %s remembered owner-buy result discarded: the request changed since it was "
+                               "computed (%s) [change=qhm-ownerbuy-1113]", sym, why_w)
+                self._owner_buy_event(sym, "settle_discarded", pos, reason=why_w, settle=st)
+            pos.owner_buy_settle = None
+            pos.updated_at = self._now_et().isoformat()
+            if not self._save_state():
+                logger.critical("QHM %s cleared owner-buy result not saved; the compare-and-set prevents re-applying "
+                                "it", sym)
+
+    def _owner_buy_last_halt_eval(self, floor: datetime) -> Optional[dict]:
+        """The newest `halt_eval` row run_cycle wrote to trade_events.jsonl at or after `floor` (the start of the
+        previous QHM cycle, so the row is this cycle's), read backwards from the end of the file; None when there is
+        none or the file is unreadable."""
+        path = _ROOT / "logs" / "trade_events.jsonl"
+        try:
+            with open(path, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                at = fh.tell()
+                tail = b""
+                while at > 0:
+                    step = min(io.DEFAULT_BUFFER_SIZE, at)
+                    at -= step
+                    fh.seek(at)
+                    chunk = fh.read(step) + tail
+                    lines = chunk.split(b"\n")
+                    tail = lines[0] if at > 0 else b""
+                    body = lines[1:] if at > 0 else lines
+                    for raw in reversed(body):
+                        try:
+                            row = json.loads(raw)
+                            ts = datetime.fromisoformat(str(row.get("ts")))
+                        except (ValueError, TypeError, AttributeError):
+                            continue
+                        if ts.tzinfo is None:
+                            continue
+                        if ts < floor:
+                            return None
+                        if row.get("event") == "halt_eval":
+                            return row
+        except OSError as exc:
+            logger.warning("QHM owner-buy: trade_events unreadable for the halt check (%s)", exc)
+        return None
+
+    def _owner_buy_entry_halt(self) -> Optional[str]:
+        """Why an owner buy must wait now, or None. Computed once per cycle. Scope (owner ruling, round 3):
+        - waits on the PERSISTED daily kill state (data/state/kill_switch_state.json): a tripped kill switch, or an
+          entry halt / control fault the risk manager recorded there;
+        - waits on this cycle's halt_eval legs from run_cycle: news halt keyword, venue closed / SPY not tradable /
+          circuit-breaker band, venue state unknown, session closed;
+        - waits when either cannot be read (unknown halt state, fail closed);
+        - does NOT wait on a per-cycle kill-measure fault that run_cycle only holds in memory (the account read failed,
+          the kill evaluation raised, or exact tier attribution is unresolved when the backup measure also failed):
+          QHM holdings are outside the 7% daily measure (Architecture Invariant 6). An account-read failure stops the
+          buy here only if QHM's own equity / buying-power reads also fail at that moment."""
+        cached = self.__dict__.get("_owner_buy_halt_cycle")
+        if cached is not None:
+            return cached or None
+        reason: Optional[str] = None
+        try:
+            from execution.risk_manager import _load_kill_state
+            st = _load_kill_state()
+            today = self._now_et().strftime("%Y-%m-%d")
+            if st.get("date") == today and (st.get("killed") or st.get("halt_entries")):
+                reason = ("the daily kill switch or an entry halt recorded in the kill state is active today (%s)"
+                          % (st.get("cause") or "daily kill switch"))
+        except Exception as exc:  # RC-3: unreadable -> fail closed
+            reason = "the daily kill-switch state is unreadable (%s)" % exc
+        if reason is None:
+            floor = self.__dict__.get("_owner_buy_prev_cycle_at")
+            row = self._owner_buy_last_halt_eval(floor) if isinstance(floor, datetime) else None
+            legs = row.get("legs") if isinstance(row, dict) else None
+            if row is None:
+                reason = "this cycle's entry-halt check could not be read (none recorded since the last cycle)"
+            elif not isinstance(legs, list):
+                reason = "this cycle's entry-halt check is unreadable"
+            elif legs:
+                reason = "new entries are halted this cycle (%s)" % ", ".join(str(x) for x in legs)
+        self._owner_buy_halt_cycle = reason or ""
+        return reason
+
+    def _owner_buy_traded_since(self, sym: str, since_iso: Any, limit: Optional[float]) -> Optional[bool]:
+        """After an attempt that filled nothing: True once a COMPLETED 5-minute bar (T1, data.fetcher, IEX feed: on
+        this data plan a SIP request ending within the last ~15 minutes is refused) that started at or after the
+        attempt traded at or below the owner's price (any completed bar for a market request). The newest bar returned
+        may still be forming and is not counted. False = no qualifying completed bar yet (including an empty window,
+        which is normal right after the attempt). None = the bar read failed (exception or malformed frame); the
+        request keeps waiting either way, and only None is paged as a read failure."""
+        try:
+            since = datetime.fromisoformat(str(since_iso))
+            if since.tzinfo is None:
+                return None
+            import config as _cfg
+            import pandas as pd
+            from data.fetcher import fetch_bars_window
+            df = fetch_bars_window(sym, _cfg.TF_5M, since.astimezone(timezone.utc),
+                                   self._now_et().astimezone(timezone.utc), feed="iex")
+            if df is None or df.empty:
+                return False     # no bar yet since the attempt (normal right after it): keep waiting, no fault page
+            if "low" not in df.columns:
+                return None
+            bars = []
+            for ts, r in df.iterrows():
+                t = pd.Timestamp(ts)
+                t = t.tz_localize("UTC") if t.tzinfo is None else t
+                bars.append((t.to_pydatetime(), float(r["low"])))
+            bars.sort()
+            return any(t >= since and (limit is None or low <= limit) for t, low in bars[:-1])
+        except Exception as exc:  # RC-3
+            logger.warning("QHM owner-buy: %s bars after the unfilled attempt unreadable (%s)", sym, exc)
+            return None
+
+    def _owner_buy_sweep(self, coverage_blocked: "Optional[set]" = None) -> None:
+        """Once per cycle, before the per-hold loop: apply remembered results; page an unreadable file; remove (with a
+        page and a row) a request that is malformed, is for a symbol QHM does not hold, or is past its date; page a
+        request stuck 'reserved'; acknowledge a new request once; and note (once a day) an armed request whose hold
+        cannot run this cycle. Removing an armed request never touches the broker: no owner buy order rests there.
+        Never raises."""
+        # add attempts this cycle: the tranche add budget (maybe_enter_positions, later in the cycle, starts from it)
+        self._tranche_cycle_attempts = 0
+        self._owner_buy_cycle_adds = 0
+        self._owner_buy_halt_cycle = None
+        blocked = coverage_blocked or set()
+        try:
+            self._owner_buy_apply_settles()
+            data, why = self._owner_buys()
+            if data is None:
+                if self._owner_stop_once("QHM", "owner-buy file"):
+                    self._alert("🚨 ACTION (QHM): %s. No owner buy runs until it is fixed (scripts/qhm_owner.py show)."
+                                % why)
+                    self._owner_buy_event("QHM", "file_unreadable", reason=why)
+                return
+            today = self._now_et().date()
+            for sym, rec in list(data.items()):
+                token = rec.get("created_at") if isinstance(rec, dict) else None
+                parsed = self._owner_buy_fields(rec)
+                status = rec.get("status") if isinstance(rec, dict) else None
+                pos = self._positions.get(sym)
+                held = (pos is not None and pos.qty_filled >= 1 and pos.state in (
+                    HoldState.ACTIVE, HoldState.PENDING_STOP_REPLACE, HoldState.PENDING_EARNINGS))
+                gone = ""
+                action = ""
+                if status == "cancelled_unresolved":
+                    self._owner_buy_resolve_tombstone(sym, rec, pos)   # never bought for; removed once resolved
+                    continue
+                if status == "reserved":
+                    settle = pos.owner_buy_settle if pos is not None else None
+                    if isinstance(settle, dict) and settle.get("token") == token:
+                        continue   # a confirmed result whose rewrite is still being retried: never paged as unconfirmed
+                    if parsed is not None and isinstance(rec, dict):
+                        self._owner_buy_review_page(sym, rec, pos, rec.get("attempt_qty") or rec.get("qty"))
+                        continue
+                    # a malformed reserved request: its buy was started, so its result is unknown
+                    removed = self._update_owner_buy(sym, token, None)
+                    if removed or (getattr(self, "_owner_buy_write_why", "") not in ("gone", "replaced")
+                                   and self._owner_stop_once(sym, "owner-buy malformed reserved")):
+                        self._alert("🚨 ACTION %s (QHM): an owner buy request that was being bought is malformed%s. "
+                                    "The result of its buy is unknown: check %s in Alpaca; the bot's stop recovery "
+                                    "protects the shares it can prove." % (sym, " and was removed" if removed else "",
+                                                                          sym))
+                        self._owner_buy_event(sym, "refused", pos, reason="malformed reserved request; result unknown",
+                                              removed=removed, request=rec)
+                    continue
+                if parsed is None or not isinstance(rec, dict) or status != "armed":
+                    gone, action = "the request is malformed", "refused"
+                elif not held or pos is None or (rec.get("entry_day") and pos.entry_day
+                                                 and rec["entry_day"] != pos.entry_day):
+                    gone, action = "QHM does not hold this stock now (a new name goes through the QHM picks)", "refused"
+                else:
+                    _p_qty, _p_limit, p_until, _p_req, _p_done = parsed
+                    if today > p_until:
+                        gone, action = "it reached its end date %s" % p_until.isoformat(), "expired"
+                if gone:
+                    removed = self._update_owner_buy(sym, token, None)
+                    if not removed and getattr(self, "_owner_buy_write_why", "") in ("gone", "replaced"):
+                        continue   # the owner already cancelled or replaced it
+                    if removed or self._owner_stop_once(sym, f"owner-buy {action}"):
+                        self._alert("HEADS-UP %s (QHM): owner buy request %s: %s. %s No order was at the broker."
+                                    % (sym, action, gone, "The request was removed." if removed else
+                                       "The request could not be removed; it is retried next cycle."))
+                        self._owner_buy_event(sym, action, pos, reason=gone, removed=removed, request=rec)
+                    continue
+                if parsed is not None and pos is not None and (
+                        getattr(pos.state, "value", pos.state) != HoldState.ACTIVE.value or sym in blocked):
+                    self._owner_buy_wait(pos, "hold", "the hold is %s; owner buys run only on an ACTIVE hold whose "
+                                         "stop the bot has verified this cycle"
+                                         % ("blocked from stop changes this cycle" if sym in blocked
+                                            else getattr(pos.state, "value", pos.state)),
+                                         parsed[0], parsed[1])
+                if parsed is not None and isinstance(rec, dict) and not rec.get("seen_at"):
+                    a_qty, a_limit, a_until, _a_req, _a_done = parsed
+                    seen = self._update_owner_buy(sym, token, {"seen_at": datetime.now(PT).isoformat()})
+                    if not seen and getattr(self, "_owner_buy_write_why", "") in ("gone", "replaced"):
+                        continue   # the owner already cancelled or replaced it
+                    if seen or self._owner_stop_once(sym, "owner-buy accepted"):
+                        self._alert("HEADS-UP %s (QHM): owner buy accepted: %s, good through %s. It runs in market "
+                                    "hours through the bot's add path (caps and stop applied); no order rests at the "
+                                    "broker meanwhile." % (sym, self._owner_buy_text(a_qty, a_limit),
+                                                           a_until.isoformat()))
+                        self._owner_buy_event(sym, "accepted", pos, request_qty=a_qty, limit=a_limit,
+                                              until=a_until.isoformat())
+        except Exception as exc:  # RC-3: the sweep must never stop the cycle
+            logger.warning("QHM owner-buy sweep failed: %s", exc)
+
+    def _maybe_owner_buy(self, pos: HoldPosition) -> bool:
+        """Run this hold's armed owner buy request through the existing stop-safe add, one request at a time:
+        market hours only; a fresh two-sided quote from this cycle (a held limit request waits until that ask is at
+        or below the owner's price, and the order is never priced above it); the QHM cap gate at execution, reading
+        the live QHM total (a request that does not fit is reduced to what fits and paged); RegT buying power; a
+        confirmed 'reserved' write before any order. Returns True when a buy reached the broker or the stop was left
+        pending (the caller then skips other stop-mutating work on this hold this cycle). Never raises."""
+        if self.dry_run or pos.state != HoldState.ACTIVE or pos.direction != "long" or pos.qty_filled <= 0:
+            return False
+        sym = pos.symbol.upper()
+        try:
+            data, _why = self._owner_buys()
+            rec = (data or {}).get(sym)
+            if not isinstance(rec, dict) or rec.get("status") != "armed":
+                return False
+            parsed = self._owner_buy_fields(rec)
+            if parsed is None:
+                return False   # the sweep removes it
+            qty, limit, until, requested, done_before = parsed
+            if self._now_et().date() > until:
+                return False   # the sweep removes it
+            if rec.get("entry_day") and pos.entry_day and rec["entry_day"] != pos.entry_day:
+                return False   # the sweep removes it
+            if pos.owner_add_stage is not None or not pos.stop_order_id or pos.stop_price <= 0:
+                self._owner_buy_wait(pos, "stop", "the hold's stop is being repaired first", qty, limit)
+                return False
+            used = int(self.__dict__.get("_tranche_cycle_attempts", 0) or 0)
+            if used >= _TRANCHE_MAX_ADDS_PER_CYCLE:
+                # the shared per-cycle add budget is used (each add can hold the trading thread for its fill window)
+                self._owner_buy_row_once(pos, "add budget used this cycle", request_qty=qty, limit=limit,
+                                         adds_this_cycle=used)
+                return False
+            try:
+                from execution.broker import is_market_open as _is_market_open
+                market_open = bool(_is_market_open())
+            except Exception as _mkt_e:  # RC-3: fail closed (no buy) but log
+                logger.warning("QHM owner-buy: market-open check failed for %s (%s)", sym, _mkt_e)
+                market_open = False
+            if not market_open:
+                self._owner_buy_wait(pos, "closed", "the market is closed; it runs after the open", qty, limit)
+                return False
+            # persisted kill / entry halt, news and venue halt legs, unknown halt state; a per-cycle kill-measure fault
+            # alone does not stop it (QHM is outside the 7% measure) — see _owner_buy_entry_halt
+            halt = self._owner_buy_entry_halt()
+            if halt:
+                self._owner_buy_wait(pos, "halt", "%s; it runs when new entries are allowed again" % halt, qty, limit)
+                return False
+            ask, quote_why = self._reentry_ask(sym)
+            if ask is None:
+                self._owner_buy_wait(pos, "quote", "no fresh two-sided quote this cycle (%s)" % quote_why, qty, limit)
+                return False
+            if limit is not None and ask > limit:
+                self._owner_buy_row_once(pos, "ask above the owner's price", ask=ask, limit=limit, request_qty=qty)
+                return False
+            if ask <= pos.stop_price:
+                self._owner_buy_wait(pos, "gap", "the ask $%.2f is at or below the stop $%.2f, so a stop re-placed "
+                                     "after the buy would sit above the market" % (ask, pos.stop_price), qty, limit,
+                                     ask=ask)
+                return False
+            if rec.get("nofill_at"):
+                # the last attempt filled nothing: wait for a completed 5-minute bar trading at or below the price
+                traded = self._owner_buy_traded_since(sym, rec.get("nofill_at"), limit)
+                if traded is None:
+                    self._owner_buy_wait(pos, "bars", "after its unfilled attempt the 5-minute bar check could not be "
+                                         "read (the bar request failed), so the bot cannot tell whether the price traded "
+                                         "at or below it; the request keeps waiting and the check repeats each cycle",
+                                         qty, limit, nofill_at=rec.get("nofill_at"))
+                    return False
+                if not traded:
+                    self._owner_buy_row_once(pos, "waiting for trading at or below the price after an unfilled "
+                                             "attempt", request_qty=qty, limit=limit, nofill_at=rec.get("nofill_at"))
+                    return False
+            # the order's highest possible price: the add path's marketable limit, never above the owner's price;
+            # the caps and buying power are both checked at it
+            max_px = round(ask * (1 + _LIMIT_PRICE_TOLERANCE), 2)
+            if limit is not None:
+                max_px = min(max_px, float(limit))
+            equity = self._get_account_equity()
+            room = self._qhm_cap_room_shares(sym, max_px, equity) if equity > 0 else None
+            if room is None:
+                self._owner_buy_wait(pos, "cap", "the QHM limits could not be checked (equity or a price unreadable)",
+                                     qty, limit)
+                return False
+            buy_qty = min(qty, max(room, 0))
+            note = ""
+            if buy_qty < qty:
+                name_room = int(max(_QHM_PER_NAME_CAP_PCT * equity - max_px * pos.qty_filled, 0) / max_px)
+                note = ("the {:.0%} per-stock limit".format(_QHM_PER_NAME_CAP_PCT) if room == name_room
+                        else "the {:.0%} QHM total / overnight exposure limit".format(_QHM_AGG_CAP_PCT))
+            token = rec.get("created_at")
+            if buy_qty < 1:
+                # reduced to nothing this cycle: the request stays and is re-checked against the caps every cycle
+                self._owner_buy_wait(pos, "cap room", "bought %d of %d; %d still waiting: %s leaves no room now"
+                                     % (done_before, requested, qty, note), qty, limit, action="reduced",
+                                     size_after_caps=0, ask=ask, cap_reason=note)
+                return False
+            try:
+                _acct = self.broker.get_account()
+                bp = float(getattr(_acct, "regt_buying_power", None) or getattr(_acct, "buying_power", 0) or 0)
+            except Exception as _bp_e:  # RC-3
+                logger.warning("QHM owner-buy: %s buying power read failed (%s)", sym, _bp_e)
+                bp = math.nan
+            afford = int(bp / max_px) if math.isfinite(bp) and bp > 0 and max_px > 0 else 0
+            if afford < 1:
+                self._owner_buy_wait(pos, "bp", "buying power does not cover one share at $%.2f (or is unreadable)"
+                                     % max_px, qty, limit)
+                return False
+            if afford < buy_qty:
+                buy_qty, note = afford, "buying power"
+            # the owner's quantity stays in `qty`; this cycle's reserved size is kept apart in attempt_qty
+            if not self._update_owner_buy(sym, token, {"status": "reserved", "attempt_qty": buy_qty,
+                                                       "qty_before": pos.qty_filled, "ask": ask}):
+                why_w = getattr(self, "_owner_buy_write_why", "error")
+                if why_w in ("gone", "replaced"):
+                    self._alert("HEADS-UP %s (QHM): you %s the owner buy request before it ran; nothing was bought for "
+                                "it; %s." % (sym, "cancelled" if why_w == "gone" else "replaced",
+                                             self._owner_buy_stop_text(pos)))
+                    self._owner_buy_event(sym, "cancelled_by_owner", pos, reason=why_w, size=0, request_qty=requested)
+                    return False
+                self._owner_buy_wait(pos, "reserve", "the request file could not be updated this cycle (%s); it is "
+                                     "retried next cycle" % why_w, qty, limit)
+                return False
+            if pos.restop_qty is None:
+                pos.restop_qty = pos.qty_filled   # so the QHM-RESTOP-1112 pass sees this add as an add
+            orig, stop_before = pos.qty_filled, float(pos.stop_price)
+            self._tranche_cycle_attempts = used + 1
+            self._owner_buy_cycle_adds = int(self.__dict__.get("_owner_buy_cycle_adds", 0) or 0) + 1
+            # the add path reports these on the manager (AddOutcome is unchanged for its other callers)
+            self._last_add_order_id = ""
+            self._last_add_proven_fill = None
+            self._last_add_refusal = ""
+            try:
+                outcome = self._stop_safe_add(pos, buy_qty, ask, "owner-buy", max_limit_price=limit,
+                                              stamp_add_date=False)
+            except Exception as exc:  # RC-3: provably unsent only when the pre-submit marker and order id are absent
+                sent = bool(pos.stop_recovery_add_submitted) or bool(self.__dict__.get("_last_add_order_id"))
+                logger.exception("QHM %s owner buy raised in the add path (sent=%s): %s", sym, sent, exc)
+                self._owner_buy_review_page(sym, rec, pos, buy_qty, kind="unknown" if sent else "not_sent")
+                return True
+            self._owner_buy_settle(pos, rec, parsed, buy_qty, note, orig, stop_before, outcome, ask,
+                                   str(self.__dict__.get("_last_add_order_id") or ""))
+            return bool(outcome.submitted or pos.state != HoldState.ACTIVE)
+        except Exception as e:  # RC-3
+            logger.warning("QHM owner-buy error for %s: %s", sym, e, exc_info=True)
+            return pos.state != HoldState.ACTIVE
+
+    def _owner_buy_settle(self, pos: HoldPosition, rec: dict,
+                          parsed: "tuple[int, Optional[float], date, int, int]", buy_qty: int, note: str, orig: int,
+                          stop_before: float, outcome: AddOutcome, ask: float, order_id: str = "") -> None:
+        """After the stop-safe add returned (`order_id`: the add order's broker id): record what was actually bought,
+        recalculate and check the stop, rewrite the request (the owner's remaining quantity stays armed; a filled
+        request is removed) and send one line. The result counts as PROVEN only when the hold is ACTIVE again with no
+        open recovery and QHM's share count moved by exactly the add's proven fill (a zero fill is a confirmed
+        terminal cancel). Anything else leaves the request 'reserved' (never retried, so a request can never buy more
+        than the owner asked for) with one ACTION page."""
+        sym = pos.symbol.upper()
+        token = rec.get("created_at")
+        qty, limit, _until, requested, done_before = parsed
+        if not outcome.submitted:
+            rearm = {"status": "armed", "attempt_qty": None, "qty_before": None}
+            back = self._update_owner_buy(sym, token, rearm)
+            why_w = getattr(self, "_owner_buy_write_why", "")
+            if not back and why_w in ("gone", "replaced"):
+                self._alert("HEADS-UP %s (QHM): you %s the owner buy request; nothing was bought for it this cycle; %s."
+                            % (sym, "cancelled" if why_w == "gone" else "replaced", self._owner_buy_stop_text(pos)))
+                self._owner_buy_event(sym, "cancelled_by_owner", pos, reason=why_w, size=0, request_qty=requested)
+                return
+            if not back:
+                self._owner_buy_remember(pos, token, rearm, done_before)
+            refusal = str(self.__dict__.get("_last_add_refusal") or "")
+            self._owner_buy_wait(pos, "add", "the add path placed no order this cycle (%s)"
+                                 % (refusal or "an ownership, capital or stop check; see the log"), qty, limit,
+                                 add_refusal=refusal or None)
+            return
+        proven_fill = self.__dict__.get("_last_add_proven_fill")
+        fully_proven = (not outcome.open_buy and not pos.ambiguous_add_client_order_id
+                        and getattr(pos.state, "value", pos.state) == HoldState.ACTIVE.value
+                        and outcome.filled_qty >= 0 and pos.qty_filled - orig == outcome.filled_qty)
+        if fully_proven:
+            got = outcome.filled_qty
+        elif isinstance(proven_fill, int) and not outcome.open_buy and proven_fill >= 0:
+            # the add order's own fill is proven (full fill or confirmed terminal cancel), but the stop re-place, the
+            # share-count read or the final save is not: the request follows the proven fill; the stop is repaired
+            got = proven_fill
+        else:
+            logger.critical("QHM %s owner buy %d: result not proven (state %s, filled %d, qty %d -> %d, open_buy %s) — "
+                            "request left reserved [change=qhm-ownerbuy-1113]", sym, buy_qty,
+                            getattr(pos.state, "value", pos.state), outcome.filled_qty, orig, pos.qty_filled,
+                            outcome.open_buy)
+            self._owner_buy_review_page(sym, rec, pos, buy_qty, kind="open" if outcome.open_buy else "unknown")
+            return
+        left = max(qty - got, 0)   # the owner's request still to buy (never the cap-reduced size)
+        cap = ": %s" % note if note and left >= 1 else ""
+        fill_px: Optional[float] = None
+        stop_ok, price_note = True, ""
+        if got >= 1:
+            fill_px = self._owner_buy_fill_price(order_id)
+            if (fully_proven and fill_px is not None and pos.avg_entry_price > 0
+                    and pos.qty_filled == orig + got):
+                # QHM's own quantity-weighted average of its fills (QHM-RESTOP-1112 rev 2 step b), from the actual fill
+                pos.avg_entry_price = (pos.avg_entry_price * orig + fill_px * got) / (orig + got)
+                pos.updated_at = self._now_et().isoformat()
+                self._save_state()
+            if fully_proven:
+                stop_ok, price_note = self._owner_buy_restop(pos)
+            elif getattr(pos.state, "value", pos.state) == HoldState.ACTIVE.value and pos.stop_order_id:
+                stop_ok, _stop_why = self._owner_buy_restop_check(pos)   # the record is not proven; check the stop
+            else:
+                stop_ok = False
+        fills = [f for f in (rec.get("fills") or []) if isinstance(f, list)]
+        if got >= 1:
+            fills.append([got, fill_px])
+        today = self._now_et().strftime("%Y-%m-%d")
+        day_n = (int(rec.get("attempts_today") or 0) if rec.get("attempt_day") == today else 0) + 1
+        fields: Optional[dict] = (
+            {"status": "armed", "qty": left, "filled_qty": done_before + got, "attempt_qty": None, "qty_before": None,
+             "fills": fills, "attempt_day": today, "attempts_today": day_n,
+             # an unfilled attempt waits for trading at or below the price after it (no retry every cycle)
+             "nofill_at": self._now_et().astimezone(timezone.utc).isoformat() if got < 1 else None}
+            if left >= 1 else None)
+        wrote = self._update_owner_buy(sym, token, fields)
+        why_w = "" if wrote else getattr(self, "_owner_buy_write_why", "error")
+        if not wrote and why_w not in ("gone", "replaced"):
+            # a confirmed result whose request could not be rewritten: kept in the hold record, retried every cycle,
+            # never paged as unconfirmed
+            self._owner_buy_remember(pos, token, fields, done_before)
+        file_text = ("" if wrote else
+                     " You cancelled this request while the buy ran; nothing more is bought for it."
+                     if why_w == "gone" else
+                     " You replaced this request while the buy ran; your new request stands as you wrote it."
+                     if why_w == "replaced" else
+                     " The request file could not be updated this cycle; the bot retries it and buys nothing more for "
+                     "this request until it does.")
+        total = done_before + got
+        risk = (round(pos.qty_filled * (pos.avg_entry_price - pos.stop_price), 2)
+                if pos.avg_entry_price > 0 and pos.stop_price > 0 else None)
+        known = [(int(f[0]), float(f[1])) for f in fills if f[1] is not None]
+        if fills and len(known) == len(fills):
+            px_text = "@ $%.2f" % (sum(q * p for q, p in known) / sum(q for q, _p in known))
+            avg_px: Optional[float] = round(sum(q * p for q, p in known) / sum(q for q, _p in known), 4)
+        else:
+            px_text = "(%s)" % ", ".join("%d @ %s" % (int(f[0]), "$%.2f" % float(f[1]) if f[1] is not None
+                                                       else "price pending; see Alpaca") for f in fills)
+            avg_px = None
+        if not fully_proven and not stop_ok:
+            stop_text = "the stop is being repaired by the bot's stop recovery (see the stop alert for %s)" % sym
+        elif not fully_proven:
+            stop_text = "stop $%.2f for %d sh (checked at Alpaca)" % (pos.stop_price, pos.qty_filled)
+        elif price_note == "skipped":
+            stop_text = ("stop $%.2f for %d sh (resized to every share; its price was not recalculated this cycle and "
+                         "is recalculated once the bot's restop pass can run)" % (pos.stop_price, pos.qty_filled))
+        elif price_note == "owner":
+            stop_text = "stop $%.2f kept (your owner stop) for %d sh" % (pos.stop_price, pos.qty_filled)
+        else:
+            stop_text = "stop $%.2f -> $%.2f for %d sh" % (stop_before, pos.stop_price, pos.qty_filled)
+        action = "filled" if got >= 1 and left < 1 else "partial" if got >= 1 else "no_fill"
+        logger.warning("[change=qhm-ownerbuy-1113] QHM %s owner buy %d filled %s; %s (asked %d, after caps %d, "
+                       "still waiting %d, order %s)", sym, got, px_text, stop_text, requested, buy_qty, left,
+                       order_id)
+        self._owner_buy_event(sym, action, pos, price=fill_px, price_pending=bool(got >= 1 and fill_px is None),
+                              size=got, request_qty=requested, size_after_caps=buy_qty, cap_reason=note or None,
+                              remaining=left, filled_total=total, avg_fill_price=avg_px, limit=limit, ask=ask,
+                              stop_before=stop_before, stop_after=pos.stop_price, stop_verified=stop_ok,
+                              stop_price_note=price_note or None, record_proven=fully_proven, risk_at_stop=risk,
+                              attempts_today=day_n, order_id=order_id, request_written=wrote,
+                              request_write_issue=why_w or None)
+        if got < 1 and why_w in ("gone", "replaced"):
+            # the owner cancelled / replaced the request while its (unfilled) buy ran: no retry for this request
+            self._alert("HEADS-UP %s (QHM): you %s the owner buy request while its buy ran; that buy did not fill and "
+                        "was cancelled at the broker (no order is left there); nothing more is bought for this "
+                        "request%s; %s. [change=qhm-ownerbuy-1113]"
+                        % (sym, "cancelled" if why_w == "gone" else "replaced",
+                           "" if why_w == "gone" else " (your new request stands as you wrote it)",
+                           self._owner_buy_stop_text(pos)))
+            return
+        if got < 1 and wrote and not self._owner_stop_once(sym, "owner-buy no fill"):
+            return   # an unfilled attempt: one line a day (every attempt has its row)
+        waiting = left >= 1 and why_w not in ("gone", "replaced")
+        line = "bought %d of %d%s%s" % (total, requested, "; %d still waiting" % left if waiting else "",
+                                        cap if waiting else "")
+        if got >= 1:
+            tail = "; %s" % stop_text
+        else:
+            tail = ("; %d attempt(s) today; the last did not fill in the short window and was cancelled (no order is "
+                    "left at the broker); it tries again after a completed 5-minute bar trades at or below %s; %s"
+                    % (day_n, "the price" if limit is None else "$%.2f" % float(limit),
+                       self._owner_buy_stop_text(pos)))
+        head = ("✅" if stop_ok and fully_proven and not price_note == "skipped" else
+                "HEADS-UP" if stop_ok else "🚨 ACTION")
+        self._alert("%s %s (QHM) owner buy: %s%s%s. %s; QHM losses are outside the daily kill switch.%s%s "
+                    "[change=qhm-ownerbuy-1113]"
+                    % (head, sym, line, " " + px_text if got >= 1 else "", tail,
+                       "$%.2f at risk at the stop" % risk if risk is not None else "Dollars at risk at the stop unknown",
+                       "" if stop_ok or not fully_proven else " The stop does not yet cover every share at the new "
+                                                              "level: see the stop alert for this stock.",
+                       file_text))
+
+    def _owner_buy_stop_cover(self, sym: str, book: list) -> "tuple[int, int]":
+        """(number of resting QH sell stop / stop_limit orders on `sym`, their remaining shares). Other QH sells (an
+        owner-trim limit sell, for example) are not stop coverage and are not counted."""
+        n = 0
+        total = 0
+        for o in book:
+            if (str(getattr(o, "symbol", "") or "").upper() != sym
+                    or not str(getattr(o, "client_order_id", "") or "").startswith("QH-")):
+                continue
+            side_raw = getattr(o, "side", "")
+            type_raw = getattr(o, "type", None) or getattr(o, "order_type", "")
+            if (str(getattr(side_raw, "value", side_raw) or "").lower().split(".")[-1] != "sell"
+                    or str(getattr(type_raw, "value", type_raw) or "").lower().split(".")[-1] not in ("stop",
+                                                                                                   "stop_limit")
+                    or self._order_status(o) not in self._PROTECTIVE_OPEN_STATUSES):
+                continue
+            n += 1
+            total += self._order_remaining(o) or 0
+        return n, total
+
+    def _owner_buy_fill_price(self, order_id: str) -> Optional[float]:
+        """The add order's actual average fill price from the broker (one read), or None. Never an estimate."""
+        if not order_id:
+            return None
+        try:
+            from execution.broker import get_order
+            return self._fill_price_day(get_order(order_id))[0]
+        except Exception as exc:  # RC-3: the price stays pending
+            logger.warning("QHM owner-buy: fill price of order %s unreadable (%s)", order_id, exc)
+            return None
+
+    def _owner_buy_restop(self, pos: HoldPosition) -> "tuple[bool, str]":
+        """After an owner-buy fill (the stop-safe add already re-placed the stop for the new share count): recalculate
+        the stop price by the QHM-RESTOP-1112 rule (_maybe_restop_after_add: never at or above the market, an active
+        owner stop wins), then check that the broker's QH stop quantity equals QHM's share count; page on a mismatch.
+        Returns (stop confirmed covering every QHM share, price note): the note is "" when the recalculation ran (or
+        found nothing to change), "owner" when an active owner stop kept its price, "skipped" when it did not run."""
+        ok, _why = self._owner_buy_restop_check(pos)
+        if self._owner_stop_blocks(pos):
+            return ok, "owner"
+        return ok, ("" if pos.restop_qty == pos.qty_filled else "skipped")
+
+    def _owner_buy_restop_check(self, pos: HoldPosition) -> "tuple[bool, str]":
+        """The recalculation and the broker stop-quantity check of _owner_buy_restop; (ok, why)."""
+        sym = pos.symbol.upper()
+        why = ""
+        seen: Optional[int] = None
+        if pos.state != HoldState.ACTIVE or not pos.stop_order_id:
+            why = "the stop is pending re-placement"
+        else:
+            book = self._get_open_orders()
+            if book is None:
+                why = "open orders could not be read to check the stop"
+            else:
+                try:
+                    acted = self._maybe_restop_after_add(pos, book)
+                except Exception as exc:  # RC-3: the stop stays where the add left it
+                    logger.exception("QHM %s stop recalculation after the owner buy failed: %s", sym, exc)
+                    acted = None
+                if acted is not None:
+                    # the recalculation replaced the stop and confirmed the new order's remaining quantity itself
+                    # (the helper sets the state by side effect; read its runtime value past mypy's narrowing)
+                    if getattr(pos.state, "value", pos.state) != HoldState.ACTIVE.value:
+                        why = "the recalculated stop is not confirmed"
+                else:
+                    n_stops, seen = self._owner_buy_stop_cover(sym, book)
+                    if not (n_stops == 1 and seen == pos.qty_filled):
+                        # a just-placed stop can be missing from the first listing: read the book once more
+                        book2 = self._get_open_orders()
+                        if book2 is not None:
+                            n_stops, seen = self._owner_buy_stop_cover(sym, book2)
+                    if not (n_stops == 1 and seen == pos.qty_filled):
+                        why = ("the stop at Alpaca covers %d share(s) in %d QH stop order(s) but QHM holds %d"
+                               % (seen, n_stops, pos.qty_filled))
+        if not why:
+            return True, ""
+        logger.critical("QHM %s stop check after the owner buy failed: %s [change=qhm-ownerbuy-1113]", sym, why)
+        self._alert("🚨 ACTION %s (QHM): after the owner buy, %s. The bot re-sizes the stop on its next cycle; check "
+                    "the %s stop in Alpaca." % (sym, why, sym))
+        self._owner_buy_event(sym, "stop_mismatch", pos, reason=why, broker_stop_qty=seen)
+        return False, why
 
     def _record_adoption(self, pos: HoldPosition, added: int, total: int, old_stop: str, new_stop: str) -> None:
         """Audit line in trade_events.jsonl for a proven-share adoption (decision explainability)."""
