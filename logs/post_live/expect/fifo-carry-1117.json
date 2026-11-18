@@ -1,0 +1,15 @@
+{
+  "change": "fifo-carry-1117",
+  "tier": 1,
+  "paths": ["execution/fifo_pnl.py", "execution/portfolio_tracker.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "\\[change=fifo-carry-1117\\]"}],
+  "expected_rate": "once per PT day on the first tracker pass (one summary line plus one line per changed or skipped symbol); the first day after deploy changes about 29 phantom symbols",
+  "window_sessions": 5,
+  "reversal": "a carried lot that Alpaca holds is dropped or trimmed below Alpaca's start-of-day quantity for a single-sign symbol, a reconcile runs on a second pass of the same PT day, or the tracker pass raises or stalls the trading thread past the orders-read budget",
+  "metrics": [
+    {"name": "carried_vs_alpaca_after_first_pass", "source": "data/state/open_lots_prior_day.json vs Alpaca /v2/positions after the first pass of the day", "direction": "down", "bound": "every reconciled non-QHM symbol single-sign, same sign as Alpaca and no larger"},
+    {"name": "fifo_no_short_lots_critical", "source": "logs/mtf_bot.log 'buy_to_cover with no open short lots' / 'closing sell with no open long lots'", "direction": "down", "bound": "0 for symbols reconciled that day"}
+  ],
+  "verification": "tests/test_fifo_carry_1117.py",
+  "baseline_exempt_reason": ""
+}

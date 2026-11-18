@@ -29,6 +29,7 @@ from execution.fifo_pnl import (  # noqa: E402
     _fifo_reconstruct,
     _load_prior_day_lots,
     _load_today_attribution,
+    _lots_stored_date,
     _save_open_lots_state,
 )
 try:
@@ -133,6 +134,158 @@ _last_eod_drift_alert_date: str = _load_drift_alert_date()  # persisted across r
 # Same-thread reentrancy guard for write_eod_summary()'s Alpaca-FIFO section
 # (GAI audit 2026-06-27 — see write_eod_summary for full rationale).
 _eod_fifo_in_progress: bool = False
+
+
+# ── FIFO-CARRY-1117: carried lots checked against Alpaca at the start of each PT day ──────────────────────────────
+# Design record: logs/design_records/fifo_carry_reconcile_2026-11-17.md. Runs on the first write_eod_summary pass of a
+# new PT day only. Every broker read goes through execution/broker.py (T1); every failure is a no-op with one WARNING.
+
+_CARRY_TAG = "[change=fifo-carry-1117]"
+
+
+def _carry_is_first_pass(today: str) -> bool:
+    """True on the first pass of a new PT day: the lots file's stored date parses and is before `today`. A missing
+    file or a missing/unparseable date is False (the check is skipped, as before); a same-day later pass is False."""
+    stored = _lots_stored_date()
+    return stored is not None and stored < today
+
+
+def _carry_call(fn, label: str, timeout: "float | None" = None):
+    """Run one broker read with the trading thread's bounded wait (manual_sale_proof's request timeout, or the
+    smaller `timeout` a caller has left in its own budget). Raises TimeoutError when the read has not returned, or
+    the read's own error."""
+    import threading
+    from execution.manual_sale_proof import _REQUEST_TIMEOUT_SECONDS
+    wait = _REQUEST_TIMEOUT_SECONDS if timeout is None else min(timeout, _REQUEST_TIMEOUT_SECONDS)
+    box: dict = {}
+
+    def _run():
+        try:
+            box["value"] = fn()
+        except Exception as e:  # noqa: BLE001 — re-raised on the caller's thread below
+            box["error"] = e
+
+    t = threading.Thread(target=_run, name=f"fifo-carry-{label}", daemon=True)
+    t.start()
+    t.join(timeout=wait)
+    if t.is_alive():
+        raise TimeoutError(f"{label} read timed out")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+def _carry_read_positions(label: str) -> "dict | None":
+    """{symbol: signed float qty} from Alpaca positions, or None (one WARNING) when the read fails, times out, or
+    returns no positions while the account's long or short market value is not zero. Never raises."""
+    try:
+        from execution import broker
+        from execution.fifo_pnl import _positions_qty_map
+        qty = _positions_qty_map(_carry_call(broker.get_open_positions, f"positions {label}"))
+        if not qty:
+            acct = _carry_call(broker.get_account, f"account {label}")
+            lmv = float(getattr(acct, "long_market_value", 0) or 0)
+            smv = float(getattr(acct, "short_market_value", 0) or 0)
+            if lmv != 0 or smv != 0:
+                logger.warning(
+                    "%s positions read %s returned no positions while long market value %s / short market value %s "
+                    "is not zero — carried lots unchanged", _CARRY_TAG, label, lmv, smv,
+                )
+                return None
+        return qty
+    except Exception as e:  # noqa: BLE001
+        logger.warning("%s positions read %s (or its account check) failed (%s) — carried lots unchanged", _CARRY_TAG, label, e)
+        return None
+
+
+def _carry_filled_order_symbols(symbols: set, sod: datetime) -> set:
+    """Symbols (of `symbols`) with any Alpaca order holding a filled quantity whose filled_at is at/after `sod` (today's
+    PT midnight), or with no filled_at yet (counted, conservatively). All statuses, every page newest-first by submit
+    time, so a GTC stop submitted on an earlier day and filled today is seen. Raises on any read error."""
+    from datetime import timezone
+    from alpaca.common.enums import Sort
+    from alpaca.trading.enums import QueryOrderStatus
+    from alpaca.trading.requests import GetOrdersRequest
+    import time
+    from execution.broker import get_trading_client
+    from execution.manual_sale_proof import _PAGE_SIZE, _REQUEST_TIMEOUT_SECONDS
+    client = get_trading_client()
+    seen: dict = {}
+    until = None
+    # one bounded wait for the WHOLE paged read on the trading thread (cold review T1: an order history of
+    # many pages must not stall check_exits); past it the read fails and the carried lots stay unchanged
+    deadline = time.monotonic() + _REQUEST_TIMEOUT_SECONDS
+    while True:   # ends on a short page; a full page that adds no new id raises
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("orders read exceeded its time budget across pages")
+        req = GetOrdersRequest(status=QueryOrderStatus.ALL, symbols=sorted(symbols), limit=_PAGE_SIZE, until=until,
+                               direction=Sort.DESC, nested=False)
+        page = list(_carry_call(lambda r=req: client.get_orders(filter=r), "orders", timeout=left) or [])
+        before = len(seen)
+        for o in page:
+            seen[str(getattr(o, "id", "") or f"anon:{len(seen)}")] = o
+        if len(page) < _PAGE_SIZE:
+            break
+        if len(seen) == before:
+            raise RuntimeError("orders paging made no progress")
+        stamps = [s for s in (getattr(o, "submitted_at", None) or getattr(o, "created_at", None) for o in page)
+                  if isinstance(s, datetime)]
+        if not stamps:
+            raise RuntimeError("orders page has no timestamps to page by")
+        until = min(stamps) + timedelta(microseconds=1)
+    out: set = set()
+    for o in seen.values():
+        if float(getattr(o, "filled_qty", 0) or 0) <= 0:
+            continue
+        fa = getattr(o, "filled_at", None)
+        if isinstance(fa, str):
+            fa = _iso_to_dt(fa)
+        if isinstance(fa, datetime) and fa.tzinfo is None:
+            fa = fa.replace(tzinfo=timezone.utc)
+        if fa is None or fa >= sod:
+            out.add(str(getattr(o, "symbol", "") or ""))
+    return out & set(symbols)
+
+
+def _fifo_carry_reconcile(prior_lots: dict, p1: dict, day_fills: list, today: str) -> tuple:
+    """Second positions read (P2) after today's fill fetch, today's filled orders for the candidate symbols, then the
+    pure reconcile (execution/fifo_pnl._reconcile_carried_lots). Returns (lots, changed_count); on any failure
+    (prior_lots, None) with one WARNING. Never raises."""
+    try:
+        from execution.fifo_pnl import _carry_net, _carry_targets, _reconcile_carried_lots
+        p2 = _carry_read_positions("P2")
+        if p2 is None:
+            return prior_lots, None
+        from execution.quarterly_hold_manager import get_quarterly_hold_symbols
+        qhm = set(get_quarterly_hold_symbols())
+        fill_syms = {str(f.get("symbol")) for f in day_fills if f.get("symbol")}
+        targets, _ = _carry_targets(prior_lots, p1, p2, fill_syms, qhm)
+        ordered: set = set()
+        if targets:
+            sod = datetime.strptime(today, "%Y-%m-%d").replace(tzinfo=_PT)
+            try:
+                ordered = _carry_filled_order_symbols(set(targets), sod)
+            except Exception as oe:  # noqa: BLE001
+                logger.warning("%s orders read failed (%s) — carried lots unchanged", _CARRY_TAG, oe)
+                return prior_lots, None
+        lots, changes, skipped = _reconcile_carried_lots(prior_lots, p1, p2, fill_syms, qhm, ordered)
+        for c in changes:
+            logger.warning(
+                "%s %s carried %d, P1 %g, P2 %g, start-of-day %d: %s %d%s", _CARRY_TAG, c["symbol"], c["carried"],
+                c["p1"], c["p2"], c["start_of_day"], c["action"], c["shares"],
+                " (mixed long/short lots)" if c["mixed"] else "",
+            )
+        for sym, reason in skipped:
+            logger.warning(
+                "%s %s skipped (%s): carried %d, P1 %g, P2 %g", _CARRY_TAG, sym, reason,
+                _carry_net(prior_lots.get(sym) or []), float(p1.get(sym, 0.0)), float(p2.get(sym, 0.0)),
+            )
+        logger.info("%s start-of-day check: %d symbol(s) changed, %d skipped", _CARRY_TAG, len(changes), len(skipped))
+        return lots, len(changes)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("%s start-of-day check failed (%s) — carried lots unchanged", _CARRY_TAG, e)
+        return prior_lots, None
 
 
 class PortfolioTracker:
@@ -672,7 +825,15 @@ class PortfolioTracker:
                 # accumulated onto below so repeat runs don't falsely report
                 # attributed=0 / understate the Alpaca cumulative.
                 _prior_today_pnl, _prior_today_per_trade = _load_today_attribution()
+                # FIFO-CARRY-1117: first pass of a new PT day (stored date parses and is before today) reads Alpaca
+                # positions (P1) before the fill fetch; _fifo_carry_reconcile reads them again (P2) after it.
+                _carry_p1 = _carry_read_positions("P1") if _carry_is_first_pass(today) else None
+                _carry_changed: Optional[int] = None
                 _day_fills        = _fetch_alpaca_fills_for_date(today)
+                if _carry_p1 is not None:
+                    _prior_lots, _carry_changed = _fifo_carry_reconcile(
+                        _prior_lots, _carry_p1, _day_fills, today,
+                    )
 
                 # ── FIFO Orphan Lot Seeding ──────────────────────────────────────
                 # Seed prior lots for positions whose opening fills are absent from
@@ -815,6 +976,7 @@ class PortfolioTracker:
                 _save_open_lots_state(
                     _alpaca_lots, today, _seen_fill_ids,
                     today_pnl=_alpaca_pnl, per_trade=_alpaca_per_trade,
+                    carry_changed=_carry_changed,
                 )
 
                 # Cumulative total = prior EOD total + today's Alpaca P&L

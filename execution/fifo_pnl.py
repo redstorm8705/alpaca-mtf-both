@@ -402,9 +402,148 @@ def _load_prior_day_lots() -> tuple:
     return {}, set()
 
 
+def _lots_stored_date() -> "str | None":
+    """FIFO-CARRY-1117: the lots file's stored date as YYYY-MM-DD when it parses,
+    else None (missing file, missing or unparseable date — the caller then skips
+    the start-of-day check, as before). Never raises."""
+    try:
+        if not _LOTS_STATE_FILE.exists():
+            return None
+        with open(_LOTS_STATE_FILE) as f:
+            data = json.load(f)
+        stored = data.get("date", "") if isinstance(data, dict) else ""
+        return datetime.strptime(str(stored), "%Y-%m-%d").strftime("%Y-%m-%d")
+    except Exception as exc:
+        logger.warning(
+            "[change=fifo-carry-1117] lots file date unreadable (%s) — "
+            "start-of-day check skipped", exc,
+        )
+        return None
+
+
+def _positions_qty_map(positions) -> dict:
+    """FIFO-CARRY-1117: {symbol: signed float quantity} from Alpaca position
+    objects or dicts (a short is a negative qty, e.g. "-3"). Raises on an
+    unreadable quantity — the caller treats that as a failed read."""
+    out: dict = {}
+    for p in positions or []:
+        sym = p.get("symbol", "") if isinstance(p, dict) else getattr(p, "symbol", "")
+        qty = p.get("qty", 0) if isinstance(p, dict) else getattr(p, "qty", 0)
+        if sym:
+            out[str(sym)] = float(qty)
+    return out
+
+
+def _carry_net(sym_lots: list) -> int:
+    return sum(
+        int(lot["qty"]) * (1 if lot["side"] == "long" else -1) for lot in sym_lots
+    )
+
+
+def _carry_targets(
+    prior_lots: dict, p1: dict, p2: dict, fill_syms: set, qhm_syms: set,
+) -> tuple:
+    """FIFO-CARRY-1117 (pure): which carried symbols the start-of-day check
+    would change.
+
+    p1 / p2: {symbol: float qty} from the two Alpaca positions reads (absent =
+    0). fill_syms: symbols with any Alpaca fill today. A symbol is a candidate
+    only when P1 == P2 and it has no fill today; start-of-day = int(P2) (the
+    FIFO's int(float(qty)) truncation). Returns (targets, skipped): targets
+    {sym: (start_of_day, action)} with action "mixed" | "zero" | "opposite" |
+    "trim"; skipped [(sym, reason)]. Unchanged symbols (carried ==
+    start-of-day, or same sign and larger at Alpaca) are in neither."""
+    targets: dict = {}
+    skipped: list = []
+    for sym in sorted(prior_lots):
+        sym_lots = prior_lots.get(sym) or []
+        if not sym_lots:
+            continue
+        if sym in qhm_syms:
+            skipped.append((sym, "QHM symbol"))
+            continue
+        a = float(p1.get(sym, 0.0))
+        b = float(p2.get(sym, 0.0))
+        if a != b:
+            skipped.append((sym, "positions changed between the two reads"))
+            continue
+        if sym in fill_syms:
+            skipped.append((sym, "fill today"))
+            continue
+        sod = int(b)
+        sides = {lot.get("side") for lot in sym_lots}
+        if "long" in sides and "short" in sides:
+            targets[sym] = (sod, "mixed")
+            continue
+        net = _carry_net(sym_lots)
+        if net == sod:
+            continue
+        if sod == 0:
+            targets[sym] = (sod, "zero")
+        elif (net > 0) != (sod > 0):
+            targets[sym] = (sod, "opposite")
+        elif abs(sod) < abs(net):
+            targets[sym] = (sod, "trim")
+    return targets, skipped
+
+
+def _reconcile_carried_lots(
+    prior_lots: dict, p1: dict, p2: dict, fill_syms: set, qhm_syms: set,
+    ordered_syms: set,
+) -> tuple:
+    """FIFO-CARRY-1117 (pure): reconcile carried lots to Alpaca's start-of-day
+    quantity.
+
+    Mixed long/short carried lots, a start-of-day of 0, or an opposite-sign
+    start-of-day drop every carried lot for the symbol; a same-sign smaller
+    start-of-day removes the oldest lots first until the carried net equals it.
+    ordered_syms: candidate symbols with a filled order today — skipped.
+    Returns (lots, changes, skipped): a new lots dict (input untouched);
+    changes [{symbol, carried, p1, p2, start_of_day, action, shares, mixed}]
+    with action "dropped" | "trimmed"; skipped [(sym, reason)]."""
+    import copy
+    targets, skipped = _carry_targets(prior_lots, p1, p2, fill_syms, qhm_syms)
+    lots = copy.deepcopy(prior_lots)
+    changes: list = []
+    for sym in sorted(targets):
+        sod, kind = targets[sym]
+        if sym in ordered_syms:
+            skipped.append((sym, "order filled today"))
+            continue
+        sym_lots = lots[sym]
+        net = _carry_net(sym_lots)
+        if kind in ("mixed", "zero", "opposite"):
+            shares = sum(int(lot["qty"]) for lot in sym_lots)
+            del lots[sym]
+            action = "dropped"
+        else:
+            excess = abs(net) - abs(sod)
+            shares = excess
+            kept: list = []
+            for lot in sym_lots:          # oldest first: FIFO matches index 0 first
+                q = int(lot["qty"])
+                if excess >= q:
+                    excess -= q
+                    continue
+                if excess > 0:
+                    lot = dict(lot, qty=q - excess)
+                    excess = 0
+                kept.append(lot)
+            lots[sym] = kept
+            action = "trimmed"
+        changes.append({
+            "symbol": sym, "carried": net,
+            "p1": float(p1.get(sym, 0.0)), "p2": float(p2.get(sym, 0.0)),
+            "start_of_day": sod, "action": action, "shares": shares,
+            "mixed": kind == "mixed",
+        })
+    return lots, changes, skipped
+
+
 def _save_open_lots_state(
     lots: dict, date_str: str, processed_fill_ids: "set | None" = None,
     today_pnl: float = 0.0, per_trade: "list | None" = None,
+    carry_changed: "int | None" = None,
 ):
     """Persist end-of-day open lot structure for the next day's FIFO seeding.
 
@@ -419,16 +558,36 @@ def _save_open_lots_state(
     attributed=0 (the alpaca_fifo_unattributed A-4 artifact, 2026-07-06
     S-FIFO). Only reused when the reader's date matches (see
     _load_today_attribution).
+
+    carry_changed (FIFO-CARRY-1117): the day's count of symbols the
+    start-of-day check changed. None keeps the count already stored for the
+    same date (a later same-day pass does not run the check); a new date
+    without a count stores none.
     """
     try:
         _LOTS_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(_LOTS_STATE_FILE, {
+        if carry_changed is None:
+            try:
+                if _LOTS_STATE_FILE.exists():
+                    with open(_LOTS_STATE_FILE) as f:
+                        _old = json.load(f)
+                    if isinstance(_old, dict) and _old.get("date") == date_str:
+                        carry_changed = _old.get("carry_reconciled_symbols")
+            except Exception as _ce:
+                logger.warning(
+                    "[change=fifo-carry-1117] stored carry count unreadable "
+                    "(%s) — not kept", _ce,
+                )
+        _state = {
             "date": date_str,
             "open_lots": lots,
             "processed_fill_ids": sorted(processed_fill_ids or set()),
             "alpaca_today_pnl": round(float(today_pnl or 0.0), 2),
             "alpaca_per_trade": per_trade or [],
-        })
+        }
+        if carry_changed is not None:
+            _state["carry_reconciled_symbols"] = carry_changed
+        _atomic_write(_LOTS_STATE_FILE, _state)
         logger.info(f"Open lots state saved for {date_str}: {len(lots)} symbol(s)")
     except Exception as exc:
         logger.warning(f"Could not save open lots state: {exc}")
