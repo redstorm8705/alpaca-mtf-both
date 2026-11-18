@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-11-16
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `execution.ownership_guard` reports "reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday" | GOOGL
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** The `GOOGL` trade shows an entry of $286.75 and an exit of $0.00 with a profit of +$1720.50. This is a recording error; the exit price cannot be $0.00 for a profitable trade.
+*   **P&L:** The `GOOGL` exit price of $0.00 is a data corruption issue.
+*   **Consistency:** The `ledger_sync` warning regarding `GOOGL` (negative protected replay) indicates a failure in the internal state tracking of the position, which directly conflicts with the `BROKER GROUND TRUTH` that lists `GOOGL` as `COVERED`.
+
+### ENTRY QUALITY
+*   The bot correctly applied the "PREMARKET RED LOCKOUT" rule, blocking all long entries due to 87% of tracked movers being red. This demonstrates effective adherence to the defined risk-off regime.
+
+### EXIT QUALITY
+*   The `GOOGL` exit is recorded with a price of $0.00, which is physically impossible for a closed trade. This suggests the exit logic failed to capture the actual fill price from the broker, or the ledger sync corrupted the trade record.
+
+### MRI ALIGNMENT
+*   The session is consistently in a `STRESSED` (50/100) state. The bot correctly identified this and adjusted the `MIN_SCORE` to 10/12, filtering out 11 signals. This indicates the MRI-based risk management is functioning as intended.
+
+### LOG ANOMALIES
+*   `WARNING | execution.ownership_guard | reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday`: This indicates a critical failure in the ledger's ability to track position ownership.
+*   `WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for GOOGL has no prior lot`: This confirms the trade accounting engine lost the link between the entry and exit.
+*   `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$-9.96 tracker=$0.00 drift=$-9.96`: Significant drift between the broker and the bot's internal tracker.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Ledger/Ownership corruption |** The bot is reporting negative protected positions (`GOOGL/qhm=-2`) and failing to match FIFO lots, leading to $0.00 exit prices and P&L drift.
+*   **EXECUTION BUG | HIGH | P&L Recording Failure |** The `CLOSED TRADE DETAILS` for `GOOGL` shows an exit price of $0.00, which is a failure of the data ingestion pipeline for closed trades.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Immediate investigation of `execution.ownership_guard` and `ledger_sync` to resolve the "negative protected replay" error, as this is causing P&L corruption and orphan fills.
+2.  **EXECUTION:** Audit the `CLOSED TRADE DETAILS` parser to ensure it is correctly pulling the `exit_price` from the Alpaca fill object rather than defaulting to $0.00 when a match is missing.
+3.  **INFRA:** Reconcile the `EOD P&L DRIFT` of $-9.96 to determine if this is a display issue or a failure to account for specific commission/fee structures in the paper account.
