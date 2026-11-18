@@ -1,0 +1,15 @@
+{
+  "change": "kill-exit-join-1117",
+  "tier": 2,
+  "paths": ["execution/risk_manager.py", "execution/quarterly_hold_manager.py"],
+  "proof": [{"log": "logs/mtf_bot.log", "pattern": "\\[change=kill-exit-join-1117\\]"}],
+  "expected_rate": "once per symbol on each PT day a QHM hold is closed by its own stop; zero on days with no QHM stop exit",
+  "window_sessions": 10,
+  "reversal": "a fill that is not QHM's own recorded stop exit is excluded from the kill measure (a Day or Swing loss hidden from the 7% check), or a day with a QHM stop exit still logs protected_fill_on_ledger_flat_symbol for that same order",
+  "metrics": [
+    {"name": "excluded_fill_matches_qhm_record", "source": "logs/mtf_bot.log 'QHM own exit excluded' lines vs data/state/quarterly_holds.json exit_order_id/exit_qty and the Alpaca order", "direction": "none", "bound": "every excluded fill's order id and qty equal the CLOSED hold's recorded exit"},
+    {"name": "flat_symbol_unresolved_after_qhm_stop", "source": "logs/mtf_bot.log 'protected_fill_on_ledger_flat_symbol' on a symbol whose QHM hold closed by its own stop that day", "direction": "down", "bound": "0 for holds closed after this deploy"}
+  ],
+  "verification": "tests/test_kill_exit_join_1117.py",
+  "baseline_exempt_reason": ""
+}
