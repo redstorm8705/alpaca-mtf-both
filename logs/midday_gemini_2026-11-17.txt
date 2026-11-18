@@ -1,0 +1,42 @@
+Midday Gemini Audit — 2026-11-17
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+- **Integrity**: All closed trades (DRAM, COIN, NVD) show correct P&L signs for the direction taken.
+- **P&L Consistency**: The `SESSION P&L SUMMARY` reports $31.67, while the `portfolio_tracker` reports $28.81. This discrepancy is attributed to the `KNOWN D1` entry-event degradation mentioned in the instructions.
+- **Stop-hit rate**: 0% (0 stops). The strategy is currently avoiding stop-outs, though the sample size is small (3 trades).
+- **Score Correlation**: All three trades were executed without a 12-pt score (Day tier/promotion), meaning they bypassed the `MIN_LONG_SCORE` / `MIN_SHORT_SCORE` gates as per the `KNOWN BENIGN PATTERNS`.
+
+### ENTRY QUALITY
+- **DRAM/COIN/NVD**: Entries were taken under "Day tier" conditions. While the bot is currently in a `STRESSED` MRI regime (55/100), the entries appear to follow the logic for non-scored tiers.
+- **DRAM/NVD**: The `portfolio_tracker` flagged these as "FIFO orphans" (closing fill has no prior lot). This indicates a failure in the tracker's ability to map entry events to exit events, likely linked to the `D1` entry-event logging issue.
+
+### EXIT QUALITY
+- **Partial Exit**: NVD partial exit ($7.42 → $7.72) was executed correctly.
+- **Exit Prices**: Prices are consistent with the profit realized. No evidence of "holding winners too long" or "cutting losers too slowly" given the 100% win rate.
+
+### MRI ALIGNMENT
+- The bot correctly identified the `STRESSED` MRI regime (55/100) and applied a size floor of 0.70x.
+- The `Regime: HIGH VOL` warning (26.1%) triggered a "half size, wider stops" adjustment, which is consistent with the `VIX_STOP_WIDEN_THRESHOLD_1` (25.0) being breached.
+
+### LOG ANOMALIES
+- **FIFO Orphan Warnings**: `execution.portfolio_tracker` repeatedly reports "FIFO orphan: closing fill for [SYMBOL] has no prior lot". This confirms the `D1` entry-event logging degradation is actively impacting the tracker's state.
+- **EOD P&L DRIFT**: `EOD P&L DRIFT: Alpaca=$68.61 tracker=$0.00 drift=$+68.61`. This is a significant discrepancy between the broker's reported P&L and the internal tracker, likely caused by the missing entry events.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | MEDIUM | FIFO Orphan / P&L Drift**: The `portfolio_tracker` is failing to reconcile entry events, leading to "FIFO orphan" warnings and significant EOD P&L drift. While the instructions state this is a known `D1` issue, the drift magnitude ($68.61) is high enough to potentially impact automated risk-management decisions if the bot relies on the tracker for `MAX_DAILY_LOSS_PCT` calculations.
+- **ALPHA ISSUE | LOW | DRAM Data Gap**: `[DRAM] No daily data — long entry blocked (fail-closed)`. The bot is attempting to trade symbols where it lacks sufficient daily data, causing a fail-closed state.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION**: Prioritize the `D1` fix for `trade_events.jsonl` logging. The current drift ($68.61) between the tracker and Alpaca is too high for reliable automated risk management.
+2. **ALPHA**: Review the symbol universe for `DRAM`. If the bot is consistently failing to retrieve daily data for this ticker, it should be removed from the active scan list to prevent "fail-closed" cycle overhead.
+3. **INFRASTRUCTURE**: Monitor the `EOD P&L DRIFT` closely. If the drift continues to grow, force a manual sync of the `portfolio_tracker` against the Alpaca ledger to ensure the `MAX_DAILY_LOSS_PCT` logic is operating on accurate data.

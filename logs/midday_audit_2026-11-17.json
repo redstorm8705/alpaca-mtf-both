@@ -1,0 +1,277 @@
+{
+  "audit_date": "2026-11-17",
+  "run_ts": "2026-11-17T10:30:01.664878-08:00",
+  "entry_analysis": {
+    "entry_count": 3,
+    "exit_count": 3,
+    "partial_count": 1,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "DRAM",
+      "COIN",
+      "NVD"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 30,
+    "levels": {
+      "STRESSED": 18,
+      "HIGH": 12
+    },
+    "last_score": 55,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 85,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-17 17:10:23,151 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-17 17:10:23,154 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-17 17:11:07,751 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for DRAM has no prior lot and no tracker record \u2014 fill un",
+      "2026-11-17 17:11:07,751 | WARNING  | execution.portfolio_tracker | FIFO orphan: closing fill for NVD has no prior lot and no tracker record \u2014 fill unm",
+      "2026-11-17 17:11:22,458 | WARNING  | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$68.61 tracker=$0.00 drift=$+68.61"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 3,
+    "losses": 0,
+    "total_pnl": 31.669499999999942,
+    "win_rate": 1.0,
+    "profit_factor": null,
+    "avg_win": 10.55649999999998,
+    "avg_loss": 0.0,
+    "best": {
+      "symbol": "COIN",
+      "pnl": 15.299999999999983,
+      "entry_price": 119.13,
+      "exit_price": 116.58,
+      "size": 6.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 123.65,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "NVD",
+      "pnl": 5.399999999999997,
+      "entry_price": 7.42,
+      "exit_price": 7.72,
+      "size": 18.0,
+      "exit_event": "partial_exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 7.27,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "DRAM",
+        "pnl": 10.969499999999961,
+        "entry_price": 38.906,
+        "exit_price": 38.1747,
+        "size": 15.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 41.28,
+        "target": 0.0
+      },
+      {
+        "symbol": "COIN",
+        "pnl": 15.299999999999983,
+        "entry_price": 119.13,
+        "exit_price": 116.58,
+        "size": 6.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 123.65,
+        "target": 0.0
+      },
+      {
+        "symbol": "NVD",
+        "pnl": 5.399999999999997,
+        "entry_price": 7.42,
+        "exit_price": 7.72,
+        "size": 18.0,
+        "exit_event": "partial_exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 7.27,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "COIN": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 20,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:20-10:20",
+          "10:40-10:40"
+        ],
+        "uncovered_windows_pt": [
+          "07:20-07:20",
+          "07:40-07:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "DRAM": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 45,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:46-09:46",
+          "10:31-10:31"
+        ],
+        "uncovered_windows_pt": [
+          "06:46-06:46",
+          "07:31-07:31"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVD": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 53,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:20-10:20",
+          "10:47-10:47"
+        ],
+        "uncovered_windows_pt": [
+          "07:20-07:20",
+          "07:47-07:47"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-17",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 15,
+    "symbols": [
+      "COIN",
+      "DRAM",
+      "NVD"
+    ],
+    "by_symbol": {
+      "NVD": {
+        "buy": 1,
+        "sell": 6
+      },
+      "COIN": {
+        "buy": 3,
+        "sell": 0
+      },
+      "DRAM": {
+        "buy": 2,
+        "sell": 0
+      }
+    }
+  }
+}
