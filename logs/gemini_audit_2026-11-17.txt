@@ -1,0 +1,64 @@
+Nightly Gemini Audit — 2026-11-17
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### LOG ANOMALIES
+*   **FIFO Orphan Warnings**: `execution.portfolio_tracker` reports `FIFO orphan: closing fill for DRAM has no prior lot and no tracker record` and `FIFO orphan: closing fill for NVD has no prior lot and no tracker record` at multiple timestamps (20:41:24, 20:48:10, 20:56:01). This indicates a persistent mismatch between the execution engine's fill reporting and the portfolio tracker's ledger, suggesting that the tracker is failing to ingest or match specific fills.
+*   **Ledger Sync Warnings**: `ledger_sync` reports `10 reducing admission(s) remain unresolved` at 20:40:20 and 21:00:19. This suggests a backlog in reconciling order fills, which could lead to stale position data.
+*   **Ownership Guard**: `execution.ownership_guard` reports `reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday`. This indicates a logic error in how the `QuarterlyHoldManager` (QHM) interacts with the `ownership_guard` for protected positions.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The `DRAM` short trade (2026-11-17) shows a `take_profit` exit at 07:32:02, but the `BROKER GROUND TRUTH` and `FIFO orphan` logs suggest the tracker is struggling to reconcile these fills.
+*   **Score Correlation**: The system is consistently generating high scores (10/12) for `COIN`, `SMCI`, and `SOFI` (e.g., 20:40:21, 20:47:50), but the `BoD-1 CONFIRM GATE` is repeatedly blocking entry. While this is intended behavior (waiting for 3 scans), the lack of entries despite high scores suggests the confluence filter may be too restrictive under current market conditions.
+*   **R:R Analysis**: The `NVD` long trade (2026-11-17) resulted in a loss of -2.86. The exit price (7.2695) was near the stop (7.27), which is consistent with the `protective_stop` logic.
+
+### TRADE INTEGRITY
+*   **Recording Bug**: The `FIFO orphan` logs confirm that the tracker is failing to match fills for `DRAM` and `NVD`. This is a recording/reconciliation bug where the `portfolio_tracker` is not correctly mapping the `trade_id` from the fill event to the existing lot.
+
+### MODIFIED FILE FINDINGS
+No source files were modified in the last 24 hours.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H1: OBSOLETE
+*   P5-H2: UNTOUCHED
+*   P5-H3: UNTOUCHED
+*   P5-H4: UNTOUCHED
+*   P5-H5: FIXED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+*   P5-L1: UNTOUCHED
+*   P5-L2: UNTOUCHED
+*   P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution.portfolio_tracker | FIFO orphan reconciliation failure | The tracker fails to match closing fills for DRAM and NVD, resulting in orphan warnings and potential P&L drift.**
+*   **EXECUTION BUG | MEDIUM | execution.ownership_guard | Incorrect reattribution of QHM positions | The guard attempts to reattribute negative protected replay (QHM) to intraday, which is logically inconsistent with the long-only nature of protected tiers.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Urgent**: Investigate `execution.portfolio_tracker` to determine why `DRAM` and `NVD` fills are not being matched to existing lots (FIFO logic failure).
+2.  **High**: Audit `execution.ownership_guard` to prevent the reattribution of QHM-managed positions to intraday, which is causing the "impossible negative" warning.
+3.  **Medium**: Review `ledger_sync` to identify why 10 reducing admissions remain unresolved; this may be related to the orphan fill issue.
+4.  **Low**: Monitor the `BoD-1 CONFIRM GATE` for `COIN`, `SMCI`, and `SOFI` to ensure that the 3-scan requirement is not effectively preventing all entries in the current volatility regime.
+================================================================================
+BROKER GROUND TRUTH (2026-11-17, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  COIN   COVERED                  owners=day exposed=20m no-broker-stop=0m [07:20-07:20, 07:40-07:40] rejected_stop_orders=0
+  DRAM   COVERED                  owners=day exposed=45m no-broker-stop=0m [06:46-06:46, 07:31-07:31] rejected_stop_orders=0
+  NVD    COVERED                  owners=day exposed=53m no-broker-stop=0m [07:20-07:20, 07:47-07:47] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  QQQM   BROKER-STOP-LAPSED       owners=core exposed=0m no-broker-stop=0m [12:59-13:00] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
