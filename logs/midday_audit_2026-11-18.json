@@ -1,0 +1,196 @@
+{
+  "audit_date": "2026-11-18",
+  "run_ts": "2026-11-18T10:30:02.324317-08:00",
+  "entry_analysis": {
+    "entry_count": 2,
+    "exit_count": 1,
+    "partial_count": 0,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AAPL",
+      "META"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 28,
+    "levels": {
+      "ELEVATED": 8,
+      "STRESSED": 20
+    },
+    "last_score": 45,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 83,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-18 17:16:44,059 | WARNING  | macro_risk_index | MRI VIX: FMP None + cache stale (age=19783s) \u2014 T4 yfinance ^VIX fallback=24.9. _vix_confirmed=",
+      "2026-11-18 17:16:44,714 | WARNING  | macro_risk_index | MRI JPY: FMP USDJPY failed \u2014 yfinance JPY=X=159.2530. No prior close available \u2014 JPY scoring 0",
+      "2026-11-18 17:16:55,580 | WARNING  | execution.quarterly_hold_manager | QHM dip-add: NVDA $151.81 below -15% first-entry floor ($163.08) \u2014 STOP adding",
+      "2026-11-18 17:16:57,401 | WARNING  | strategy.run_cycle | [ANOMALY-2] [META] confirm_gate=8 scans but no entry \u2014 risk.open_positions=5 vs tracker=0 | ",
+      "2026-11-18 17:17:36,705 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "win_rate": 0.0,
+    "profit_factor": null,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "best": null,
+    "worst": null,
+    "trades": []
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core",
+          "day"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:40-09:40"
+        ],
+        "uncovered_windows_pt": [
+          "06:40-06:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "META": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 224,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:46-09:46"
+        ],
+        "uncovered_windows_pt": [
+          "06:46-06:46"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "QQQM": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 4,
+        "uncovered_min": 3,
+        "lapsed_min": 1,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:30-09:31",
+          "09:33-09:33"
+        ],
+        "uncovered_windows_pt": [
+          "06:30-06:31",
+          "06:33-06:33"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-18",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 5,
+    "symbols": [
+      "AAPL",
+      "META",
+      "QQQM"
+    ],
+    "by_symbol": {
+      "META": {
+        "buy": 0,
+        "sell": 0
+      },
+      "AAPL": {
+        "buy": 2,
+        "sell": 0
+      },
+      "QQQM": {
+        "buy": 0,
+        "sell": 2
+      }
+    }
+  }
+}
