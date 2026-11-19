@@ -1,0 +1,59 @@
+Nightly Gemini Audit — 2026-11-18
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['scripts/qhm_owner.py', 'scripts/repair_fifo_lots_1117.py', 'execution/risk_manager.py', 'execution/portfolio_tracker.py', 'execution/fifo_pnl.py', 'execution/quarterly_hold_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there are recurring ledger reconciliation issues and a persistent "FIFO orphan" warning that requires attention.
+
+### LOG ANOMALIES
+*   **FIFO Orphan Warnings:** `execution.portfolio_tracker` repeatedly logs `FIFO orphan: closing fill for QQQM has no prior lot and no tracker record`. This indicates a mismatch between the broker's fill history and the tracker's internal state, likely related to the Friday 2026-11-13 QQQM trade.
+*   **Ledger Sync Warnings:** `ledger_sync` reports "11 reducing admission(s) remain unresolved" and "13 reducing admission(s) remain unresolved" at different times. This suggests the `ownership_guard` is struggling to reconcile the ledger with the broker's state.
+*   **Impossible Negative Reattribution:** `execution.ownership_guard` logs `reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday`. This indicates the ledger is attempting to correct a negative quantity in a protected tier, which is a sign of state drift.
+*   **MRI High/Stressed:** The bot correctly applied size floors (0.70x, 0.55x) in response to the MRI score (60-65), demonstrating the risk management system is functioning as intended.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity:** The last 10 trades (from the provided JSON) show consistent P&L signs.
+*   **QQQM Trade (2026-11-18):** The two fills for QQQM (4.0 + 1.71 = 5.71 total) match the `pnl_today` of 5.71.
+*   **Stop-Hit Rate:** The win rate (34.6%) is low, but the average win (17.84) vs. average loss (-11.32) suggests the strategy is attempting to maintain a positive expectancy. However, the current profit factor (0.83) and negative Sharpe ratio (-0.963) indicate the strategy is currently underperforming its historical baseline.
+*   **Exit Consistency:** Exits are generally occurring at the expected stop levels or via EOD force-flat, which is consistent with the bot's design.
+
+### TRADE INTEGRITY
+*   **QQQM Orphan:** The `FIFO orphan` warning for QQQM is a direct result of the Friday 2026-11-13 trade not being correctly attributed to the tracker. While the `repair_fifo_lots_1117.py` script was provided to address this, the logs indicate the issue persists or was not fully resolved by the repair, as the warning continues to appear.
+
+### MODIFIED FILE FINDINGS
+*   **`execution/risk_manager.py`:** The addition of `_qhm_closed_exits` and the `_qhm_own_exit` logic (KILL-EXIT-JOIN-1117) is a robust way to handle QHM-owned exits. The logic correctly checks for order ID matches and quantity consistency before excluding fills from the ledger-flat check.
+*   **`execution/portfolio_tracker.py`:** The implementation of `_fifo_carry_reconcile` (FIFO-CARRY-1117) is a necessary improvement for start-of-day reconciliation. However, the persistence of the "FIFO orphan" warning suggests that the reconciliation logic is not yet catching all edge cases.
+*   **`scripts/repair_fifo_lots_1117.py`:** The script is well-designed with dry-run capabilities and safety checks (e.g., `bot_active()` check).
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H1: OBSOLETE (PDT deleted)
+*   P5-H2: UNTOUCHED
+*   P5-H3: UNTOUCHED
+*   P5-H4: UNTOUCHED
+*   P5-H5: FIXED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | `execution/portfolio_tracker.py` | FIFO orphan persistence |** The `repair_fifo_lots_1117.py` script failed to fully clear the orphan state for QQQM, as evidenced by the continued `FIFO orphan` warnings in the logs. The logic in `_fifo_carry_reconcile` may need to be expanded to explicitly handle "orphaned" lots that were created due to the Friday 2026-11-13 fill-tracking failure.
+
+### FIX VALIDATION
+*   **FIX VALIDATION: PARTIAL.** The `repair_fifo_lots_1117.py` script and the new `_fifo_carry_reconcile` logic address the root cause of the Friday 2026-11-13 tracking failure, but the system is still reporting orphan warnings, indicating the state cleanup is incomplete.
+
+### RECOMMENDED ACTIONS
+1.  **Manual Ledger Audit:** Perform a manual reconciliation of the QQQM lots in `data/state/open_lots_prior_day.json` to ensure no synthetic short lots remain.
+2.  **Investigate Ledger Sync:** The "13 reducing admission(s) remain unresolved" warning suggests a deeper issue in `ownership_guard` that may be causing the drift.
+3.  **Monitor Orphan Warnings:** If the QQQM orphan warning persists after the next EOD cycle, the `_reconcile_carried_lots` logic should be audited to ensure it correctly identifies and merges orphaned lots.
+================================================================================
+BROKER GROUND TRUTH (2026-11-18, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core/day exposed=390m no-broker-stop=0m [06:40-06:40, 12:58-12:58] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  META   COVERED                  owners=day exposed=372m no-broker-stop=0m [06:46-06:46, 12:58-12:58] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  QQQM   COVERED                  owners=core exposed=4m no-broker-stop=3m [06:30-06:31, 06:33-06:33] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0

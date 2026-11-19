@@ -1,0 +1,40 @@
+Midday Gemini Audit — 2026-11-18
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+
+### PERFORMANCE AUDIT
+- **Integrity:** The bot reports 0 closed trades in the `CLOSED TRADE DETAILS`, yet the `portfolio_tracker` logs an `Alpaca FIFO EOD` event indicating `2 lots_closed`. This confirms the `D1` degradation mentioned in the context, where the matched-pair engine is failing to reconcile fills.
+- **P&L:** The `portfolio_tracker` reports a drift of `+$5.71` between the Alpaca ledger and the internal tracker. While the bot is currently profitable on the day, the discrepancy indicates that the internal state is not accurately tracking the realized P&L from the 5 fills (2 buys, 2 sells, 1 orphan).
+- **Stop-hit rate:** 0% (0 stops). The strategy is currently in a "wait-and-see" mode due to the ORB gate blocks.
+
+### ENTRY QUALITY
+- **ORB Gate:** The bot correctly identified 21 signals but blocked all of them due to the `ORB_L` (730.24) and `ORB_H` (735.06) gates relative to the current SPY price (730.38). This is high-quality defensive logic preventing entries during a lack of confirmed breakout/breakdown.
+- **Bias Filtering:** The bot correctly applied weekly bias filters (e.g., `[AMD] LONG signal filtered by weekly bias (BEARISH)`), demonstrating adherence to the multi-timeframe confluence scoring.
+
+### EXIT QUALITY
+- **No issues:** No positions were closed during the audit window, and the bot is maintaining its `COVERED` status for all held positions.
+
+### MRI ALIGNMENT
+- **Regime:** The MRI is `STRESSED` (45/100). The bot correctly responded by applying a `0.70x` size floor and raising the `Dynamic MIN_SCORE` to 10/12. This shows strong alignment between the macro risk environment and execution parameters.
+
+### LOG ANOMALIES
+- `WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for QQQM has no prior lot and no tracker record — fill unmatched.`
+- `WARNING | execution.portfolio_tracker | EOD P&L DRIFT: Alpaca=$5.71 tracker=$0.00 drift=$+5.71`
+- `WARNING | execution.quarterly_hold_manager | QHM dip-add: NVDA $151.99 below -15% first-entry floor ($163.08) — STOP adding, escalate to board for a conviction re-vote.`
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | HIGH | FIFO Orphan/Drift:** The `portfolio_tracker` is failing to map fills to internal lots, resulting in an "orphan" fill for QQQM and a $5.71 P&L drift. This suggests the `portfolio_tracker` state machine is desynchronized from the Alpaca fill stream.
+- **EXECUTION BUG | MEDIUM | D1 Degradation:** The `CLOSED TRADE DETAILS` remains empty despite the `portfolio_tracker` confirming 2 lots were closed. This confirms the `D1` issue is actively preventing the reporting of closed trades, which will eventually impact the `Kelly` stats if not resolved.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION:** Prioritize the `D1` fix for `trade_events.jsonl` reconciliation. The current inability to match entries to exits is causing the `portfolio_tracker` to treat fills as orphans, leading to P&L drift and inaccurate Kelly stats.
+2. **EXECUTION:** Investigate the `portfolio_tracker` FIFO logic to determine why the QQQM exit was not matched to an existing lot, as this is the root cause of the $5.71 drift.
+3. **ALPHA:** Review the `QHM` (Quarterly Hold Manager) logic for `NVDA`. The bot correctly identified the -15% floor breach and halted additions, but ensure the "conviction re-vote" mechanism is triggered or that the position is flagged for manual review by the user.
