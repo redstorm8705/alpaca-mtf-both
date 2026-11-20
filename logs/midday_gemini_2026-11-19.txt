@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-11-19
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The session shows a significant performance degradation (20% win rate, negative P&L) and a recurring logic anomaly regarding position tracking.
+
+### PERFORMANCE AUDIT
+*   **Integrity:** All closed trades (AVGO, AMD, UBER, DAMD, AAPD) show P&L signs consistent with their entry/exit prices.
+*   **Correlation:** All listed closed trades show "no 12-pt score," meaning the strategy is currently operating outside its primary scoring framework (Day tier). The lack of score-based filtering correlates with the poor win rate (20%).
+*   **Stop-hit rate:** 0% stop-hit rate is noted, yet the P&L is negative. This indicates the bot is likely exiting via manual/software-based "exit" calls (likely due to the STRESSED MRI regime) rather than hitting hard stops, effectively "bleeding" capital rather than taking defined losses.
+
+### ENTRY QUALITY
+*   **Regime Mismatch:** Entries are being attempted during a STRESSED MRI regime (score 60). While the bot correctly applies a size floor (0.70x), the strategy is continuing to initiate trades in a high-volatility, low-conviction environment.
+*   **Signal Filtering:** The bot is correctly identifying and filtering signals (e.g., [TSLA] and [AVGO] filtered by weekly bias), but the remaining signals are failing to produce positive expectancy.
+
+### EXIT QUALITY
+*   **No issues:** Exits appear to be triggered by the bot's internal logic (likely the "exit" signal logged in the details) rather than broker-side stop-loss orders.
+
+### MRI ALIGNMENT
+*   **Findings:** The bot is correctly identifying the STRESSED regime (score 60) and applying the 0.70x size floor. However, the "STRESSED" level is persistent (17/29 samples), suggesting the bot should potentially move to a "defensive" or "flat" posture rather than continuing to trade at reduced size.
+
+### LOG ANOMALIES
+*   **[ANOMALY-2] [UBER]:** The log `[ANOMALY-2] [UBER] confirm_gate=6 scans but no entry — risk.open_positions=6 vs tracker=0` indicates a state-sync failure between the risk manager and the tracker. While the bot notes this should resolve in the next cycle, it indicates a potential for "ghost" positions to block new entries.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | MEDIUM | State-Sync Latency:** The `[ANOMALY-2]` log indicates the risk manager is seeing 6 open positions while the tracker sees 0. This discrepancy can lead to incorrect position sizing or blocked entries.
+*   **ALPHA ISSUE | HIGH | Strategy Drift:** The bot is taking multiple trades without 12-point scores. If the "Day tier" logic is intended to be scored, the current "no 12-pt score" status for all closed trades suggests a failure in the scoring pipeline or an over-reliance on non-scored setups during high-volatility periods.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **ALPHA:** Review the "Day tier" scoring logic. The high frequency of "no 12-pt score" trades during a STRESSED regime suggests the bot is bypassing its primary quality filter.
+2.  **EXECUTION:** Investigate the `[ANOMALY-2]` state-sync issue. Ensure the `risk.open_positions` counter is being reset correctly after the 5-minute crash-safety flushes.
+3.  **ALPHA:** Consider implementing a "Hard Stop" on new entries when the MRI score remains STRESSED for > 3 consecutive cycles to preserve capital during high-volatility regimes.
