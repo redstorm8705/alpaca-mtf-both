@@ -1,0 +1,369 @@
+{
+  "audit_date": "2026-11-19",
+  "run_ts": "2026-11-19T10:30:02.493230-08:00",
+  "entry_analysis": {
+    "entry_count": 7,
+    "exit_count": 5,
+    "partial_count": 1,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "AVGO",
+      "AMD",
+      "UBER",
+      "UBER",
+      "DAMD",
+      "NVD",
+      "AAPD"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 29,
+    "levels": {
+      "STRESSED": 17,
+      "HIGH": 12
+    },
+    "last_score": 60,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 84,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-19 17:01:43,749 | WARNING  | execution.quarterly_hold_manager | QHM dip-add: NVDA $150.04 below -15% first-entry floor ($163.08) \u2014 STOP adding",
+      "2026-11-19 17:01:45,178 | WARNING  | strategy.run_cycle | [ANOMALY-2] [UBER] confirm_gate=4 scans but no entry \u2014 risk.open_positions=6 vs tracker=0 | ",
+      "2026-11-19 17:02:33,669 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-19 17:02:33,672 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-19 17:05:22,264 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay GOOGL/qhm=-2 to intraday; pro"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 5,
+    "wins": 1,
+    "losses": 4,
+    "total_pnl": -106.40000000000002,
+    "win_rate": 0.2,
+    "profit_factor": 0.02428771602055135,
+    "avg_win": 0.6500000000000057,
+    "avg_loss": -26.762500000000006,
+    "best": {
+      "symbol": "UBER",
+      "pnl": 0.6500000000000057,
+      "entry_price": 67.2,
+      "exit_price": 66.55,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 68.61,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "AMD",
+      "pnl": -36.49000000000001,
+      "entry_price": 554.09,
+      "exit_price": 517.6,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 517.24,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "AVGO",
+        "pnl": -33.98000000000002,
+        "entry_price": 367.7,
+        "exit_price": 350.71,
+        "size": 2.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 350.89,
+        "target": 0.0
+      },
+      {
+        "symbol": "AMD",
+        "pnl": -36.49000000000001,
+        "entry_price": 554.09,
+        "exit_price": 517.6,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 517.24,
+        "target": 0.0
+      },
+      {
+        "symbol": "UBER",
+        "pnl": 0.6500000000000057,
+        "entry_price": 67.2,
+        "exit_price": 66.55,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 68.61,
+        "target": 0.0
+      },
+      {
+        "symbol": "DAMD",
+        "pnl": -35.879999999999995,
+        "entry_price": 9.93,
+        "exit_price": 9.01,
+        "size": 39.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 9.02,
+        "target": 0.0
+      },
+      {
+        "symbol": "AAPD",
+        "pnl": -0.7000000000000028,
+        "entry_price": 9.9,
+        "exit_price": 9.83,
+        "size": 10.0,
+        "exit_event": "partial_exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 9.84,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPD": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 10,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "12:10-12:10"
+        ],
+        "uncovered_windows_pt": [
+          "09:10-09:10"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "AMD": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 41,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:50-09:50"
+        ],
+        "uncovered_windows_pt": [
+          "06:50-06:50"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "AVGO": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 146,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:36-09:36"
+        ],
+        "uncovered_windows_pt": [
+          "06:36-06:36"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "DAMD": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 44,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:52-10:52"
+        ],
+        "uncovered_windows_pt": [
+          "07:52-07:52"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVD": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 84,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "12:06-12:06"
+        ],
+        "uncovered_windows_pt": [
+          "09:06-09:06"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "UBER": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 189,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:20-10:20",
+          "10:30-10:30"
+        ],
+        "uncovered_windows_pt": [
+          "07:20-07:20",
+          "07:30-07:30"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-19",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 20,
+    "symbols": [
+      "AAPD",
+      "AMD",
+      "AVGO",
+      "DAMD",
+      "NVD",
+      "UBER"
+    ],
+    "by_symbol": {
+      "AAPD": {
+        "buy": 5,
+        "sell": 4
+      },
+      "NVD": {
+        "buy": 1,
+        "sell": 0
+      },
+      "AVGO": {
+        "buy": 1,
+        "sell": 1
+      },
+      "DAMD": {
+        "buy": 1,
+        "sell": 2
+      },
+      "AMD": {
+        "buy": 1,
+        "sell": 1
+      },
+      "UBER": {
+        "buy": 1,
+        "sell": 0
+      }
+    }
+  }
+}

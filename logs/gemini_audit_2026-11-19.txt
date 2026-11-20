@@ -1,0 +1,108 @@
+Nightly Gemini Audit — 2026-11-19
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+(WARN = Bot is operational and broker ground truth verifies 100% stop coverage across all exposed positions; however, log anomalies reveal ledger reconciliation friction and fail-closed daily data blocks on specific symbols like DRAM.)
+
+---
+
+### LOG ANOMALIES
+* **Failing-Closed on Missing Daily Data (`DRAM`)**:
+  * Log lines: `2026-11-19 20:36:03,172 | WARNING | confluence | [DRAM] No daily data — long entry blocked (fail-closed)`
+  * Analysis: Strategy safely blocked DRAM entries due to missing daily data bars. This is correct fail-closed safety behavior, but indicates a potential data fetch gap for secondary/tertiary symbols.
+* **Ledger Sync Reducing Admission Delay**:
+  * Log line: `2026-11-19 20:40:23,842 WARNING ledger_sync ledger_sync: 13 reducing admission(s) remain unresolved`
+  * Analysis: Ledger sync takes ~22–23 seconds per run (e.g., `wall-time 22.0s (fills=1099 orders=3463)`). Unresolved reducing admissions occur when high fill volume is being re-attributed across historical lots.
+* **Ownership Guard Re-attribution Warnings**:
+  * Log lines: `2026-11-19 20:40:23,713 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-4 to intraday; protected tiers are long-only.`
+  * Analysis: Correct defensive behavior in software. Ownership Guard detected replay mismatching on QHM protected shares and safely reattributed them to intraday.
+* **Portfolio Tracker FIFO Orphans**:
+  * Log line: `2026-11-19 20:36:37,303 | WARNING | execution.portfolio_tracker | FIFO orphan: closing fill for AVGO has no prior lot and no tracker record — fill unmatched.`
+  * Analysis: Portfolio tracker emits EOD FIFO warnings during live runtime before the scheduled 8:30 PM ET ledger heal. Ground truth stop coverage remains 100% intact.
+
+---
+
+### PERFORMANCE AUDIT
+* **Last 10 Trades Evaluated (from `trade_events` JSON)**:
+  1. `2026-11-19T07:30:06` | **UBER** (Short) | Entry: $67.20, Exit: $66.55 | P&L: +$0.65 | **CORRECT SIGN** (Short: Entry > Exit)
+  2. `2026-11-19T07:32:03` | **AMD** (Long) | Entry: $554.09, Exit: $517.60 | P&L: -$36.49 | **CORRECT SIGN** (Long: Exit < Entry)
+  3. `2026-11-19T08:38:03` | **DAMD** (Long) | Entry: $9.93, Exit: $9.01 | P&L: -$35.88 | **CORRECT SIGN** (Long: Exit < Entry)
+  4. `2026-11-19T09:04:02` | **AVGO** (Long) | Entry: $367.70, Exit: $350.71 | P&L: -$33.98 | **CORRECT SIGN** (Long: Exit < Entry)
+  5. `2026-11-19T09:22:11` | **AAPD** (Long Partial/Exit) | Entry: $9.90, Exit: $9.83 | P&L: -$1.40 total | **CORRECT SIGN** (Long: Exit < Entry)
+  6. `2026-11-19T10:52:03` | **UBER** (Short) | Entry: $66.53, Exit: $65.88 | P&L: +$0.65 | **CORRECT SIGN** (Short: Entry > Exit)
+  7. `2026-11-19T12:56:04` | **NVD** (Long) | Entry: $8.00, Exit: $8.15 | P&L: +$6.75 | **CORRECT SIGN** (Long: Exit > Entry)
+  8. `2026-11-18T06:34:02` | **QQQM** (Swing) | Entry/Exit swing lot | P&L: +$5.71 | **CORRECT SIGN**
+  9. `2026-11-18T12:58:13` | **AAPL** (Long) | Entry: $354.77, Exit: $352.40 | P&L: -$9.48 | **CORRECT SIGN**
+  10. `2026-11-18T12:58:16` | **META** (Short) | Entry: $615.03, Exit: $616.81 | P&L: -$1.78 | **CORRECT SIGN**
+* **P&L Sign Integrity**: 100% mathematically correct across long and short positions.
+* **Stop-Hit Rate & Regime Mismatch**: Multiple protective stop exits occurred on November 19 (e.g. AMD, DAMD, AVGO) in tandem with `macro_risk_index` transitioning to `HIGH` (score 70) and `STRESSED` (score 60). The system correctly applied BV-5 gates to block new entries when MRI reached HIGH.
+* **R:R and Execution Efficiency**: Target capture was achieved on UBER (Take Profit) and NVD (Take Profit at $8.15 vs $8.00 entry). Stop exits triggered as designed near specified stop thresholds without abnormal slippage.
+
+---
+
+### TRADE INTEGRITY
+* **Zero-P&L Anomalies**: None found. All trades with price movements recorded explicit non-zero P&L.
+* **Partial Exit Calculation**:
+  * **AAPD (2026-11-19)**: Partial exit of 10 shares at $9.83 (realized P&L -$0.70) followed by final exit of remaining 10 shares at $9.83 (realized P&L -$0.70). Aggregate realized P&L is accurately tracked as -$1.40.
+* **Pre-Heal Drift Status**:
+  * EOD snapshot reports `pnl_drift: -$99.70` with `pnl_unreconciled: false`. Per Known Benign Patterns, this pre-heal telemetry is expected prior to the 8:30 PM ET ledger sync and carries no risk to live execution decisions.
+
+---
+
+### MODIFIED FILE FINDINGS
+* No source files were modified in the last 24 hours.
+
+---
+
+### P5 STATUS
+* **P5-C1** (FVG MultiIndex silent crash): **UNTOUCHED**
+* **P5-C2** (run_movers.py DataFetcher ImportError): **UNTOUCHED**
+* **P5-H1** (PDT enforcement): **OBSOLETE** (permanently removed)
+* **P5-H2** (Fill price crosstalk): **UNTOUCHED**
+* **P5-H3** (Orphan GTC 404 path): **UNTOUCHED**
+* **P5-H4** (Rule 2 dead code): **UNTOUCHED**
+* **P5-H5** (GTC stop suppressed at PDT=3/3): **FIXED** (2026-04-21)
+* **P5-M1** (Cycle watchdog restart loop): **UNTOUCHED**
+* **P5-M2** (MRI score cached stale across sessions): **UNTOUCHED**
+* **P5-M3** (score_comparison JSON unbounded growth): **UNTOUCHED**
+* **P5-L1** (_classify_loss_driver empty label): **UNTOUCHED**
+* **P5-L2** (eod_YYYY-MM-DD.json early write): **UNTOUCHED**
+* **P5-L3** (live_data_writer.py reconnect logic): **UNTOUCHED**
+
+---
+
+### NEW BUGS FOUND
+* None.
+
+---
+
+### FIX VALIDATION
+* No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **P5-C2 Fix (High Priority Infrastructure)**: Fix `run_movers.py` line 19 by removing or updating the invalid `DataFetcher` import before running premarket mover scans.
+2. **P5-C1 Fix (High Priority Strategy)**: Refactor `strategy/signal_generator.py` and `main.py:_find_recent_fvgs()` to explicitly flatten dictionary keys when constructing pandas DataFrames, avoiding MultiIndex column lookup errors.
+3. **Daily Data Fetch Resilience**: Investigate data provider responses for symbols like `DRAM` to resolve repeated "No daily data — fail-closed" warnings during confluence evaluation cycles.
+4. **Ledger Sync Performance**: Optimize order history query depth in `ledger_sync.py` to reduce sync wall-time from ~23s as fill history grows over time.
+================================================================================
+BROKER GROUND TRUTH (2026-11-19, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPD   COVERED                  owners=day exposed=10m no-broker-stop=0m [09:10-09:10] rejected_stop_orders=0
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AMD    COVERED                  owners=day exposed=41m no-broker-stop=0m [06:50-06:50] rejected_stop_orders=0
+  AVGO   COVERED                  owners=day exposed=146m no-broker-stop=0m [06:36-06:36] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  DAMD   COVERED                  owners=day exposed=44m no-broker-stop=0m [07:52-07:52] rejected_stop_orders=0
+  NVD    COVERED                  owners=day exposed=229m no-broker-stop=0m [09:06-09:06] rejected_stop_orders=0
+  NVDA   COVERED                  owners=qhm exposed=324m no-broker-stop=0m [-] rejected_stop_orders=0
+  UBER   COVERED                  owners=day exposed=209m no-broker-stop=0m [07:20-07:20, 07:30-07:30] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
