@@ -1,0 +1,41 @@
+Midday Gemini Audit — 2026-11-20
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The system is currently operating under a "CRITICAL" MRI regime (100/100), which has correctly triggered a "no new entries" block (BV-5). However, the bot continues to perform intensive `VOLSHADOW` calculations and `QuarterlyHoldManager` checks for every symbol in the universe every cycle, despite the global entry block.
+
+### PERFORMANCE AUDIT
+- **Integrity**: All closed trades (MU, PLTR, NVDA, GOOGL, TSLA, META) show positive P&L with correct signs (Exit > Entry for Longs).
+- **Correlation**: All closed trades were executed without a 12-point score (Day tier), making it difficult to correlate score-to-outcome.
+- **Stop-hit rate**: 0% stop-hit rate is anomalous given the "CRITICAL" MRI regime, suggesting the bot is either exiting early/manually or the current portfolio is highly defensive.
+- **P&L**: Total P&L of $55.66 is consistent with the reported fills.
+
+### ENTRY QUALITY
+- **Regime Mismatch**: While the bot is correctly blocking new entries due to the `BV-5` (MRI=CRITICAL) condition, the `QuarterlyHoldManager` is still attempting to evaluate `GOOGL` and `GEV` for entry. The logic is correctly blocking these due to `QHM` caps, but the overhead of these checks during a systemic risk event is unnecessary.
+
+### EXIT QUALITY
+- No issues detected. Exits appear to be functioning within expected parameters.
+
+### MRI ALIGNMENT
+- The bot is correctly identifying the `CRITICAL` MRI regime (100/100) and applying the `0.40x` size floor.
+- The `VOLSHADOW` logic is correctly identifying high volatility, but the bot is still processing these checks for every symbol in the list, which is inefficient during a market-wide systemic event.
+
+### LOG ANOMALIES
+- **Warning Pattern**: `[DRAM] No daily data — long/short entry blocked (fail-closed)` appears repeatedly. This indicates a data feed issue for the `DRAM` symbol, which should be excluded from the watch list if data is unavailable.
+- **Warning Pattern**: `[Currents] CAUTION | 'India has low interest rate...'` triggered a warning, but the bot correctly noted that price-confirmation applies.
+
+### NEW BUGS / CONCERNS
+- **ALPHA ISSUE | MEDIUM | Unnecessary compute during systemic risk** | The bot continues to run full `VOLSHADOW` and `QHM` checks for all symbols every cycle while `BV-5` (no new entries) is active. This consumes CPU/API bandwidth during a period where the bot should be in "defensive/monitoring" mode.
+- **INFRASTRUCTURE | LOW | Data feed failure for DRAM** | The `DRAM` symbol is consistently failing to provide daily data, causing repeated `WARNING` logs in the `confluence` module.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **ALPHA**: Implement a "Systemic Halt" mode that suspends `VOLSHADOW` and `QHM` calculations when `MRI` is `CRITICAL` to conserve resources and focus on existing position management.
+2. **INFRASTRUCTURE**: Remove `DRAM` from the active symbol list or implement a persistent "ignore" list for symbols with missing daily data to clean up the logs.
+3. **EXECUTION**: Verify if the `0%` stop-hit rate is due to the `CRITICAL` MRI regime causing the bot to exit positions prematurely (manual/software-only) before broker stops are triggered.

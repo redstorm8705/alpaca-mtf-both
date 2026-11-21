@@ -1,0 +1,69 @@
+Nightly Gemini Audit — 2026-11-20
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+* `ledger_sync` | `ledger_sync` | 23 reducing admission(s) remain unresolved | NVDA (re-attributed impossible negative protected replay)
+
+### VERDICT: FAIL
+
+### LOG ANOMALIES
+* **Unresolved Ledger Admissions:** `2026-11-20 21:00:24,615 | WARNING | ledger_sync | 23 reducing admission(s) remain unresolved`. This indicates a persistent state mismatch between the bot's internal ledger and the broker's fill stream, which is a high-risk condition for position sizing and risk management.
+* **Ownership Guard Trigger:** `2026-11-20 21:00:24,761 | WARNING | execution.ownership_guard | reattributed impossible negative protected replay NVDA/qhm=-4 to intraday`. This confirms the bot is attempting to reconcile phantom/negative positions, which is a symptom of the ledger sync failure.
+* **MRI Critical State:** The bot is in a `CRITICAL` MRI state (score=100) for the duration of the log, resulting in a size floor of 0.40x. While this is a safety feature, the repeated `entry BLOCKED` messages for `GEV` suggest the `QuarterlyHoldManager` is struggling with the current regime/cap constraints.
+
+### PERFORMANCE AUDIT
+* **Trade Integrity:** The last 10 trades show consistent P&L signs.
+* **Stop-Hit Rate:** The win rate is 34.6% with a profit factor of 0.83. The stop-hit rate is high, but within the expected range for a confluence-based system in a high-volatility (MRI=100) regime.
+* **R:R Analysis:** The bot is successfully capturing exits near stop levels, but the `realized_pnl` on several trades (e.g., `DT-MSFT-s-1795193800764`) shows a loss that aligns with the stop-out logic.
+* **Score Correlation:** The confluence scores (e.g., `score_without_vol` 0-7) are being generated, but the high-score entries (e.g., `NVDA` at 21:01:04) are occurring during a `CRITICAL` MRI regime, which may be suppressing the expected performance edge.
+
+### TRADE INTEGRITY
+* **Recording:** No `pnl=0.0` anomalies found in the provided trade events.
+* **Partial Exits:** `DT-NVD-b-1794928847223` and `DT-AAPD-b-1795108249788` show correct partial exit logic and subsequent full exit.
+
+### MODIFIED FILE FINDINGS
+* No source files modified in the last 24h.
+
+### P5 STATUS
+* P5-C1: UNTOUCHED
+* P5-C2: UNTOUCHED
+* P5-H1: OBSOLETE
+* P5-H2: UNTOUCHED
+* P5-H3: UNTOUCHED
+* P5-H4: UNTOUCHED
+* P5-H5: FIXED
+* P5-M1: UNTOUCHED
+* P5-M2: UNTOUCHED
+* P5-M3: UNTOUCHED
+* P5-L1: UNTOUCHED
+* P5-L2: UNTOUCHED
+* P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+* **EXECUTION BUG | HIGH | execution.ownership_guard | Ledger sync failure causing negative position reattribution | The `ledger_sync` process is failing to resolve 23 admissions, leading to `ownership_guard` reattributing negative protected replays to intraday, which risks incorrect position sizing for future entries.**
+
+### FIX VALIDATION
+* No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **Immediate Ledger Audit:** Investigate the `ledger_sync` failure (23 unresolved admissions). This is likely causing the `ownership_guard` to miscalculate position ownership for `NVDA`.
+2. **Halt New Entries:** Given the `CRITICAL` MRI score and the ledger sync failure, consider a manual override to halt all new entries until the ledger is fully reconciled.
+3. **Review `ownership_guard` logic:** The reattribution of negative protected replays to intraday is a dangerous fallback; ensure that negative positions are explicitly blocked from being re-added to the intraday pool.
+4. **Check `pnl_ledger.heal_history`:** Verify if the heal process is being triggered too frequently, as the `_healed_at` timestamp suggests it is active.
+5. **Monitor `GEV` Tranche:** The `QuarterlyHoldManager` is repeatedly blocking `GEV` entries; verify if the `room 0` calculation is accurate or if it is a side effect of the ledger sync issue.
+================================================================================
+BROKER GROUND TRUTH (2026-11-20, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  NAKED                    owners=day/qhm exposed=157m no-broker-stop=7m [07:22-07:22, 07:56-07:56, 10:57-11:04] rejected_stop_orders=0
+  META   COVERED                  owners=day exposed=65m no-broker-stop=0m [09:06-09:06] rejected_stop_orders=0
+  MSFT   COVERED                  owners=day exposed=119m no-broker-stop=0m [08:56-08:56] rejected_stop_orders=0
+  MU     COVERED                  owners=day exposed=43m no-broker-stop=0m [06:44-06:44] rejected_stop_orders=0
+  NFLX   COVERED                  owners=day exposed=258m no-broker-stop=0m [08:40-08:40, 12:05-12:05, 12:58-12:58] rejected_stop_orders=0
+  NVDA   COVERED                  owners=day exposed=101m no-broker-stop=0m [06:46-06:46, 07:38-07:38, 11:10-11:10, 11:38-11:38] rejected_stop_orders=0
+  PLTR   COVERED                  owners=day exposed=137m no-broker-stop=0m [06:44-06:44, 09:01-09:01] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=63m no-broker-stop=0m [07:28-07:28, 08:31-08:31] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
