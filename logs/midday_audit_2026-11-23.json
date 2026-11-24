@@ -1,0 +1,255 @@
+{
+  "audit_date": "2026-11-23",
+  "run_ts": "2026-11-23T10:30:01.859600-08:00",
+  "entry_analysis": {
+    "entry_count": 3,
+    "exit_count": 3,
+    "partial_count": 1,
+    "stop_hit_count": 0,
+    "stop_hit_rate": 0.0,
+    "flagged_entries": [],
+    "entry_symbols": [
+      "NVDA",
+      "TSLA",
+      "AAPL"
+    ]
+  },
+  "mri_analysis": {
+    "samples": 30,
+    "levels": {
+      "HIGH": 18,
+      "STRESSED": 12
+    },
+    "last_score": 55,
+    "last_level": "STRESSED"
+  },
+  "log_analysis": {
+    "error_count": 0,
+    "warning_count": 55,
+    "watchdog_count": 0,
+    "error_samples": [],
+    "warning_samples": [
+      "2026-11-23 17:11:58,560 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-23 17:11:58,562 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-23 17:18:58,006 | WARNING  | confluence | [DRAM] No daily data \u2014 long entry blocked (fail-closed)",
+      "2026-11-23 17:18:58,008 | WARNING  | confluence | [DRAM] No daily data \u2014 short entry blocked (fail-closed)",
+      "2026-11-23 17:20:21,209 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-4 to intraday; prot"
+    ],
+    "watchdog_lines": []
+  },
+  "postmortem": [],
+  "pnl_analysis": {
+    "count": 3,
+    "wins": 0,
+    "losses": 3,
+    "total_pnl": -72.68039999999996,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": -24.226799999999987,
+    "best": {
+      "symbol": "AAPL",
+      "pnl": -2.5,
+      "entry_price": 351.78,
+      "exit_price": 349.28,
+      "size": 1.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 349.35,
+      "target": 0.0
+    },
+    "worst": {
+      "symbol": "NVDA",
+      "pnl": -59.13040000000001,
+      "entry_price": 158.5762,
+      "exit_price": 165.9675,
+      "size": 8.0,
+      "exit_event": "exit",
+      "score": null,
+      "unscored_source": "Day tier",
+      "mri_level": "NORMAL",
+      "stop": 165.9,
+      "target": 0.0
+    },
+    "trades": [
+      {
+        "symbol": "NVDA",
+        "pnl": -59.13040000000001,
+        "entry_price": 158.5762,
+        "exit_price": 165.9675,
+        "size": 8.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 165.9,
+        "target": 0.0
+      },
+      {
+        "symbol": "TSLA",
+        "pnl": -11.049999999999955,
+        "entry_price": 392.59,
+        "exit_price": 387.065,
+        "size": 2.0,
+        "exit_event": "partial_exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 387.12,
+        "target": 0.0
+      },
+      {
+        "symbol": "AAPL",
+        "pnl": -2.5,
+        "entry_price": 351.78,
+        "exit_price": 349.28,
+        "size": 1.0,
+        "exit_event": "exit",
+        "score": null,
+        "unscored_source": "Day tier",
+        "mri_level": "NORMAL",
+        "stop": 349.35,
+        "target": 0.0
+      }
+    ]
+  },
+  "stop_coverage": {
+    "positions": {
+      "AAPL": {
+        "class": "COVERED",
+        "owners": [
+          "core",
+          "day"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "BRK.B": {
+        "class": "COVERED",
+        "owners": [
+          "other"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "GOOGL": {
+        "class": "COVERED",
+        "owners": [
+          "qhm"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "NVDA": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 16,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "09:40-09:40"
+        ],
+        "uncovered_windows_pt": [
+          "06:40-06:40"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "TSLA": {
+        "class": "COVERED",
+        "owners": [
+          "day"
+        ],
+        "exposed_min": 71,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [
+          "10:30-10:30"
+        ],
+        "uncovered_windows_pt": [
+          "07:30-07:30"
+        ],
+        "rejected_stop_orders": 0
+      },
+      "V": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      },
+      "WMT": {
+        "class": "COVERED",
+        "owners": [
+          "core"
+        ],
+        "exposed_min": 240,
+        "uncovered_min": 0,
+        "lapsed_min": 0,
+        "uncovered_at_close": false,
+        "uncovered_windows_et": [],
+        "uncovered_windows_pt": [],
+        "rejected_stop_orders": 0
+      }
+    },
+    "cycle_log": "OK",
+    "cycle_gaps_pt": [],
+    "cycle_gaps_et": [],
+    "status": "OK",
+    "session": "2026-11-23",
+    "window_et": "09:30-13:30",
+    "window_pt": "06:30-10:30",
+    "schema": "broker_ground_truth_v1",
+    "alarms": [],
+    "software_stop_unverified": []
+  },
+  "alpaca_fills": {
+    "available": true,
+    "n_fills": 12,
+    "symbols": [
+      "AAPL",
+      "NVDA",
+      "TSLA"
+    ],
+    "by_symbol": {
+      "TSLA": {
+        "buy": 1,
+        "sell": 4
+      },
+      "AAPL": {
+        "buy": 1,
+        "sell": 1
+      },
+      "NVDA": {
+        "buy": 3,
+        "sell": 0
+      }
+    }
+  }
+}

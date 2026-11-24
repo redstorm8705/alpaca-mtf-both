@@ -1,0 +1,110 @@
+Nightly Gemini Audit — 2026-11-23
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+
+The bot remains operational, but internal position accounting for day-traded positions failed to create tracker records/lots upon entry, resulting in EOD FIFO orphan warnings. Stop coverage across all open positions is fully verified by broker ground truth.
+
+---
+
+### LOG ANOMALIES
+
+* **`execution.portfolio_tracker` FIFO Orphan Warnings**:
+  `2026-11-23 20:48:05,708 WARNING execution.portfolio_tracker | FIFO orphan: closing fill for NVDA has no prior lot and no tracker record — fill unmatched.`
+  `2026-11-23 20:48:05,708 WARNING execution.portfolio_tracker | FIFO orphan: closing fill for TSLA has no prior lot and no tracker record — fill unmatched.`
+  *Tracing/Impact*: Trades entered on 2026-11-23 (NVDA short at 06:40:33, TSLA long at 07:30:43) were logged in trade events as daytrades (`tier: daytrade`), but `portfolio_tracker` failed to record entry lots. When the protective stops filled, the tracker logged an orphan warning and internal `tracker_pnl` defaulted to `$0.00`, leading to an EOD drift warning.
+
+* **`execution.ownership_guard` Negative Protected Replay Reattribution**:
+  `2026-11-23 20:40:21,777 WARNING execution.ownership_guard sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-4 to intraday; protected tiers are long-only.`
+  *Tracing/Impact*: The ownership guard encountered a negative lot replay for NVDA under the QHM tier (`qhm=-4`). Because QHM/protected tiers are enforced as long-only, the ledger sync auto-reattributed the lot to the intraday tier to prevent ownership guard crashes.
+
+* **`ledger_sync` Unresolved Admissions**:
+  `2026-11-23 20:40:21,915 WARNING ledger_sync ledger_sync: 24 reducing admission(s) remain unresolved` (wall-time 20.2s across 1,151 fills / 3,511 orders).
+  *Tracing/Impact*: High fill/order volume causes latency in resolving reducing order admissions during sync sweeps, taking >20 seconds.
+
+* **Data Gaps (Fail-Closed Blocking)**:
+  `2026-11-23 20:33:15,356 WARNING confluence | [DRAM] No daily data — long entry blocked (fail-closed)`
+  *Tracing/Impact*: Daily candle data missing for DRAM, properly gating entry attempts.
+
+---
+
+### PERFORMANCE AUDIT
+
+* **Last 10 Trade Events Analysis**:
+  1. `2026-11-20 NVDA short`: Entry `$133.9867` (12 sh) $\rightarrow$ Exit `$131.09` $\rightarrow$ P&L: `+$34.76` (Sign correct: $12 \times (133.9867 - 131.09) = +34.76$).
+  2. `2026-11-20 NVDA short`: Entry `$129.6142` (12 sh) $\rightarrow$ Exit `$126.76` $\rightarrow$ P&L: `+$34.25` (Sign correct).
+  3. `2026-11-20 NFLX short`: Partial exit (7 sh @ `$57.13`, P&L `+$4.48`), Final EOD exit (8 sh @ `$56.71`, P&L `+$8.48`). Total P&L: `+$12.96`.
+  4. `2026-11-23 NVDA short`: Entry `$158.5762` (8 sh) $\rightarrow$ Exit `$165.9675` $\rightarrow$ P&L: `-$59.13` (Sign correct: $8 \times (158.5762 - 165.9675) = -59.13$). Stop hit near `$165.90`.
+  5. `2026-11-23 AAPL long`: Entry `$351.78` (1 sh) $\rightarrow$ Exit `$349.28` $\rightarrow$ P&L: `-$2.50` (Sign correct).
+  6. `2026-11-23 TSLA long`: Entry `$392.59` (4 sh) $\rightarrow$ Partial exit (2 sh @ `$387.065`, P&L `-$11.05`), Exit (2 sh @ `$387.035`, P&L `-$11.11`). Total P&L: `-$22.16`.
+* **P&L Sign Integrity**: 100% verified. Longs profit when exit > entry; shorts profit when entry > exit.
+* **Stop Rate**: 4 of the last 4 trade setups on 2026-11-23 hit protective stops (100% loss rate today, overall win rate 34.6%). Macro regime shifted from NORMAL to HIGH (MRI=65) to STRESSED (MRI=55), driving stop-outs across high-beta names (NVDA, TSLA, AAPL).
+
+---
+
+### TRADE INTEGRITY
+
+* **Daytrade Lot Ingestion Failure in Portfolio Tracker**:
+  * **Function**: `execution.portfolio_tracker.process_fill` (or fill ingestion handler).
+  * **Code Path**: Entry orders for daytrade setups (`DT-NVDA-s-...`, `DT-TSLA-b-...`, `DT-AAPL-b-...`) were submitted and executed via Alpaca, but fill events were either skipped or not ingested into `portfolio_tracker` lot state. Upon position closure, `portfolio_tracker` scanned for matching open lots, found zero, raised `FIFO orphan: closing fill for <symbol> has no prior lot`, and set `tracker_pnl` to `$0.00`.
+  * **Impact**: Authoritative P&L (`pnl_today=-86.78`) correctly reflects Alpaca execution history, but internal tracker analytics failed to record same-day trades.
+
+---
+
+### MODIFIED FILE FINDINGS
+
+No source files were modified in the last 24 hours.
+
+---
+
+### P5 STATUS
+
+* **P5-C1** | FVG MultiIndex silent crash | **UNTOUCHED**
+* **P5-C2** | run_movers.py ImportError | **UNTOUCHED**
+* **P5-H1** | PDT Enforcement | **OBSOLETE** (SEC S63 deletion verified)
+* **P5-H2** | Fill price crosstalk | **UNTOUCHED**
+* **P5-H3** | Orphan GTC 404 path | **UNTOUCHED**
+* **P5-H4** | Rule 2 dead code | **UNTOUCHED**
+* **P5-H5** | GTC stop PDT 3/3 suppression | **FIXED**
+* **P5-M1** | Cycle watchdog restart loop | **UNTOUCHED**
+* **P5-M2** | MRI score cached stale across sessions | **UNTOUCHED**
+* **P5-M3** | score_comparison JSON unbounded growth | **UNTOUCHED**
+* **P5-L1** | `_classify_loss_driver()` empty label | **UNTOUCHED**
+* **P5-L2** | `eod_YYYY-MM-DD.json` written before flat | **UNTOUCHED**
+* **P5-L3** | `live_data_writer.py` missing reconnect | **UNTOUCHED**
+
+---
+
+### NEW BUGS FOUND
+
+* **EXECUTION BUG | MEDIUM | `execution/portfolio_tracker.py` | Daytrade entry fill ingestion gap causing FIFO orphans**
+  * **Exact Failure Condition**: When daytrade orders (`DT-*`) execute entry fills during RTH, `portfolio_tracker` does not register open lots under the active strategy tier. When exit fills occur, `portfolio_tracker.on_fill()` looks up existing open lots for the symbol/tier, finds none, logs `WARNING FIFO orphan: closing fill for <symbol> has no prior lot`, and fails to track internal realized P&L (`tracker_pnl = 0.0`), leading to `EOD P&L DRIFT` alerts.
+
+---
+
+### FIX VALIDATION
+
+No prior fixes submitted in the last cycle to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+
+1. **Investigate Daytrade Entry Fill Ingestion in `portfolio_tracker`**: Trace `on_fill` event listeners in `execution/portfolio_tracker.py` to ensure fills from orders with prefix `DT-` properly instantiate open position lots in memory.
+2. **Address Open Critical Bug P5-C2**: Fix `run_movers.py:19` missing `DataFetcher` import before running premarket mover scans.
+3. **Address Open Critical Bug P5-C1**: Correct MultiIndex column handling in `_find_recent_fvgs()` inside `strategy/signal_generator.py`.
+================================================================================
+BROKER GROUND TRUTH (2026-11-23, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core/day exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=day exposed=16m no-broker-stop=0m [06:40-06:40] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=71m no-broker-stop=0m [07:30-07:30] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
