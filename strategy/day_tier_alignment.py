@@ -305,10 +305,11 @@ def trend_failure(symbol: str, fade_direction: str, frames: "dict | None" = None
 
 
 def counter_trend_fades_ok(events: "list[dict] | None" = None) -> "tuple[bool, str]":
-    """(allowed, reason). Counter-trend fades are allowed unless the kill flag is off, or their live record hits the
-    reversal criterion: cumulative realized P&L <= -$25 or 3 consecutive losses. A counter-trend entry is identified
-    by its decision record (trigger.counter_trend is True), joined through its entry_fill (decision_id -> trade_id) to its
-    exit_fill / partial_exit_fill rows.
+    """(allowed, reason). FADE entries are allowed unless the kill flag is off, or their live record hits the
+    reversal criterion: cumulative realized P&L <= -$25 or 3 consecutive losses. A fade entry is identified by its
+    decision record — trigger.counter_trend is True, or (DAY-ALIGN-1123, owner-approved 2026-11-23) trigger.mode is
+    "FADE" (a with-trend fade, e.g. the 11-23 NVDA short) — joined through its entry_fill (decision_id -> trade_id) to its
+    exit_fill / partial_exit_fill rows. Track B decisions are never counted.
     This is a "stop adding new fades" trigger checked at entry time, not a loss cap on open positions.
     An unreadable log -> NOT allowed (fail closed). Never raises."""
     try:
@@ -331,7 +332,9 @@ def counter_trend_fades_ok(events: "list[dict] | None" = None) -> "tuple[bool, s
             # DAYTRADE_TRACK_B_WATCHDAY_EXEMPT).
             if str((e.get("decision") or {}).get("track") or "").upper() == "B":
                 continue
-            if e.get("event") == "decision" and (e.get("trigger") or {}).get("counter_trend"):
+            _trig = e.get("trigger") or {}
+            if e.get("event") == "decision" and (
+                    _trig.get("counter_trend") or str(_trig.get("mode") or "").upper() == "FADE"):
                 for k in ("decision_id", "trade_id"):
                     if e.get(k):
                         ct_decisions.add(e[k])
