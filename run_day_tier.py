@@ -1439,6 +1439,16 @@ def run_tick() -> dict:
                                                     "trend_failure": _gate["trend_failure"]},
                                     _blk_why, bar_id)
                 continue
+            # DAY-ALIGN-1123 (owner-approved 2026-11-23): every Track A FADE — with-trend too — is gated by the
+            # pre-registered fade stop rule (cumulative <= -$25 or 3 consecutive losses), not only counter-trend fades.
+            if str(trigger.get("mode") or "").upper() == "FADE":
+                _fade_ok, _fade_why = _counter_trend_fades_ok()
+                if not _fade_ok:
+                    logger.info("[%s] [change=day-align-1123] FADE entry skipped: %s", sym, _fade_why)
+                    _log_direction_skip(sym, decision, {**trigger, "alignment": _gate["alignment"],
+                                                        "trend_failure": _gate["trend_failure"]},
+                                        f"[change=day-align-1123] {_fade_why}", bar_id)
+                    continue
             # CEO order 2026-10-06 ("the day tier must trade"): the trend/alignment verdict is RECORDED on the
             # entry's decision record (Rule D) but no longer blocks. A trade against the daily side is tagged
             # counter_trend so its P&L stays attributable.
