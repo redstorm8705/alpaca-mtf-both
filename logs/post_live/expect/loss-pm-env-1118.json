@@ -1,0 +1,14 @@
+{
+  "change": "loss-pm-env-1118",
+  "tier": 1,
+  "paths": ["scripts/loss_postmortem.py"],
+  "proof": [{"log": "logs/loss_postmortem_cron.log", "pattern": "\\[loss-pm-env-1118\\] \\.env loaded=True"}],
+  "expected_rate": "once per nightly cron run",
+  "window_sessions": 5,
+  "reversal": "a losing day's run logs 'ALERT no-op' or 'NOT delivered', prints 'None' in a card or text line, or its JSON has null stop_in_daily_atr / after_exit_best_R while Alpaca bars were readable",
+  "metrics": [
+    {"name": "loss_review_delivered", "source": "logs/loss_postmortem_cron.log and the Slack loss-review card per losing day", "direction": "up", "bound": "every losing day delivered"}
+  ],
+  "verification": "tests/test_loss_postmortem_env_1118.py",
+  "baseline_exempt_reason": ""
+}

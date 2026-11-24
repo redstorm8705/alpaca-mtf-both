@@ -35,6 +35,18 @@ from zoneinfo import ZoneInfo
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
+# LOSS-PM-ENV-1118 (owner-approved 2026-11-18): under cron there is no shell environment, so the Alpaca keys and the
+# Slack webhook come only from the repo's .env (as weekly_postmortem.py does). Loaded before any data or alert import;
+# whether it loaded is printed (key names only, never values) so a missing file is visible in the cron log.
+try:
+    from dotenv import load_dotenv
+    _ENV_LOADED = load_dotenv(_ROOT / ".env")
+except ImportError:
+    _ENV_LOADED = False
+print(f"[loss-pm-env-1118] .env loaded={_ENV_LOADED}; keys present: "
+      + ", ".join(k for k in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "SLACK_WEBHOOK_URL") if os.environ.get(k)),
+      file=sys.stderr)
+
 PT = ZoneInfo("America/Los_Angeles")
 ET = ZoneInfo("America/New_York")
 _OUT_DIR = _ROOT / "logs" / "loss_postmortem"
@@ -250,11 +262,18 @@ def _cause(row: dict) -> str:
     return "unclear"
 
 
+def _u(v) -> str:
+    """LOSS-PM-ENV-1118: a missing value prints as "unknown" (never "None"), for the card and the text alike."""
+    return "unknown" if v is None or v == "" else str(v)
+
+
 def _x(v) -> str:
-    return "?" if v is None else f"{v:+.2f}x"
+    return "unknown" if v is None else f"{v:+.2f}x"
 
 
 def _t12(hhmm) -> str:
+    if hhmm is None or hhmm == "":
+        return "unknown"
     try:
         return datetime.strptime(str(hhmm), "%H:%M").strftime("%-I:%M %p")
     except ValueError:
@@ -299,10 +318,10 @@ def _blocks(rep: dict) -> tuple[str, list]:
         cause = _CAUSE[_cause(t)][0]
         style = _MODE_WORDS.get(str(t.get("mode") or "").upper(), "trade")
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text":
-                       f"🔴 *{t['symbol']}*  *−${-t['realized_pnl']:.2f}*\n{cause}\n"
-                       f"{str(t.get('side') or 'trade').capitalize()} {_t12(t.get('entry_pt'))} → out {_t12(t.get('exit_pt'))} PT"}})
+                       f"🔴 *{_u(t.get('symbol'))}*  *−${-t['realized_pnl']:.2f}*\n{cause}\n"
+                       f"{_u(t.get('side')).capitalize()} {_t12(t.get('entry_pt'))} → out {_t12(t.get('exit_pt'))} PT"}})
         blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text":
-                       f"{(t.get('tier') or '').replace('daytrade', 'Day tier')} · {style} · "
+                       f"{_u(t.get('tier')).replace('daytrade', 'Day tier')} · {style} · "
                        f"best {_x(t.get('mfe_R'))} risk · after exit {_x(t.get('after_exit_best_R'))}"}]})
     weak = [(k, v) for k, v in rep["pattern_all_closed_trades"].items()
             if k.startswith("entry ") and v["n"] >= 5 and v["sum_R"] < 0]
@@ -322,9 +341,10 @@ def _slack_text(rep: dict) -> tuple[str, str]:
     lines = []
     for t in rep["losing_trades"]:
         lines.append(
-            f"- {t['symbol']} {t['tier']} {t.get('mode') or ''} {t['side']} {t['entry_pt']} PT: "
-            f"${t['realized_pnl']:+.2f} ({t['realized_R']}R). Stop {t['stop_in_daily_atr']}x daily range; "
-            f"best while held {t['mfe_R']}R; after the exit {t['after_exit_best_R']}R. {t['verdict']}.")
+            f"- {_u(t.get('symbol'))} {_u(t.get('tier'))} {t.get('mode') or ''} {_u(t.get('side'))} "
+            f"{_u(t.get('entry_pt'))} PT: ${t['realized_pnl']:+.2f} ({_u(t.get('realized_R'))} R). "
+            f"Stop {_u(t.get('stop_in_daily_atr'))} x daily range; best while held {_u(t.get('mfe_R'))} R; "
+            f"after the exit {_u(t.get('after_exit_best_R'))} R. {_u(t.get('verdict'))}.")
     worst = list(rep["pattern_all_closed_trades"].items())[:3]
     if worst:
         lines.append("Weakest groups so far: " + "; ".join(
@@ -354,7 +374,10 @@ def main(argv=None) -> int:
     if rep["losing_trades"] and not a.no_slack:
         from alerts import send_slack_blocks
         text, blocks = _blocks(rep)
-        send_slack_blocks(blocks, text)
+        if not send_slack_blocks(blocks, text):
+            # LOSS-PM-ENV-1118 (board, Majors): a report that sends nothing must not exit 0
+            print(f"[loss-pm-env-1118] loss review for {a.date} NOT delivered to Slack", file=sys.stderr)
+            return 2
     return 0
 
 
