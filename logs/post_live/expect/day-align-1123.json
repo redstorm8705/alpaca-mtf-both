@@ -1,0 +1,15 @@
+{
+  "change": "day-align-1123",
+  "tier": 2,
+  "paths": ["strategy/day_tier_alignment.py", "run_day_tier.py"],
+  "proof": [{"log": "logs/day_tier_runner_cron.log", "pattern": "\\[change=day-align-1123\\] FADE entry skipped"}],
+  "expected_rate": "every Track A FADE trigger while the fade record is below the stop rule (all of them on the current record, about 1-3 per trading day); zero non-FADE skips",
+  "window_sessions": 5,
+  "reversal": "a non-FADE Day entry (RIDE, PULLBACK, DRIVE) is skipped by this rule, a Track A FADE entry fills while the fade record fails the rule, or the skipped FADEs logged over the next 20 would have made money at the same size",
+  "metrics": [
+    {"name": "fade_entries_filled", "source": "logs/day_tier_events.jsonl entry_fill rows whose decision trigger.mode is FADE (Track A)", "direction": "down", "bound": "0 while counter_trend_fades_ok returns not allowed"},
+    {"name": "non_fade_entries", "source": "logs/day_tier_events.jsonl entry_fill rows with mode RIDE/PULLBACK/DRIVE", "direction": "none", "bound": "unchanged by this rule (no day-align-1123 skip on them)"}
+  ],
+  "verification": "tests/test_day_align_gate_1123.py",
+  "baseline_exempt_reason": ""
+}
