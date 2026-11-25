@@ -1,0 +1,18 @@
+{
+  "change": "kill-backup-untagged-1118",
+  "tier": 1,
+  "paths": [
+    "execution/risk_manager.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/mtf_bot.log",
+      "pattern": "\\[change=kill-backup-untagged-1118\\] kill-switch backup"
+    }
+  ],
+  "expected_rate": "once at deploy (the seed line), then on each backup episode (the exact per-tier measure failing): the once-per-PT-day carried-evidence X line plus any decision lines",
+  "window_sessions": 5,
+  "window_reason": "Backup episodes (ledger lag after a fill) occur a few times a week, not daily; the deploy seed line proves the code ran on day one.",
+  "reversal": "a backup B that differs from the fills-based Day+Swing P&L by more than the unbooked-share move; an owner app fill in a QHM/F6 name counted as Day/Swing; data/state/kill_backup_reads.json missing or not updated across a session while the bot runs; carried evidence X missing on more than half of sessions with no after-hours fill",
+  "verification": "tests/test_kill_backup_untagged_1118.py"
+}

@@ -147,7 +147,9 @@ class BackupMeasure(unittest.TestCase):
     def test_untagged_fill_without_protected_shares_still_counts(self):
         positions = [_pos("AMD", 11, 90.0, 100.0)]
         fills = [("AMD", "buy", 1, 95.0, None)]
-        self.assertEqual(self._b(fills, [AFTER], positions, {"AMD": (10.0, 0.0)}, oids=["o1"]), -110.0 + 5.0)
+        # KILL-BACKUP-UNTAGGED-1118: complete read history showing AMD held no QHM/F6 today puts it out of scope
+        with mock.patch.object(rm, "_backup_read_history", return_value=(set(), True, [])):
+            self.assertEqual(self._b(fills, [AFTER], positions, {"AMD": (10.0, 0.0)}, oids=["o1"]), -110.0 + 5.0)
 
     def test_fill_id_count_mismatch_fails_closed(self):
         self.assertIsNone(self._b([("A", "buy", 1, 1.0, "intraday")], [AFTER], [], {}, oids=[]))
