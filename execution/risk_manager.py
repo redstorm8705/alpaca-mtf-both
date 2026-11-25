@@ -5,11 +5,14 @@ Position sizing, daily loss limits, and kill switch logic.
 The most important file in the bot — protects capital above everything else.
 """
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import logging
 import math
 import os
+import sys
 import requests  # type: ignore[import-untyped]
 import tempfile
 import threading
@@ -639,26 +642,14 @@ def _source_order_id(source: object) -> str:
 def _ledger_checkpoint() -> "tuple[dict, datetime | None, bool]":
     """KILL-BACKUP-1111: ({SYM: (day+swing claim, qhm+forever_6 claim)}, last_reconciled_utc, from_file).
     Reads the ledger FILE's tier claims only (never alpaca_net_qty or drift). An unreadable file returns the last
-    checkpoint this process read successfully (from_file False); with none, ({}, None, False). Never raises."""
+    checkpoint this process read successfully (from_file False); with none, ({}, None, False). Never raises.
+    KILL-BACKUP-UNTAGGED-1118: every successful file read is kept in the read history (_record_backup_read); the
+    last-good fallback never is."""
     try:
         from execution.ownership_guard import load_ledger
-        from tier_names import canonical_tier
         led = load_ledger()
-        claims: dict = {}
-        for sym, row in (led.get("positions") or {}).items():
-            tiers = row.get("tiers") if isinstance(row, dict) else None
-            if not isinstance(tiers, dict):
-                raise ValueError(f"{sym}: malformed ownership row")
-            act = prot = 0.0
-            for raw_tier, claim in tiers.items():
-                q = float((claim or {}).get("qty") or 0.0) if isinstance(claim, dict) else float("nan")
-                if not math.isfinite(q):
-                    raise ValueError(f"{sym}.{raw_tier}: non-finite claim")
-                if canonical_tier(raw_tier) in ("qhm", "forever_6"):
-                    prot += q
-                else:
-                    act += q
-            claims[str(sym).upper()] = (act, prot)
+        claims = _ledger_claims(led)
+        _record_backup_read(_read_entry(led, claims))
         # rev 4: the newest fill the last rebuild replayed (sync_ledger stamps it); last_reconciled_utc is never
         # stamped by the rebuild, so it is not used
         from execution.ownership_guard import _parse_fill_time
@@ -710,6 +701,704 @@ def _fill_after(ts_text: str, checkpoint: "datetime | None") -> bool:
     return True if t is None else t > checkpoint
 
 
+# ── KILL-BACKUP-UNTAGGED-1118 (owner-approved; logs/design_records/kill_backup_untagged_2026-11-18.md, rev 10) ──
+# An untagged fill in a symbol that held QHM/F6 shares today is attributed by Alpaca's order `source`: null (the
+# owner's app order) is left out of Day/Swing only when Day/Swing held none of the symbol at the fill (measured from a
+# ledger read stamped before it); "access_key" (the bot) counts as Day/Swing only under a Day/Swing-tagged parent and
+# within the Day/Swing position. Anything else gives no measure (the backup returns None; new entries wait).
+_KILL_BACKUP_READS_FILE = Path(__file__).resolve().parent.parent / "data" / "state" / "kill_backup_reads.json"
+_KILL_BACKUP_READS_DEFAULT = _KILL_BACKUP_READS_FILE   # the repo path a test process may never read or write
+_KILL_BACKUP_READS_SCHEMA = "rev10"   # file format tag: raw stamps, taint flags, Y (older files read as missing)
+_READS_LOCK_STATS: dict = {"section_max_s": 0.0, "section_min_s": None}   # measured critical-section durations
+_DAY_SWING_FILL_TIERS = frozenset({"intraday", "daytrade"})   # the tags _today_fills gives Swing/core and Day fills
+_UNTAGGED_ORDER_CACHE: dict = {"pt_date": "", "facts": {}}
+_KBU = "[change=kill-backup-untagged-1118]"
+
+
+class _NoMeasure(Exception):
+    """One untagged fill cannot be attributed; carries the term the backup reports."""
+
+    def __init__(self, term: dict):
+        super().__init__(json.dumps(term, sort_keys=True, default=str))
+        self.term = term
+
+
+def _pt_midnight() -> datetime:
+    return datetime.now(_PT).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _sym_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(s, str) for s in value)
+
+
+def _qty_map(value: Any) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(k, str) and isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+        for k, v in value.items())
+
+
+def _read_entry_ok(value: Any) -> bool:
+    return (
+        isinstance(value, dict)
+        and isinstance(value.get("read_utc"), str)
+        and (value.get("stamp_raw") is None or isinstance(value.get("stamp_raw"), str))
+        and isinstance(value.get("unkeyed"), bool)
+        and _sym_list(value.get("credited"))
+        and _sym_list(value.get("held"))
+        and _qty_map(value.get("active"))
+        and _qty_map(value.get("protected"))
+    )
+
+
+def _kbu_under_test() -> bool:
+    """True in a test process: alerts.py's guard (MTF_TEST_MODE=1, pytest loaded, a test-runner entry point), or a
+    __main__ run as unittest/pytest (`python -m unittest discover -s tests`, where tests/__init__ and conftest do not
+    run). Never raises."""
+    try:
+        from alerts import _under_test
+        if _under_test():
+            return True
+    except Exception as e:  # noqa: BLE001 — fall back to the module check below
+        logger.debug("%s alerts test guard unavailable (%s)", _KBU, e)
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    return str(getattr(spec, "name", "") or "").startswith(("unittest", "pytest"))
+
+
+def _reads_file_allowed() -> bool:
+    """A test process never reads or writes the repo's real read history: only a path a test redirected to (a temp
+    file) is used. Production always uses the file."""
+    if not _kbu_under_test():
+        return True
+    try:
+        return _KILL_BACKUP_READS_FILE.resolve() != _KILL_BACKUP_READS_DEFAULT.resolve()
+    except OSError:
+        return False
+
+
+def _load_backup_reads() -> "tuple[dict | None, str]":
+    """(the read history, "ok") or (None, "missing" | "corrupt"). "corrupt" only for TODAY's file that cannot be
+    parsed (unreadable JSON written today, or today's file with malformed fields); a missing file, an older format, or
+    an unusable file from an earlier PT day is "missing" (a fresh day file, no evidence_lost). Never raises."""
+    if not _reads_file_allowed():
+        return None, "missing"
+    today = datetime.now(_PT).strftime("%Y-%m-%d")
+    try:
+        data = json.loads(_KILL_BACKUP_READS_FILE.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, "missing"
+    except Exception as e:  # noqa: BLE001 — RC-3: logged
+        try:
+            written = datetime.fromtimestamp(_KILL_BACKUP_READS_FILE.stat().st_mtime, _PT).strftime("%Y-%m-%d")
+        except OSError:
+            written = today
+        logger.warning("%s kill-switch backup: read history unreadable (%s), written %s", _KBU, e, written)
+        return None, ("corrupt" if written == today else "missing")
+    if not isinstance(data, dict) or data.get("schema") != _KILL_BACKUP_READS_SCHEMA:
+        logger.info("%s kill-switch backup: read history in an older format — starting a fresh day file", _KBU)
+        return None, "missing"
+    ok = (
+        isinstance(data.get("pt_date"), str)
+        and isinstance(data.get("evidence_lost"), bool)
+        and (data.get("prev_last") is None or _read_entry_ok(data.get("prev_last")))
+        and isinstance(data.get("reads"), list)
+        and all(_read_entry_ok(r) for r in data.get("reads") or [])
+    )
+    if not ok:
+        is_today = data.get("pt_date") == today
+        logger.warning("%s kill-switch backup: read history malformed (%s)", _KBU,
+                       "today's file: evidence lost for the day" if is_today else "an earlier day's file: missing")
+        return None, ("corrupt" if is_today else "missing")
+    return data, "ok"
+
+
+def _write_backup_reads(data: dict) -> None:
+    """Atomic write (unique temp name in the same directory, fsync, os.replace). Raises on failure (caller logs)."""
+    target = _KILL_BACKUP_READS_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp: "Path | None" = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=target.parent, prefix=f".{target.name}.",
+                                         suffix=".tmp", delete=False) as handle:
+            tmp = Path(handle.name)
+            json.dump(data, handle, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, target)
+        tmp = None
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as unlink_err:
+                logger.debug("kill backup read history temp cleanup failed: %s", unlink_err)
+
+
+def _ledger_claims(led: dict) -> dict:
+    """{SYM: (day+swing claim, qhm+forever_6 claim)} from the ledger file's tier claims. Raises on a malformed row."""
+    from tier_names import canonical_tier
+    claims: dict = {}
+    for sym, row in (led.get("positions") or {}).items():
+        tiers = row.get("tiers") if isinstance(row, dict) else None
+        if not isinstance(tiers, dict):
+            raise ValueError(f"{sym}: malformed ownership row")
+        act = prot = 0.0
+        for raw_tier, claim in tiers.items():
+            q = float((claim or {}).get("qty") or 0.0) if isinstance(claim, dict) else float("nan")
+            if not math.isfinite(q):
+                raise ValueError(f"{sym}.{raw_tier}: non-finite claim")
+            if canonical_tier(raw_tier) in ("qhm", "forever_6"):
+                prot += q
+            else:
+                act += q
+        claims[str(sym).upper()] = (act, prot)
+    return claims
+
+
+def _read_entry(led: dict, claims: dict) -> dict:
+    """One ledger file read as stored: claims, the RAW fills_through_utc, the held QHM/F6 set and both taint flags."""
+    raw_ts = led.get("fills_through_utc")
+    _cred = led.get("credited_since_stamp")
+    return {
+        "read_utc": datetime.now(timezone.utc).isoformat(),
+        "stamp_raw": raw_ts if isinstance(raw_ts, str) and raw_ts else None,
+        "unkeyed": bool(led.get("unkeyed_edit_since_stamp")),
+        "credited": sorted({_source_order_id(c) for c in _cred}) if isinstance(_cred, list) else [],
+        "held": sorted(sym for sym, (_a, p) in claims.items() if p != 0.0),
+        "active": {s: a for s, (a, _p) in sorted(claims.items()) if a != 0.0},
+        "protected": {s: p for s, (_a, p) in sorted(claims.items()) if p != 0.0},
+    }
+
+
+class _ReadsLockBusy(Exception):
+    """The other process held the read-history lock past this check's bounded wait."""
+
+
+@contextlib.contextmanager
+def _backup_reads_lock():
+    """Exclusive fcntl lock around the read-modify-write (the main bot and the Day tier's cron both record), taken
+    non-blocking on the trading thread. When busy, retry until the longest critical section this process has measured
+    has passed (sleeping the shortest one between tries); with no measurement yet, one try. Past that bound
+    _ReadsLockBusy is raised: the caller skips this check's read (a skipped read only removes evidence)."""
+    lock_path = _KILL_BACKUP_READS_FILE.with_name(_KILL_BACKUP_READS_FILE.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
+    try:
+        stats = _READS_LOCK_STATS
+        lock_timeout_at = time.monotonic() + stats["section_max_s"]
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= lock_timeout_at:
+                    raise _ReadsLockBusy(f"lock busy past {stats['section_max_s']:.4f} s") from None
+                time.sleep(stats["section_min_s"] or stats["section_max_s"])
+        section_start = time.monotonic()
+        try:
+            yield
+        finally:
+            section = time.monotonic() - section_start
+            stats["section_max_s"] = max(stats["section_max_s"], section)
+            low = stats["section_min_s"]
+            stats["section_min_s"] = section if low is None else min(low, section)
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _record_backup_read(entry: dict) -> None:
+    """KILL-BACKUP-UNTAGGED-1118 rev 10: keep one ledger FILE read in data/state/kill_backup_reads.json.
+
+    Under an fcntl lock: load, reset on a new PT day (the previous file's newest read is carried as Y, the last read
+    before today's PT midnight), append the read when it differs from the last stored one, write atomically only when
+    something changed. A corrupt file (today's, unparseable) starts a fresh day marked evidence_lost (no carried
+    evidence X for the rest of the PT day; today's earlier held symbols may be gone). A test process records nothing
+    unless the file was redirected to a temp path. Lock busy past the bounded wait: this read is skipped (one WARNING).
+    Never raises."""
+    if not _reads_file_allowed():
+        return
+    started = time.monotonic()
+    changed = False
+    try:
+        today = datetime.now(_PT).strftime("%Y-%m-%d")
+        with _backup_reads_lock():
+            data, status = _load_backup_reads()
+            changed = False
+            if data is None or data.get("pt_date") != today:
+                prev_last = None
+                if data is not None and str(data.get("pt_date")) < today:
+                    prev_last = data["reads"][-1] if data["reads"] else data.get("prev_last")
+                lost = status == "corrupt" or bool(data is not None and data.get("pt_date") == today
+                                                   and data.get("evidence_lost"))
+                if status == "corrupt":
+                    logger.warning("%s kill-switch backup: read history corrupt — rebuilt; no carried evidence for "
+                                   "the rest of %s", _KBU, today)
+                data = {"schema": _KILL_BACKUP_READS_SCHEMA, "pt_date": today, "evidence_lost": lost,
+                        "prev_last": prev_last, "reads": []}
+                changed = True
+            reads = data["reads"]
+            prev = reads[-1] if reads else None
+            if prev is None or any(prev.get(k) != entry[k] for k in entry if k != "read_utc"):
+                reads.append(entry)
+                changed = True
+            if changed:
+                _write_backup_reads(data)
+        logger.debug("%s kill-switch backup: read history record took %.4f s (written=%s)", _KBU,
+                     time.monotonic() - started, changed)
+    except _ReadsLockBusy as busy:
+        logger.warning("%s kill-switch backup: read history lock busy (%s) — this check's read is skipped", _KBU, busy)
+    except Exception as e:  # noqa: BLE001 — RC-3: a read the history misses only narrows what can be attributed
+        logger.warning("%s kill-switch backup: read history write failed (%s)", _KBU, e)
+
+
+def _record_kill_check_read() -> None:
+    """Every kill check (exact and backup path): one ledger FILE read into the read history. An unreadable or
+    malformed ledger is not recorded (never the last-good fallback). Never raises."""
+    if not _reads_file_allowed():
+        return
+    started = time.monotonic()
+    try:
+        from execution.ownership_guard import load_ledger
+        led = load_ledger()
+        entry = _read_entry(led, _ledger_claims(led))
+    except Exception as e:  # noqa: BLE001 — RC-3: nothing recorded for this check
+        logger.debug("%s kill-switch backup: ledger read for the history failed (%s)", _KBU, e)
+        return
+    _record_backup_read(entry)
+    logger.debug("%s kill-switch backup: per-check ledger read + record took %.4f s", _KBU,
+                 time.monotonic() - started)
+
+
+def seed_kill_backup_reads() -> bool:
+    """Deploy step (optional; every kill check records a read):
+        venv/bin/python3 -c 'from execution.risk_manager import seed_kill_backup_reads as s; print(s())'
+    Records one ledger file read now, then reports whether the carried evidence X is available today against today's
+    fills (Alpaca read). False, with a WARNING, when X is unavailable (e.g. a deploy after today's first fill: the
+    ledger stamp is already from today) or the fills cannot be read. Never raises."""
+    try:
+        _record_kill_check_read()
+        pt_today = datetime.now(_PT).strftime("%Y-%m-%d")
+        _fills, fills_ok = _today_fills()
+        if not fills_ok:
+            logger.warning("%s kill-switch backup seed: today's fills unreadable — X not confirmed", _KBU)
+            return False
+        _held, complete, _reads = _backup_read_history(
+            pt_today, tuple(_intraday_cache.get("fill_ts") or ()), tuple(_intraday_cache.get("fill_oid") or ()))
+        if not complete:
+            logger.warning("%s kill-switch backup seed: no carried evidence X today — every untagged-fill symbol is "
+                           "in scope until tomorrow's first read", _KBU)
+        else:
+            logger.info("%s kill-switch backup seed: carried evidence X available", _KBU)
+        return complete
+    except Exception as e:  # noqa: BLE001
+        logger.warning("%s kill-switch backup seed failed (%s)", _KBU, e)
+        return False
+
+
+_SESSION_END_CACHE: dict = {"pt_date": "", "results": {}}
+
+
+def _no_fill_after_stamp(stamp: datetime, pt_today: str) -> "bool | None":
+    """True only when Alpaca shows NO account fill with a transaction time after `stamp` and before today's PT
+    midnight (the read is then the prior session's end state). False when such a fill exists, or one cannot be ruled
+    out (an unparseable time, a full page with none after the stamp). None when the read fails. One bounded request
+    (T1 trading REST /v2/account/activities/FILL, manual_sale_proof's timeout, the endpoint's largest page) from the
+    stamp's whole second (Alpaca's `after` is not exact below a second, so rows are filtered here). A True/False
+    result is cached for the PT day; a failure is retried on the next check. Never raises."""
+    cache = _SESSION_END_CACHE
+    if cache.get("pt_date") != pt_today:
+        cache.update(pt_date=pt_today, results={})
+    key = stamp.isoformat()
+    if key in cache["results"]:
+        return cache["results"][key]
+    try:
+        from execution.manual_sale_proof import _REQUEST_TIMEOUT_SECONDS
+        from execution.ownership_guard import _parse_fill_time
+        api_key = os.getenv("ALPACA_API_KEY", "")
+        secret = os.getenv("ALPACA_SECRET_KEY", "")
+        if not api_key or not secret:
+            logger.warning("%s kill-switch backup: API keys not set — prior-session fills unreadable", _KBU)
+            return None
+        fmt = "%Y-%m-%dT%H:%M:%SZ"
+        page_size = "100"   # the activities endpoint's maximum page (a larger one is refused with HTTP 422)
+        resp = requests.get(
+            f"{_ALPACA_BASE_URL}/v2/account/activities/FILL",
+            headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret},
+            params={"after": stamp.astimezone(timezone.utc).strftime(fmt),
+                    "until": _pt_midnight().astimezone(timezone.utc).strftime(fmt),
+                    "direction": "asc", "page_size": page_size},
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+        rows = resp.json() if resp.status_code == 200 else None
+        if not isinstance(rows, list):
+            logger.warning("%s kill-switch backup: prior-session fills read HTTP %d", _KBU, resp.status_code)
+            return None
+        result = True
+        for row in rows:
+            t = _parse_fill_time(row.get("transaction_time")) if isinstance(row, dict) else None
+            if t is None or t > stamp:
+                result = False
+                break
+        if result and str(len(rows)) == page_size:
+            result = False   # a full page with every fill at the stamp's second: later fills cannot be ruled out
+        cache["results"][key] = result
+        return result
+    except Exception as e:  # noqa: BLE001 — RC-3: unreadable -> X missing
+        logger.warning("%s kill-switch backup: prior-session fills read failed (%s)", _KBU, e)
+        return None
+
+
+def _backup_read_history(pt_today: str, fill_ts: tuple, fill_oids: tuple) -> "tuple[set, bool, list]":
+    """(symbols that held QHM/F6 today, evidence complete, today's valid reads [(stamp, active, protected, credited)]).
+
+    X (recomputed on every check, never stored): the earliest file read of today whose raw stamp is present, before
+    today's PT midnight and strictly earlier than the first fill in today's fill list, with unkeyed_edit_since_stamp
+    false, no credited order id among today's fill order ids, and no account fill after its stamp and before PT
+    midnight (_no_fill_after_stamp: one bounded Alpaca read, only for an otherwise-valid X). Such a read is the prior
+    session's end state.
+    Evidence is complete only when X exists. Y (the last read before PT midnight) only adds symbols. Valid reads (for
+    the Day/Swing position at a fill) are today's reads _ledger_checkpoint would accept: stamp from today, not unkeyed.
+    One log line per PT day on X. Never raises."""
+    held: set = set()
+    reads: list = []
+    complete = False
+    x_log: dict = {"found": False}
+    try:
+        from execution.ownership_guard import _parse_fill_time
+        data, _status = _load_backup_reads()
+        if data is not None and data.get("pt_date") == pt_today:
+            midnight = _pt_midnight()
+            times = [_parse_fill_time(t) for t in fill_ts]
+            first_fill = min((t for t in times if t is not None), default=None)
+            fills_readable = all(t is not None for t in times)
+            today_oids = {str(o) for o in fill_oids if o}
+            for r in data["reads"]:
+                held |= set(r["held"])
+                stamp = _parse_fill_time(r["stamp_raw"]) if r["stamp_raw"] else None
+                if stamp is not None and stamp >= midnight and not r["unkeyed"]:
+                    reads.append((stamp, dict(r["active"]), dict(r["protected"]), frozenset(r["credited"])))
+            if data.get("prev_last") is not None:
+                held |= set(data["prev_last"]["held"])
+            if not data["evidence_lost"]:
+                for r in data["reads"]:   # stored in read order: the first match is the earliest read
+                    stamp = _parse_fill_time(r["stamp_raw"]) if r["stamp_raw"] else None
+                    if stamp is None or stamp >= midnight:
+                        continue
+                    if not fills_readable or (first_fill is not None and not stamp < first_fill):
+                        continue
+                    tainted = sorted(set(r["credited"]) & today_oids)
+                    found = not r["unkeyed"] and not tainted
+                    # the read equals the prior session's end state only if no account fill came after its stamp
+                    # (an after-hours QHM/F6 buy after the last rebuild); checked only for an otherwise-valid X
+                    session_end = _no_fill_after_stamp(stamp, pt_today) if found else None
+                    found = found and session_end is True
+                    x_log = {"found": found, "stamp": r["stamp_raw"], "unkeyed": r["unkeyed"],
+                             "credited_today": tainted, "read_utc": r["read_utc"],
+                             "no_fill_after_stamp": session_end}
+                    if found:
+                        complete = True
+                        break
+            else:
+                x_log = {"found": False, "evidence_lost": True}
+    except Exception as e:  # noqa: BLE001 — RC-3: missing evidence
+        logger.warning("%s kill-switch backup: read history unusable (%s)", _KBU, e)
+        held, reads, complete = set(), [], False
+        x_log = {"found": False, "error": str(e)}
+    if _once_today(pt_today, "kbu-x"):
+        logger.info("%s kill-switch backup carried evidence X: %s", _KBU, json.dumps(x_log, sort_keys=True))
+    if not complete and _once_today(pt_today, "kbu-scope-fallback"):
+        logger.warning("%s kill-switch backup: no carried evidence X (a clean ledger read of the prior session's end "
+                       "state) — every symbol with an untagged fill today is in scope (rule: missing scope evidence)",
+                       _KBU)
+    return held, complete, reads
+
+
+def _fetch_symbol_orders(symbol: str) -> "list | None":
+    """Raw nested /v2/orders for one symbol (keeps `source`, which the SDK drops), newest first. One bounded request
+    (manual_sale_proof's timeout and page size), T1 trading REST, read-only. None on any failure. Never raises."""
+    try:
+        from execution.manual_sale_proof import _PAGE_SIZE, _REQUEST_TIMEOUT_SECONDS
+        api_key = os.getenv("ALPACA_API_KEY", "")
+        secret = os.getenv("ALPACA_SECRET_KEY", "")
+        if not api_key or not secret:
+            logger.warning("%s kill-switch backup: API keys not set — order source unreadable for %s", _KBU, symbol)
+            return None
+        resp = requests.get(
+            f"{_ALPACA_BASE_URL}/v2/orders",
+            headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret},
+            params={"status": "all", "symbols": symbol, "limit": str(_PAGE_SIZE), "direction": "desc",
+                    "nested": "true"},
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+        )
+        if resp.status_code != 200:
+            logger.warning("%s kill-switch backup: order read HTTP %d for %s", _KBU, resp.status_code, symbol)
+            return None
+        rows = resp.json()
+        if not isinstance(rows, list):
+            logger.warning("%s kill-switch backup: non-list order page for %s", _KBU, symbol)
+            return None
+        return rows
+    except Exception as e:  # noqa: BLE001 — RC-3: unreadable source -> no measure
+        logger.warning("%s kill-switch backup: order read failed for %s (%s)", _KBU, symbol, e)
+        return None
+
+
+def _untagged_order_facts(symbol: str, order_ids: list, pt_today: str) -> dict:
+    """{order id: facts or None}. Facts = has_source, source, symbol, side, is_leg, parent_tier (the tier tag of the
+    order whose `legs` carry this id). Found orders are cached for the PT day (immutable); an id a SUCCESSFUL read did
+    not return is cached as None (no measure) for the PT day. A failed read caches nothing: it is retried on the next
+    check (still one request per symbol per check). Never raises."""
+    cache = _UNTAGGED_ORDER_CACHE
+    if cache.get("pt_date") != pt_today:
+        cache.update(pt_date=pt_today, facts={})
+    facts: dict = cache["facts"]
+    if any(o not in facts for o in order_ids):
+        rows = _fetch_symbol_orders(symbol)
+        parsed = False
+        if rows is not None:
+            try:
+                from execution.ownership_guard import tier_of_coid
+
+                def _f(o: dict, is_leg: bool, parent_tier: "str | None") -> dict:
+                    return {"has_source": "source" in o, "source": o.get("source"),
+                            "symbol": str(o.get("symbol") or "").strip().upper(),
+                            "side": str(o.get("side") or "").strip().lower(),
+                            "is_leg": is_leg, "parent_tier": parent_tier}
+
+                found: dict = {}
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    oid = str(row.get("id") or "").strip()
+                    if oid and oid not in found:
+                        found[oid] = _f(row, False, None)
+                    coid = row.get("client_order_id")
+                    ptier = tier_of_coid(coid if isinstance(coid, str) else None)
+                    for leg in row.get("legs") or []:
+                        lid = str(leg.get("id") or "").strip() if isinstance(leg, dict) else ""
+                        if lid:
+                            found[lid] = _f(leg, True, ptier)
+                facts.update(found)
+                parsed = True
+            except Exception as e:  # noqa: BLE001 — RC-3
+                logger.warning("%s kill-switch backup: order rows unparseable for %s (%s)", _KBU, symbol, e)
+        if parsed:
+            # definitive: the read succeeded and does not hold these ids (a failed read is retried next check)
+            for o in order_ids:
+                facts.setdefault(o, None)
+    return {o: facts.get(o) for o in order_ids}
+
+
+def _log_untagged(pt_today: str, symbol: str, order_id: str, side: str, source: Any, rule: str) -> None:
+    if _once_today(pt_today, f"kbu:{order_id}:{rule}"):
+        logger.info("%s symbol=%s order_id=%s side=%s source=%s rule=%s", _KBU, symbol, order_id, side,
+                    "null" if source is None else source, rule)
+
+
+def _decide_symbol(sym: str, fills: tuple, fill_ts: tuple, oids: tuple, claims: dict, ckpt: datetime,
+                   credited: "frozenset | set", reads: list, pt_today: str) -> set:
+    """The fill indices of `sym` left out of Day/Swing (owner app orders); raises _NoMeasure when any untagged fill of
+    `sym` cannot be attributed."""
+    from execution.ownership_guard import _parse_fill_time
+    side_of: dict = {}
+    qty_of: dict = {}
+    tier_of: dict = {}
+    for i, (fsym, fside, fq, _fpx, ftier) in enumerate(fills):
+        if fsym == sym:
+            side_of[i], qty_of[i], tier_of[i] = fside, float(fq), ftier
+    idxs = sorted(side_of)
+    times: dict = {}
+    for i in idxs:
+        t = _parse_fill_time(fill_ts[i])
+        if t is None:
+            raise _NoMeasure({"symbol": sym, "order_id": oids[i], "fill_time_unreadable": True})
+        times[i] = t
+    untagged = [i for i in idxs if tier_of[i] is None]
+    for i in untagged:
+        if not oids[i]:
+            raise _NoMeasure({"symbol": sym, "order_id": "", "untagged_source_unknown": True})
+    facts = _untagged_order_facts(sym, sorted({oids[i] for i in untagged}), pt_today)
+
+    def _is_buy(i: int) -> bool:
+        return side_of[i] in ("buy", "buy_to_cover")
+
+    def _signed(i: int) -> float:
+        return _signed_fill_qty(side_of[i], qty_of[i])
+
+    cat: dict = {}    # i -> ds | prot | null | ak
+    kind: dict = {}   # i -> ds | prot (resolved book)
+    for i in idxs:
+        tier = tier_of[i]
+        if tier is None:
+            f = facts.get(oids[i])
+            if (f is None or not f["has_source"] or f["source"] not in (None, "access_key")
+                    or f["symbol"] != sym or f["side"] != ("buy" if _is_buy(i) else "sell")):
+                _log_untagged(pt_today, sym, oids[i], side_of[i], None if f is None else f["source"],
+                              "source missing or unreadable -> no measure")
+                raise _NoMeasure({"symbol": sym, "order_id": oids[i], "untagged_source_unknown": True})
+            cat[i] = "null" if f["source"] is None else "ak"
+        elif tier in _PROTECTED_FILL_TIERS:
+            cat[i] = kind[i] = "prot"
+        else:
+            cat[i] = kind[i] = "ds"
+
+    def _position(read: tuple, t: datetime, inclusive: bool) -> "tuple[float, float]":
+        """(Day/Swing, QHM/F6) position of `sym` at t: the read's claims, plus the symbol's fills after its stamp and
+        before t; a fill credited into the read's claim after its stamp is taken out again when it is not before t."""
+        stamp, active, protected, rcred = read
+        ds = float(active.get(sym, 0.0))
+        pr = float(protected.get(sym, 0.0))
+        for j in idxs:
+            tj = times[j]
+            before = tj <= t if inclusive else tj < t
+            if oids[j] and oids[j] in rcred:
+                if before:
+                    continue
+                delta = -_signed(j)
+            elif stamp < tj and before:
+                delta = _signed(j)
+            else:
+                continue
+            k = kind.get(j)
+            if k is None:
+                raise _NoMeasure({"symbol": sym, "order_id": oids[j], "unattributed_fill_in_read": True})
+            if k == "ds":
+                ds += delta
+            else:
+                pr += delta
+        return ds, pr
+
+    def _read_before(t: datetime) -> "tuple | None":
+        best = None
+        for r in reads:
+            if r[0] < t and (best is None or r[0] >= best[0]):
+                best = r
+        return best
+
+    order_first_prot: dict = {}
+    order_cum: dict = {}
+    ordered = sorted(idxs, key=lambda i: times[i])
+    batches: list = []
+    for i in ordered:
+        if batches and times[batches[-1][0]] == times[i]:
+            batches[-1].append(i)
+        else:
+            batches.append([i])
+    for batch in batches:
+        nulls = [i for i in batch if cat[i] == "null"]
+        aks = [i for i in batch if cat[i] == "ak"]
+        if not nulls and not aks:
+            continue
+        t = times[batch[0]]
+        read = _read_before(t)
+        if read is None:
+            for i in nulls + aks:
+                _log_untagged(pt_today, sym, oids[i], side_of[i], facts[oids[i]]["source"],
+                              "no valid ledger read stamped before the fill -> no measure")
+            raise _NoMeasure({"symbol": sym, "order_id": oids[(nulls + aks)[0]], "no_read_before_fill": True})
+        ds, pr = _position(read, t, False)
+        if nulls:
+            if ds != 0.0:
+                for i in nulls:
+                    _log_untagged(pt_today, sym, oids[i], side_of[i], None,
+                                  "owner order with a Day/Swing position -> no measure")
+                raise _NoMeasure({"symbol": sym, "order_id": oids[nulls[0]],
+                                  "owner_order_with_day_swing_position": True})
+            null_sell = sum(qty_of[i] for i in nulls if not _is_buy(i))
+            null_buy = sum(qty_of[i] for i in nulls if _is_buy(i))
+            prot_red = sum(qty_of[i] for i in batch if cat[i] == "prot" and not _is_buy(i))
+            prot_net = sum(_signed(i) for i in batch if cat[i] == "prot")
+            over = null_sell + prot_red > pr or pr + null_buy - null_sell + prot_net < 0.0
+            for i in nulls:
+                if not _is_buy(i):
+                    o = oids[i]
+                    first = order_first_prot.setdefault(o, pr)
+                    order_cum[o] = order_cum.get(o, 0.0) + qty_of[i]
+                    over = over or order_cum[o] > first
+            if over:
+                for i in nulls:
+                    _log_untagged(pt_today, sym, oids[i], side_of[i], None,
+                                  "owner sale larger than the QHM/F6 position -> no measure")
+                raise _NoMeasure({"symbol": sym, "order_id": oids[nulls[0]], "owner_sale_exceeds_protected": True})
+            for i in nulls:
+                kind[i] = "prot"
+                _log_untagged(pt_today, sym, oids[i], side_of[i], None,
+                              "owner app order, no Day/Swing position -> left out of Day/Swing")
+        if aks:
+            for i in aks:
+                f = facts[oids[i]]
+                if not f["is_leg"] or f["parent_tier"] not in _DAY_SWING_FILL_TIERS:
+                    _log_untagged(pt_today, sym, oids[i], side_of[i], "access_key",
+                                  "bot order without a Day/Swing-tagged parent -> no measure")
+                    raise _NoMeasure({"symbol": sym, "order_id": oids[i],
+                                      "bot_order_without_day_swing_parent": True})
+            ak_sell = sum(qty_of[i] for i in aks if not _is_buy(i))
+            ak_buy = sum(qty_of[i] for i in aks if _is_buy(i))
+            # same-batch tagged Day/Swing fills use the same shares first (as prot_red does for the owner cap)
+            ds_sell = sum(qty_of[i] for i in batch if cat[i] == "ds" and not _is_buy(i))
+            ds_buy = sum(qty_of[i] for i in batch if cat[i] == "ds" and _is_buy(i))
+            if (ak_sell > 0.0 and ak_sell > ds - ds_sell) or (ak_buy > 0.0 and ak_buy > -ds - ds_buy):
+                for i in aks:
+                    _log_untagged(pt_today, sym, oids[i], side_of[i], "access_key",
+                                  "bot leg larger than the Day/Swing position -> no measure")
+                raise _NoMeasure({"symbol": sym, "order_id": oids[aks[0]],
+                                  "bot_leg_exceeds_day_swing_position": True})
+            for i in aks:
+                kind[i] = "ds"
+                _log_untagged(pt_today, sym, oids[i], side_of[i], "access_key",
+                              "bot leg under a Day/Swing parent, covered -> Day/Swing")
+    left_out = {i for i in untagged if cat[i] == "null"}
+    # consistency check: a pre-checkpoint owner fill must not sit in the checkpoint's Day/Swing claim
+    for i in sorted(left_out):
+        if times[i] > ckpt:
+            continue
+        read = _read_before(times[i])
+        if read is None:   # unreachable: the batch check above required one
+            raise _NoMeasure({"symbol": sym, "order_id": oids[i], "no_read_before_fill": True})
+        expected, _pr = _position(read, ckpt, True)
+        for j in idxs:
+            if oids[j] and oids[j] in credited and times[j] > ckpt and kind.get(j) == "ds":
+                expected += _signed(j)
+        if expected != float(claims.get(sym, (0.0, 0.0))[0]):
+            _log_untagged(pt_today, sym, oids[i], side_of[i], None,
+                          "checkpoint Day/Swing claim differs from the reads (owner fill booked to Day/Swing) "
+                          "-> no measure")
+            raise _NoMeasure({"symbol": sym, "order_id": oids[i], "checkpoint_day_swing_mismatch": True})
+    return left_out
+
+
+def _untagged_decisions(fills: tuple, fill_ts: tuple, oids: tuple, claims: dict, ckpt: datetime,
+                        credited: "frozenset | set", terms: list) -> "set | None":
+    """KILL-BACKUP-UNTAGGED-1118: the indices of today's fills to leave out of Day/Swing, or None (no measure, with
+    the deciding term appended). Only untagged fills in a symbol that held QHM/F6 shares today (checkpoint claim,
+    protected journal, or any read today / yesterday's last read; all such symbols when that evidence is missing) are
+    judged; other untagged fills count as Day/Swing exactly as before. Never raises."""
+    untagged_syms = sorted({fsym for fsym, _sd, _q, _px, ftier in fills if ftier is None})
+    if not untagged_syms:
+        return set()
+    try:
+        pt_today = datetime.now(_PT).strftime("%Y-%m-%d")
+        held_ev, complete, reads = _backup_read_history(pt_today, tuple(fill_ts), tuple(oids))
+        # every symbol with ANY QHM/F6-tagged fill today held protected shares at some point today, whatever the
+        # fill's time against the checkpoint or the credited set (a protected buy and an owner sale both before the
+        # checkpoint net the claim to 0 and may never appear in a read); this only widens scope
+        prot_journal = {sym for sym, _sd, _q, _px, tier in fills if tier in _PROTECTED_FILL_TIERS}
+        left_out: set = set()
+        for sym in untagged_syms:
+            in_scope = (not complete or claims.get(sym, (0.0, 0.0))[1] != 0.0
+                        or sym in prot_journal or sym in held_ev)
+            if in_scope:
+                left_out |= _decide_symbol(sym, fills, fill_ts, oids, claims, ckpt, credited, reads, pt_today)
+        return left_out
+    except _NoMeasure as nm:
+        terms.append(nm.term)
+        return None
+    except Exception as e:  # noqa: BLE001 — RC-3: no measure
+        logger.warning("%s kill-switch backup: untagged attribution failed (%s) — no measure", _KBU, e)
+        terms.append({"untagged_attribution_failed": True})
+        return None
+
+
 def _backup_trading_pnl(fills: tuple, fill_ts: tuple, positions: list,
                         fill_oid: "tuple | None" = None) -> "tuple[float | None, list]":
     """KILL-BACKUP-1111 (owner-approved; logs/design_records/kill_backup_measure_2026-11-11.md): the Day+Swing
@@ -719,7 +1408,8 @@ def _backup_trading_pnl(fills: tuple, fill_ts: tuple, positions: list,
     + protected fills after it; u = broker qty - (a + p) (fills the journal could not place). Open leg
     m*a + min(0, m*u) (protected shares never enter; unbooked shares only when they lose); a symbol the broker does
     not hold has open leg 0. Fill terms: every active-tagged fill of today repriced to the prior close, as in the
-    exact measure; protected-tagged fills excluded. No stamped checkpoint (no ledger read yet, or a ledger rebuilt
+    exact measure; protected-tagged fills excluded, and so are owner app fills KILL-BACKUP-UNTAGGED-1118 leaves out
+    (after the checkpoint they are booked to p). No stamped checkpoint (no ledger read yet, or a ledger rebuilt
     before rev 4): (None, terms), because the broker's net quantity can mix a protected long with an active short
     (cold review 2026-11-11). Returns (None, terms) when a needed price is missing (the caller then fails closed).
     Never raises."""
@@ -749,22 +1439,18 @@ def _backup_trading_pnl(fills: tuple, fill_ts: tuple, positions: list,
         if len(fills) != len(fill_ts) or len(fills) != len(oids):   # the journal needs every fill's time and id
             return None, terms
         credited = _LAST_GOOD_CHECKPOINT.get("credited") or frozenset()
-        untagged: set = set()
-        for (sym, side, q, _px, tier), ts_text, oid in zip(fills, fill_ts, oids, strict=True):
+        # KILL-BACKUP-UNTAGGED-1118: an untagged fill in a symbol that held QHM/F6 today is attributed by its order's
+        # `source` (replaces "untagged fill on protected -> no measure"); owner app orders are left out of Day/Swing
+        left_out = _untagged_decisions(fills, tuple(fill_ts), oids, claims, ckpt, credited, terms)
+        if left_out is None:
+            return None, terms
+        for idx, ((sym, side, q, _px, tier), ts_text, oid) in enumerate(zip(fills, fill_ts, oids, strict=True)):
             if not _fill_after(ts_text, ckpt):
                 continue
             if oid and str(oid) in credited:
                 continue   # already credited to its claim after the stamp by an incremental writer
-            if tier is None:
-                untagged.add(sym)
-            book = journal_prot if tier in _PROTECTED_FILL_TIERS else journal_act
+            book = journal_prot if (tier in _PROTECTED_FILL_TIERS or idx in left_out) else journal_act
             book[sym] = book.get(sym, 0.0) + _signed_fill_qty(side, float(q))
-        for sym in untagged:
-            if abs(claims.get(sym, (0.0, 0.0))[1]) > 1e-9 or sym in journal_prot:
-                # an untagged fill (an owner app sale or buy) in a symbol with QHM/F6 shares cannot be placed in a
-                # tier: its P&L could offset a Day loss (cold review 2026-11-11), so the backup does not measure
-                terms.append({"symbol": sym, "untagged_fill_on_protected": True})
-                return None, terms
         prior: dict = {}
 
         def _pc(sym: str) -> "float | None":
@@ -797,8 +1483,8 @@ def _backup_trading_pnl(fills: tuple, fill_ts: tuple, positions: list,
                 return None, terms
         fill_qty: dict = {}
         fill_px_cash: dict = {}
-        for sym, side, q, px, tier in fills:
-            if tier in _PROTECTED_FILL_TIERS:
+        for idx, (sym, side, q, px, tier) in enumerate(fills):
+            if tier in _PROTECTED_FILL_TIERS or idx in left_out:
                 continue
             signed = _signed_fill_qty(side, float(q))
             fill_qty[sym] = fill_qty.get(sym, 0.0) + signed
@@ -2113,6 +2799,8 @@ class RiskManager:
         # dependence, so it is valid 24/7.
         self._kill_attr = {}
         self._kill_positions = None   # KILL-BACKUP-1111: set by this check's own positions read
+        # KILL-BACKUP-UNTAGGED-1118 rev 10: every kill check (exact and backup path) records one ledger file read
+        _record_kill_check_read()
         _pos_pnl, _pos_ok = self._intraday_trading_pnl()
         # KILL-ATTR-1023 T1: "exact" = Day + Swing measured by proven per-tier shares (enforced path, or the flag-off
         # tiered path with no unproven symbol). Guard enforcement is a prerequisite for
