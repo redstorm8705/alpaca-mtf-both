@@ -147,8 +147,11 @@ def _verdict(r: dict) -> str:
         return "noise exit: price came back 1R or more after the exit"
     if mfe is not None and mfe < 0.35 and after is not None and after < 0.5:
         return "failed at once and did not come back: the entry was wrong, the exit was right"
+    if mfe is not None and mfe < 0.35 and after is not None:
+        return (f"failed at once, then price came back {after:g}R after the exit (under 1R): "
+                "the stop may be tight for this setup")
     if mfe is not None and mfe < 0.35:
-        return "failed at once (after-exit move unknown or partial)"
+        return "failed at once (after-exit move unknown: not measured)"
     return "no clear single cause; see the numbers"
 
 
@@ -246,6 +249,7 @@ _CAUSE = {   # verdict -> (plain cause, what it means for the fix review)
     "wrong_entry": ("Wrong entry: it never got going", "the entry was the mistake; the stop limited the loss"),
     "gave_back": ("Gave back a winner", "it was up more than its risk first; a profit lock would have saved it"),
     "noise_exit": ("Stopped out, then came back", "the stop was too close for this stock's normal moves"),
+    "partly_back": ("Stopped out, then partly came back", "the stop may be tight for this setup"),
     "unclear": ("No single clear cause", "see the detail line"),
 }
 _MODE_WORDS = {"PULLBACK": "pullback buy", "DRIVE": "momentum buy", "FADE": "fade trade", "RIDE": "breakout ride"}
@@ -259,6 +263,8 @@ def _cause(row: dict) -> str:
         return "noise_exit"
     if v.startswith("failed at once and did not come back"):
         return "wrong_entry"
+    if v.startswith("failed at once, then price came back"):
+        return "partly_back"
     return "unclear"
 
 
@@ -291,7 +297,8 @@ def _blocks(rep: dict) -> tuple[str, list]:
         counts[_cause(t)] = counts.get(_cause(t), 0) + 1
     parts = []
     for key, words in (("wrong_entry", "wrong entr{}"), ("gave_back", "winner{} given back"),
-                       ("noise_exit", "stop{} hit then recovered"), ("unclear", "unclear")):
+                       ("noise_exit", "stop{} hit then recovered"),
+                       ("partly_back", "stop{} hit then partly recovered"), ("unclear", "unclear")):
         k = counts.get(key, 0)
         if k:
             parts.append(f"{k} " + words.format(("ies" if k > 1 else "y") if key == "wrong_entry" else
@@ -305,6 +312,8 @@ def _blocks(rep: dict) -> tuple[str, list]:
         means.append("• Wrong entries: the stop did its job; the entry rule is under review.")
     if counts.get("noise_exit"):
         means.append("• Stops hit then recovered: stop distance for those stocks is under review.")
+    if counts.get("partly_back"):
+        means.append("• Stops hit then partly recovered (under 1x risk): the stop may be tight; filed for the stop review.")
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"Loss review · {day}"}},
         {"type": "section", "text": {"type": "mrkdwn", "text": bluf}},
@@ -362,6 +371,10 @@ def main(argv=None) -> int:
     head, body = _slack_text(rep)
     print(head)
     print(body)
+    _causes: dict = {}
+    for _t in rep.get("losing_trades") or []:
+        _causes[_cause(_t)] = _causes.get(_cause(_t), 0) + 1
+    print(f"[loss-pm-wording-1124] causes {json.dumps(_causes, sort_keys=True)}")
     if a.dry_run:
         if rep["losing_trades"]:
             print(json.dumps(_blocks(rep), indent=1))

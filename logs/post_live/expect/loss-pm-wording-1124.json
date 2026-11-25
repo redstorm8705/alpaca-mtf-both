@@ -1,0 +1,26 @@
+{
+  "change": "loss-pm-wording-1124",
+  "tier": 1,
+  "paths": [
+    "scripts/loss_postmortem.py"
+  ],
+  "proof": [
+    {
+      "log": "logs/loss_postmortem_cron.log",
+      "pattern": "\\[loss-pm-wording-1124\\] causes"
+    }
+  ],
+  "expected_rate": "once per nightly cron run",
+  "window_sessions": 5,
+  "reversal": "a run whose JSON has a fast-failing loss (mfe_R < 0.35) with a measured after_exit_best_R and a verdict containing 'unknown', or a card that shows such a trade as 'No single clear cause'",
+  "metrics": [
+    {
+      "name": "unclear_with_measured_after_exit",
+      "source": "logs/loss_postmortem/<date>.json verdict vs after_exit_best_R",
+      "direction": "down",
+      "bound": "zero"
+    }
+  ],
+  "verification": "tests/test_loss_pm_wording_1124.py",
+  "baseline_exempt_reason": ""
+}
