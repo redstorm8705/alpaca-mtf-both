@@ -1,0 +1,124 @@
+Nightly Gemini Audit — 2026-11-24
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['run_day_tier.py', 'scripts/loss_postmortem.py', 'strategy/day_tier_alignment.py']
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+
+---
+
+### LOG ANOMALIES
+- **Kill-Switch Join Failure & Backup Attributer Triggered**: `execution.risk_manager` logged `kill-switch exact join unresolved` for `NVDA` (`broker_qty`: 0.0, `ledger_qty`: -7.0), triggering backup attribution measure B (+20.66).
+- **Ledger Sync Delays & Unresolved Admissions**: `ledger_sync` logged `29 reducing admission(s) remain unresolved` and cycle wall-time spikes up to 20.3s (processing 1165 fills, 3521 orders).
+- **Impossible Negative Protected Replay Reattributed**: `execution.ownership_guard` logged `reattributed impossible negative protected replay NVDA/qhm=-4 to intraday; protected tiers are long-only` at 20:56:21 and 21:00:22.
+- **Fail-Closed Missing Daily Data Block**: `confluence` logged continuous fail-closed warnings for ticker `DRAM` (`No daily data — long/short entry blocked`).
+- **QHM Position Cap Blocks**: `execution.quarterly_hold_manager` blocked entries for `GOOGL` and `GEV` due to QHM cap constraints (new-money aggregate 40%/name 20% limit reached).
+
+---
+
+### PERFORMANCE AUDIT
+- **P&L Sign & Math Verification**: Evaluated the last 10 trades in `TRADE EVENTS`. P&L signs match trade direction (e.g., `MU` short entry 633.55, exit 630.45 yielded +$6.20; `NVDA` short entry 151.9514, exits at 154.52 yielded -$10.27 and -$7.71).
+- **Partial Exits & Position Scaling**: `NVDA` on 2026-11-24 executed a partial stop exit (4 shares) followed immediately by full exit (3 shares), both correctly attributing negative realized P&L proportionally.
+- **Stop-Hit Rate vs. Win Rate**: Recent daytrade wins are sparse (`MU` +$6.20, `DRAM` -$0.10, `NVDA` -$17.98), matching the reported low 7-day win rate (34.6%). Stop hit frequency remains elevated under high market volatility (VIX 26.4).
+- **R:R vs. Target Edge**: High intraday slippage/gapping near stop levels (`NVDA` entry 158.5762, stop 165.90, exit filled at 165.9675) resulted in slightly larger-than-planned R losses.
+
+---
+
+### TRADE INTEGRITY
+- **EOD P&L Reconciliation**: EOD P&L drift is reported as `$-17.98` (`alpaca_pnl` = -17.98, `tracker_pnl` = 0.0). Per system configuration and provenance guidelines, this is pre-heal telemetry from trade fallback before the 8:30 PM ET authoritative ledger heal; `pnl_unreconciled` is false.
+- **No Zero-P&L Anomalies**: No trade events logged `realized_pnl` = 0.0 when entry price differed from exit price.
+
+---
+
+### MODIFIED FILE FINDINGS
+
+#### 1. `run_day_tier.py`
+- **Context**: Added `DAY-ALIGN-1123` check gating all Track A `FADE` mode entries (both counter-trend and with-trend) via `_counter_trend_fades_ok()`.
+- **Logic & Execution Audit**:
+  - `_fade_ok, _fade_why = _counter_trend_fades_ok()` correctly calls the updated helper in `strategy/day_tier_alignment.py`.
+  - Proper skip logging occurs via `_log_direction_skip()`.
+  - **No new bugs found.**
+
+#### 2. `strategy/day_tier_alignment.py`
+- **Context**: Modified `counter_trend_fades_ok()` to include entries where `trigger.mode == "FADE"`.
+- **Logic & Execution Audit**:
+  - Inspecting lines 324–326:
+    ```python
+    _trig = e.get("trigger") or {}
+    if e.get("event") == "decision" and (
+        _trig.get("counter_trend") or str(_trig.get("mode") or "").upper() == "FADE"
+    ):
+    ```
+  - `_trig.get("counter_trend")` evaluates to `True` for counter-trend decisions. However, if a non-fade decision has `counter_trend: True`, it gets included in `ct_decisions`. If a decision has `mode: "FADE"`, it also gets included.
+  - Excludes Track B entries via `str((e.get("decision") or {}).get("track") or "").upper() == "B"`.
+  - **No logic errors or state mutations identified.**
+
+#### 3. `scripts/loss_postmortem.py`
+- **Context**: Standalone post-mortem generation script.
+- **Logic & Execution Audit**:
+  - Correctly loads `.env` variables before importing alerting or data dependencies (`LOSS-PM-ENV-1118`).
+  - Safely handles null values and missing bars using fallback except blocks.
+  - **No critical runtime defects found.**
+
+---
+
+### P5 STATUS
+- **P5-C1**: UNTOUCHED
+- **P5-C2**: UNTOUCHED (ImportError in `run_movers.py` remains unresolved in queue)
+- **P5-H1**: OBSOLETE (PDT logic permanently removed)
+- **P5-H2**: UNTOUCHED
+- **P5-H3**: UNTOUCHED
+- **P5-H4**: UNTOUCHED
+- **P5-H5**: FIXED (2026-04-21)
+- **P5-M1**: UNTOUCHED
+- **P5-M2**: UNTOUCHED
+- **P5-M3**: UNTOUCHED
+- **P5-L1**: UNTOUCHED
+- **P5-L2**: UNTOUCHED
+- **P5-L3**: UNTOUCHED
+
+---
+
+### NEW BUGS FOUND
+
+#### 1. EXECUTION BUG | MEDIUM | `execution/risk_manager.py` | Ledger Row / Broker Position Join Mismatch on Short Positions
+- **Function/Variable**: `kill_switch_exact_join` / `broker_qty` vs `ledger_qty` for `NVDA`.
+- **Trace Code Path**:
+  1. Ledger records `NVDA` position as `-7.0` shares (short).
+  2. Order reconciliation or broker position check yields `broker_qty: 0.0` for exact match lookup during state refresh.
+  3. Risk manager fails exact join check (`ledger_row_without_broker_position`), issuing warning `kill-switch exact join unresolved` and forcing fallback to backup attribution measure B.
+- **Exact Failure Condition**: Short position tracking discrepancies between intraday ledger lots and Alpaca broker API state trigger redundant ledger rebuilds (`rebuild requested [change=kill-join-1107]`) and fallback attribution calculations.
+
+#### 2. INFRASTRUCTURE | LOW | `strategy/day_tier_logger.py` / `execution/ownership_guard.py` | Negative Quantity Attribution in QHM Replay
+- **Function/Variable**: `sync_ledger` / `NVDA/qhm=-4`.
+- **Trace Code Path**:
+  1. Internal ownership guard processes log event replay for `NVDA`.
+  2. Calculates negative share allocation (`qhm=-4`) under protected tier holding bucket.
+  3. Ownership guard catches invariant violation ("protected tiers are long-only") and reattributes quantity to intraday tier.
+- **Exact Failure Condition**: Log event replay yields negative quantity attribution for protected QHM holdings during cycle startup/sync.
+
+---
+
+### FIX VALIDATION
+- No prior audit fixes required validation in this cycle.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **Investigate NVDA Short Ledger Sync Mismatch**: Inspect position tracking in `execution/risk_manager.py` and `execution/ownership_guard.py` where short position fills cause zero-qty broker join failures and negative QHM tier attribution during log replay.
+2. **Resolve P5-C2 (`run_movers.py`)**: Address the invalid `DataFetcher` import in `run_movers.py:19` to prevent runtime crashes during pre-market mover execution.
+3. **Monitor Ledger Wall-Time Performance**: Optimize order/fill lookup loops in `ledger_sync` to reduce cycle delays (currently taking >20s across 3,500+ orders).
+================================================================================
+BROKER GROUND TRUTH (2026-11-24, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  DRAM   COVERED                  owners=day exposed=327m no-broker-stop=0m [07:30-07:30, 12:58-12:58] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  MU     COVERED                  owners=day exposed=332m no-broker-stop=0m [07:26-07:26, 12:58-12:58] rejected_stop_orders=0
+  NVDA   COVERED                  owners=day exposed=301m no-broker-stop=0m [07:50-07:50] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
