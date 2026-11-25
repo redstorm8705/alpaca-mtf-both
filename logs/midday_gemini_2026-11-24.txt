@@ -1,0 +1,68 @@
+Midday Gemini Audit — 2026-11-24
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+
+---
+
+### PERFORMANCE AUDIT
+- **Entry/Exit Integrity:** 0 closed trades matched in `CLOSED TRADE DETAILS`. Per `ALPACA FILLS TODAY`, 7 fills occurred today across 3 intraday/day symbols (`DRAM`, `MU`, `NVDA`), but no exits occurred during the checked window. Live positions currently held are all accounted for.
+- **P&L Sign Checks:** $0.00 matched P&L reported in summary due to 0 closed pairs; no P&L sign errors detected on live mark-to-market ledger ($0.00 intraday P&L).
+- **Score→Outcome Correlation:** N/A (no closed trades in this audit sample).
+- **Stop-Hit Rate Analysis:** 0% (0 stop hits). Ground truth stop coverage shows 100% of open positions (`AAPL`, `BRK.B`, `DRAM`, `GOOGL`, `MU`, `NVDA`, `V`, `WMT`) are fully covered by broker stop orders.
+
+---
+
+### ENTRY QUALITY
+- **Pre-Market Directional Lockout:** Execution logic successfully enforced Rule 1 (Pre-Market Red Lockout: 91% of movers red). All long signals (e.g., `SOXS` long) were blocked, restricting new entries exclusively to shorts/inverses.
+- **Dynamic Score Gating:** Dynamic MIN_SCORE correctly scaled up to `10/12` due to high VIX (26.6) and STRESSED MRI (55/100), successfully filtering out 20 sub-optimal signals.
+- **Data Gap Filter:** `DRAM` long and short entries were blocked (`fail-closed`) during signal generation due to missing daily data (`No daily data — long entry blocked`), preventing unquantified trades.
+
+---
+
+### EXIT QUALITY
+- **No Issues:** No exits executed during the observed window. Live positions remain protected by valid broker stops.
+
+---
+
+### MRI ALIGNMENT
+- **Regime & Sizing:** MRI closed at STRESSED (55/100, 16 STRESSED samples, 14 HIGH samples).
+- **Size Adjustments:** Sizing multipliers were properly compounded and applied: High Volatility regime (VIX 26.6 → 0.50x), Mid-day doldrums (0.75x), and MRI STRESSED floor (0.70x). No regime sizing mismatches found.
+
+---
+
+### LOG ANOMALIES
+- **Ledger Sync Delay & Unresolved Admissions:** `ledger_sync` logged `31 reducing admission(s) remain unresolved` and took 19.93s to complete a rebuild requested 1537.16 minutes prior (`kill-join-1107`).
+- **UBER Position Tracking Discrepancy:** `ledger_sync` shows `[UBER] net=0.0 intraday=-72.0 qhm=0.0`, indicating a residual sub-tier allocation discrepancy (`-72.0` intraday vs `0.0` net) inside the internal tracking ledger.
+- **Currents News Warning Spike:** `news_monitor` flagged a high-severity macro market cap crash alert (`-2.5% Crypto Down Today`), triggering full base penalty checks.
+
+---
+
+### NEW BUGS / CONCERNS
+
+1. **CATEGORY: EXECUTION BUG | SEVERITY: MEDIUM**
+   - **Description:** Sub-tier position ledger mismatch for `UBER`.
+   - **Exact Condition:** `ledger_sync` reports `[UBER] net=0.0 intraday=-72.0 qhm=0.0`. The net position is flat (`0.0`), but the intraday component retains a stale state of `-72.0` shares due to unmerged/unresolved reducing admissions (31 unresolved admissions flagged at session start).
+   - **Impact:** Miscalculates open intraday bucket exposure for `UBER`, potentially blocking valid re-entry signals or distorting sub-ledger risk limits.
+
+2. **CATEGORY: INFRASTRUCTURE | SEVERITY: LOW**
+   - **Description:** Stale ledger sync rebuild execution lag.
+   - **Exact Condition:** `ledger_sync` executed a rebuild request (`20261123T164311823690Z`) over 25 hours late (`done 1537.16 min after the request`), causing a cycle wall-time spike of 19.93s.
+   - **Impact:** Increases bot cycle duration (total duration reached 103s), degrading execution timing during volatility.
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+
+1. **[EXECUTION] Resolve Sub-Tier Ledger Drift for UBER:** Run an explicit ledger state purge/re-rebuild to reconcile the `-72.0` intraday share mismatch on flat symbol `UBER` and clear the 31 unresolved reducing admissions.
+2. **[INFRASTRUCTURE] Optimize Ledger Sync Async Dispatch:** Audit the queue worker for `ledger_sync` rebuild requests to prevent execution lags (>1500 minutes) and prevent long cycle blocking (19.9s duration).
