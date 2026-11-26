@@ -1,0 +1,61 @@
+Nightly Gemini Audit — 2026-11-25
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: ['scripts/loss_postmortem.py', 'execution/risk_manager.py']
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but the `execution/risk_manager.py` modification introduces a new, complex state-tracking mechanism (`kill_backup_untagged_2026-11-18.md`) that is currently in a "seed" phase. While the logic appears robust, the reliance on `fcntl` locks and external file state for a critical safety path requires careful monitoring.
+
+### LOG ANOMALIES
+- **`execution.ownership_guard`**: `sync_ledger: reattributed impossible negative protected replay NVDA/qhm=-4 to intraday`. This occurred at 20:40:21 and 21:00:21. While the ledger heals, this indicates a persistent mismatch between the QHM (Quarterly Hold Manager) state and the actual ledger, likely due to the QHM blocking entries while the ledger still expects a position.
+- **`ledger_sync`**: `30 reducing admission(s) remain unresolved` and `wall-time 20.0s`. This is a high latency for a ledger sync, suggesting the ledger file or the `ownership_guard` logic is becoming a bottleneck during high-frequency fill processing.
+- **`confluence`**: `[DRAM] No daily data — long/short entry blocked (fail-closed)`. This is a recurring warning. The bot is failing to fetch daily data for `DRAM`, which is a valid safety block, but it is consuming log space and preventing potential trades.
+
+### PERFORMANCE AUDIT
+- **P&L Integrity**: The EOD P&L of -$66.01 is reconciled and authoritative.
+- **Trade Analysis**: The last 10 trades (e.g., `DAMD` entry/exit on 2026-11-25) show correct P&L signs. The `DAMD` trade (entry 12.91, exit 12.4292) resulted in a loss of -$23.56, which is consistent with the size (49) and price movement.
+- **Stop/Target**: The `NVDA` short on 2026-11-24 (entry 151.95, stop 154.52) was stopped out at 154.52. The exit reason `protective_stop` is correctly mapped to the stop price.
+- **Regime**: The MRI score of 95 (CRITICAL) and 80 (HIGH) correctly gated new entries, as evidenced by the `BLOCKED` logs in the `quarterly_hold_manager`.
+
+### TRADE INTEGRITY
+- No recording bugs or zero-P&L anomalies detected in the provided `trade_events` JSON.
+
+### MODIFIED FILE FINDINGS
+- **`execution/risk_manager.py`**: The new `_record_backup_read` and `_backup_reads_lock` functions implement a file-based lock mechanism.
+    - **Risk**: The `_backup_reads_lock` uses `fcntl.flock` with `LOCK_NB`. If the lock is held by a crashed process (e.g., a previous bot instance that didn't clean up), the `while` loop could potentially block or fail.
+    - **Observation**: The implementation includes a `lock_timeout_at` and `_ReadsLockBusy` exception, which is a good safety measure.
+- **`scripts/loss_postmortem.py`**: The script correctly handles the `dotenv` loading and provides a clear path for post-mortem analysis. No logic errors found in the `_verdict` or `_pattern` functions.
+
+### P5 STATUS
+- **P5-C1**: UNTOUCHED
+- **P5-C2**: UNTOUCHED
+- **P5-H1**: FIXED (PDT deleted)
+- **P5-H2**: UNTOUCHED
+- **P5-H3**: UNTOUCHED
+- **P5-H4**: UNTOUCHED
+- **P5-H5**: FIXED
+
+### NEW BUGS FOUND
+- **CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM | file: execution/risk_manager.py | description: Potential lockfile leakage | exact failure condition: If the bot process is killed (SIGKILL) while holding the `kill_backup_reads.json.lock`, the lockfile remains on disk, potentially causing subsequent instances to fail the `_backup_reads_lock` check until the file is manually removed.**
+
+### FIX VALIDATION
+- **FIX VALIDATION: PASS** (The `pnl_ledger.heal_history` successfully reconciled the EOD P&L).
+
+### RECOMMENDED ACTIONS
+1. **Monitor Lockfile**: Add a cleanup step in the bot's startup sequence to remove `kill_backup_reads.json.lock` if the process is not running (check PID if possible).
+2. **Investigate QHM/Ledger Mismatch**: The `NVDA/qhm=-4` reattribution suggests the QHM is attempting to manage shares that the ledger does not believe it owns. Review `execution/quarterly_hold_manager.py` for potential race conditions during entry blocking.
+3. **DRAM Data**: Investigate why `DRAM` is missing daily data. If it is a delisted or invalid symbol, remove it from the `breakout universe` to clean up the logs.
+4. **Ledger Sync Latency**: The 20s wall-time for `ledger_sync` is concerning. Profile `ownership_guard.py` to see if the ledger file size is impacting performance.
+================================================================================
+BROKER GROUND TRUTH (2026-11-25, RTH 06:30-13:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  AMZN   COVERED                  owners=day exposed=239m no-broker-stop=0m [06:46-06:46] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  DAMD   COVERED                  owners=day exposed=22m no-broker-stop=0m [12:36-12:36, 12:58-12:58] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  META   COVERED                  owners=day exposed=140m no-broker-stop=0m [06:46-06:46] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=390m no-broker-stop=0m [-] rejected_stop_orders=0
