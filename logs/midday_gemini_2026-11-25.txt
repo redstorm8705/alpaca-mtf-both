@@ -1,0 +1,39 @@
+Midday Gemini Audit — 2026-11-25
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The session shows a significant disconnect between the `MRI` (CRITICAL/90) and the bot's continued operation. While the bot correctly identifies the `CRITICAL` regime and applies size floors, the persistence of `CRITICAL` status throughout the entire session suggests a systemic risk-off environment where the strategy's edge is likely neutralized.
+
+### PERFORMANCE AUDIT
+- **META Trade:** Entry $569.54 → Exit $590.98. P&L reported as $-42.87. 
+  - **Integrity Check:** The math is incorrect. A long position (implied by the profit/loss direction) exiting at $590.98 from $569.54 would be a gain of $21.44 per share. The reported P&L of $-42.87 indicates either a short position (where $569.54 entry to $590.98 exit is a loss) or a significant recording/calculation error in the `CLOSED TRADE DETAILS`. Given the `SESSION P&L SUMMARY` confirms a loss of $-42.87, the bot is treating this as a loss, but the price action suggests a gain.
+- **Stop-hit rate:** 0%. The single closed trade resulted in a loss, but the exit reason is listed as `exit` rather than `stop`.
+
+### ENTRY QUALITY
+- **No issues:** The bot is correctly blocking new entries due to the `CRITICAL` MRI status and the `BV-5` (MRI=CRITICAL) guard. The `VOLSHADOW` logs show the bot is actively evaluating and rejecting entries across the board, which is appropriate for the current regime.
+
+### EXIT QUALITY
+- **No issues:** Exits are being managed, though the `META` exit price vs. P&L discrepancy requires investigation.
+
+### MRI ALIGNMENT
+- **Regime Mismatch:** The bot is operating in a `CRITICAL` MRI regime (score 90). While it is correctly applying size floors (0.40x), the strategy is still attempting to maintain positions. In a `CRITICAL` systemic risk event, the bot should ideally move to a "flat" state rather than just reducing size.
+
+### LOG ANOMALIES
+- **Data/Provider Warnings:** `[DRAM] No daily data — long/short entry blocked (fail-closed)` appears repeatedly. This indicates a potential data feed issue for the `DRAM` symbol.
+- **News Monitor:** High frequency of `CAUTION` alerts (Section 301 probe, rate hikes) confirms the `CRITICAL` MRI score is well-founded.
+
+### NEW BUGS / CONCERNS
+- **EXECUTION BUG | HIGH | P&L Calculation Mismatch |** The `META` trade shows an entry of $569.54 and an exit of $590.98 with a reported loss of $-42.87. If the bot was long, this is a profit; if short, the P&L sign is correct but the price delta is inconsistent with the magnitude of the loss. This suggests the `CLOSED TRADE DETAILS` ledger is miscalculating or misreporting the trade direction or P&L.
+- **INFRASTRUCTURE | LOW | Stale Data/Feed Error |** `[DRAM]` symbol consistently failing to provide daily data. While the bot is "failing closed" (safe), this indicates a potential issue with the `fmp_client` or the symbol mapping for `DRAM`.
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1. **EXECUTION:** Audit the `CLOSED TRADE DETAILS` calculation logic to determine why the `META` trade P&L does not align with the entry/exit price delta.
+2. **ALPHA:** Review the `CRITICAL` MRI threshold logic; consider implementing a "hard stop" or "liquidation" mode when the MRI hits 90+ to prevent trading in high-volatility, high-risk regimes.
+3. **INFRA:** Investigate the `DRAM` symbol data feed to resolve the "No daily data" warning.
