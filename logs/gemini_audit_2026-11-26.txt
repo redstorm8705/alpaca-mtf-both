@@ -1,0 +1,58 @@
+Nightly Gemini Audit — 2026-11-26
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there is a recurring, unresolved ledger synchronization issue (`ledger_sync`) and persistent "impossible negative" reattributions in the `ownership_guard` that require attention.
+
+### LOG ANOMALIES
+*   **`execution.ownership_guard`**: Recurring warning: `reattributed impossible negative protected replay NVDA/qhm=-4 to intraday`. This indicates a state mismatch between the QHM (Quantitative Holding Manager) and the intraday ledger.
+*   **`ledger_sync`**: Recurring warning: `29 reducing admission(s) remain unresolved`. This suggests a persistent drift in the ledger state that is not being cleared by the sync cycle.
+*   **`confluence`**: Frequent `[DRAM] No daily data — short entry blocked (fail-closed)` warnings. While this is a fail-closed safety mechanism, the frequency suggests a data feed issue for the DRAM symbol.
+*   **`news_monitor`**: Multiple `CAUTION` alerts (HDFC Bank, Hegseth/Iran) triggered. These are correctly identified as requiring price-confirmation, but the volume of alerts is high.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The last 10 trades (from 2026-11-19 to 2026-11-25) show correct P&L signs.
+*   **Stop/Target Analysis**: The bot is successfully hitting take-profit levels (e.g., UBER, MU, NVDA, META).
+*   **Stop-Hit Rate**: The stop-hit rate is within acceptable parameters for the current market regime, though the recent NVDA and AMZN stops on 2026-11-25 were significant.
+*   **R:R**: The bot is capturing edge, but the `avg_r_multiple` of -0.047 in the all-time stats indicates that the current strategy is struggling to maintain a positive expectancy over the long term.
+
+### TRADE INTEGRITY
+*   **Recording**: No P&L recording bugs detected in the provided JSON. All `realized_pnl` values align with the `exit_reason` and price delta.
+*   **Partial Exits**: The `partial_exit` events for AAPD (2026-11-19), NFLX (2026-11-20), TSLA (2026-11-23), and NVDA (2026-11-24) are correctly recorded with corresponding `realized_pnl` and `size` reductions.
+
+### MODIFIED FILE FINDINGS
+No source files were modified in the last 24 hours.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H2: UNTOUCHED
+*   P5-H3: UNTOUCHED
+*   P5-H4: UNTOUCHED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+*   P5-L1: UNTOUCHED
+*   P5-L2: UNTOUCHED
+*   P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **INFRASTRUCTURE | MEDIUM | `execution.ownership_guard` | Ledger/QHM state divergence | The system is repeatedly reattributing "impossible negative" positions, indicating that the `sync_ledger` function is failing to reconcile the QHM state with the actual intraday ledger, leading to potential sizing errors.**
+*   **INFRASTRUCTURE | LOW | `ledger_sync` | Unresolved admission accumulation | The `ledger_sync` function reports 29 unresolved admissions, which may lead to memory bloat or stale state in the ledger over time.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate `ownership_guard`**: Prioritize debugging the `sync_ledger` function to identify why NVDA positions are being incorrectly reattributed.
+2.  **Clear Ledger Admissions**: Investigate the 29 unresolved admissions in `ledger_sync` to determine if they are orphaned orders or stale fills.
+3.  **DRAM Data Feed**: Verify the data source for the DRAM symbol to resolve the "No daily data" fail-closed blocks.
+4.  **Review P5-M3**: The `score_comparison` JSON is growing unbounded; implement a pruning mechanism to prevent potential disk space or memory issues.
+5.  **Monitor P5-C2**: Ensure the `run_movers.py` import error is addressed before the next market open to avoid potential crashes during the premarket scan.
+================================================================================
+BROKER GROUND TRUTH (2026-11-26): no trading session in range — nothing to classify.

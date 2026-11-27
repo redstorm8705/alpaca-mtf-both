@@ -1,0 +1,40 @@
+Midday Gemini Audit — 2026-11-26
+Model: gemini-3.1-flash-lite | Verdict: FAIL
+================================================================================
+
+### CATASTROPHIC ALERT: 1
+*   `execution.ownership_guard` reported an impossible negative protected replay for NVDA (qhm=-4) | NVDA
+
+### VERDICT: FAIL
+
+### PERFORMANCE AUDIT
+*   **Integrity:** No closed trades to audit.
+*   **P&L/Accounting:** The ledger sync process is showing signs of instability. The `ledger_sync` log at 18:20:21 indicates 29 unresolved reducing admissions and a wall-time of 19.4s, which is significantly high for a routine sync.
+*   **Drift:** The ledger sync reports `[UBER] net=0.0 intraday=-72.0`, indicating a significant discrepancy between the net position and the intraday tracking, suggesting a potential state corruption in the position tracker.
+
+### ENTRY QUALITY
+*   No entries were taken during this session. The bot correctly identified that the market was closed or in a state where entries were blocked.
+
+### EXIT QUALITY
+*   No exits were taken.
+
+### MRI ALIGNMENT
+*   The system correctly identified the regime as "BEAR" with an inverted VIX/VIX3M ratio (1.019). No entries were attempted, which is appropriate given the high-stress regime and the lack of confluence.
+
+### LOG ANOMALIES
+*   **`execution.ownership_guard` Warning:** "reattributed impossible negative protected replay NVDA/qhm=-4 to intraday" — This indicates a failure in the internal state machine regarding position ownership and protection tiers.
+*   **`ledger_sync` Latency:** The sync process took 19.4 seconds, which is excessive and suggests the ledger is struggling to reconcile the order/fill history.
+*   **`ledger_sync` Unresolved Admissions:** "29 reducing admission(s) remain unresolved" — This is a high-risk indicator of potential P&L or position tracking corruption.
+
+### NEW BUGS / CONCERNS
+*   **EXECUTION BUG | CRITICAL | Ledger state corruption (negative position replay) |** The `ownership_guard` detected an impossible negative position for NVDA. This suggests the bot's internal ledger is desynchronized from the broker's actual state, which could lead to incorrect stop-loss management or phantom position handling.
+*   **INFRASTRUCTURE | HIGH | Ledger sync latency and unresolved admissions |** The `ledger_sync` process is taking nearly 20 seconds to complete and is failing to resolve 29 admissions. This indicates that the bot's ability to track live risk is degrading, which could lead to "naked" positions if the bot fails to recognize its own holdings.
+*   **EXECUTION BUG | MEDIUM | Position tracking drift |** The ledger sync shows `[UBER] net=0.0 intraday=-72.0`. A non-zero intraday value for a zero-net position indicates a failure in the tracking logic to properly net out fills.
+
+### FIX VALIDATION
+*   No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **EXECUTION:** Immediate investigation of `execution.ownership_guard` and `ledger_sync` modules. The negative position replay and unresolved admissions suggest a race condition or state-update failure in the ledger reconciliation logic.
+2.  **INFRASTRUCTURE:** Perform a hard reset of the local ledger cache/state file to clear the "unresolved admissions" and the UBER/NVDA tracking drift before the next RTH session.
+3.  **ALPHA:** Review the `VOLSHADOW` logic; while it correctly blocked entries, the high volume of "would_pass: false" across all symbols suggests the confluence scoring may be too restrictive for the current market regime.
