@@ -1,0 +1,69 @@
+Midday Gemini Audit — 2026-11-27
+Model: gemini-3.1-flash-lite | Verdict: WARN
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+---
+
+### VERDICT: WARN
+
+---
+
+### PERFORMANCE AUDIT
+- **NVDA Trade P&L Sign Discrepancy**: 
+  - **Exact Metric Involved**: P&L recorded for NVDA entry $146.70 → exit $148.45.
+  - **Value vs. Expected**: Recorded P&L is `$-8.77` on a partial long exit where price increased from $146.70 to $148.45 (gain of +$1.75 per share). P&L should be positive (approx. +$1.75 * partial qty).
+  - **Failure Condition**: Occurred on NVDA partial exit trade record (`partial_exit`). This indicates either a short trade misclassified as a long entry in trade attribution, or incorrect calculation logic when resolving partial execution accounting.
+- **TSLA Trade P&L**: Entry $399.64 → Exit $399.18 ($-0.92). Long exit price < entry price, P&L sign is correct (loss).
+- **Score→Outcome Correlation**: N/A (both closed trades were Day tier trades without 12-point confluence scores logged).
+- **Stop-Hit Rate**: 0% (0 stop hits). Exits were triggered by discretionary/partial rules rather than primary stop loss.
+
+---
+
+### ENTRY QUALITY
+- Both intraday closed trades (NVDA, TSLA) were executed via Day tier setups without 12-point score tracking.
+- Session MRI was dominated by `STRESSED` levels (23 out of 25 samples, close level 45/100). No violations of score thresholds occurred due to Day tier setup exemptions, but overall intraday trade frequency was properly constrained by market condition checks.
+
+---
+
+### EXIT QUALITY
+- **NVDA Partial Exit Execution**: Executed partial exit at $148.45 (+1.19% move above entry of $146.70). While price movement was favorable, recorded P&L was negative (`$-8.77`), pointing to a execution accounting bug during partial ledger reconciliation rather than mistimed strategy exits.
+- **TSLA Exit**: Closed at $399.18 vs entry $399.64 (-0.11% loss). Exit timed appropriately to limit drawdowns during neutral price action.
+
+---
+
+### MRI ALIGNMENT
+- Session MRI showed 92% `STRESSED` samples (23/25) and 8% `HIGH` (2/25).
+- Live open positions (`AAPL`, `BRK.B`, `GOOGL`, `V`, `WMT`) are all fully covered via broker stops (`COVERED` in ground truth). Sizing and protection alignment under STRESSED MRI complied with systemic parameters.
+
+---
+
+### LOG ANOMALIES
+- `2026-11-27 18:20:21,755 WARNING execution.ownership_guard`: Reattributed impossible negative protected replay `NVDA/qhm=-4` to intraday.
+- `2026-11-27 18:20:21,896 WARNING ledger_sync`: 30 reducing admissions remain unresolved; sync wall-time took 20.0s across 1184 fills and 3541 orders.
+- `2026-11-27 18:20:21,909 INFO ledger_sync`: `UBER` net=0.0 intraday=-72.0 qhm=0.0 protected_floor=0.0 drift=0.0 (internal bucket drift detected during ledger sync replay).
+
+---
+
+### NEW BUGS / CONCERNS
+
+1. **CATEGORY: EXECUTION BUG | SEVERITY: HIGH**
+   - **Description**: Negative P&L recorded for a winning long partial trade exit (`NVDA`).
+   - **Exact Condition**: NVDA entry $146.70, exit $148.45, logged P&L `$-8.77`. Occurs when ledger sync reattributes short/long position quantities across tiers during partial execution, leading to inverted sign assignment on closed P&L events.
+
+2. **CATEGORY: INFRASTRUCTURE | SEVERITY: MEDIUM**
+   - **Description**: Ledger sync processing latency and unresolved reducing admissions.
+   - **Exact Condition**: `ledger_sync` warning reporting wall-time of 20.0s (3541 orders, 1184 fills) with 30 unresolved reducing admissions and multi-leg child attribution corrections (`NVDA/qhm=-4`).
+
+---
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+---
+
+### RECOMMENDED ACTIONS
+1. **[EXECUTION] Fix Ledger Sync Inverted P&L on Partial Exits**: Audit trade event aggregation logic in `ledger_sync` and ownership guard where position tier reattribution (`NVDA/qhm=-4` -> `intraday`) forces negative share counts on long positions, resulting in negative P&L logging for positive price changes.
+2. **[INFRA] Optimize Ledger Sync Rebuild Performance**: Index fill and order replay parsing in `ledger_sync` to resolve unresolved reducing admissions faster and reduce sync cycle processing wall-time below 5 seconds.
