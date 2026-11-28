@@ -1,0 +1,63 @@
+Nightly Gemini Audit — 2026-11-27
+Model: gemini-3.1-flash-lite | Verdict: WARN
+Modified files: []
+================================================================================
+
+### CATASTROPHIC ALERT: 0
+None — no catastrophic conditions detected.
+
+### VERDICT: WARN
+The bot is operational, but there is a recurring ledger synchronization issue and a persistent data-dependency error for the symbol [DRAM].
+
+### LOG ANOMALIES
+*   **Recurring Ledger Sync Warning**: `2026-11-27 20:40:20` and `21:00:21` show `ledger_sync: 30 reducing admission(s) remain unresolved`. This indicates a persistent state mismatch between the internal tracker and the broker's fill history that is not being fully resolved by the `ledger_sync` cycle.
+*   **Data Dependency Failure**: `[DRAM] No daily data — long/short entry blocked (fail-closed)` repeats consistently throughout the log. This is a persistent failure in the data pipeline for this specific symbol, preventing it from ever entering a trade.
+*   **Ownership Guard Warning**: `2026-11-27 20:40:20` and `21:00:21` report `reattributed impossible negative protected replay NVDA/qhm=-4 to intraday`. This suggests a logic error in the `ownership_guard` where a position is being incorrectly identified as a "protected" swing/core position when it is actually an intraday trade.
+
+### PERFORMANCE AUDIT
+*   **Trade Integrity**: The last 10 trades (from the `trade_events` JSON) show correct P&L signs.
+*   **Stop/Target Analysis**: The `NVDA` short on 2026-11-27 (`DT-NVDA-s-1795792238884-ee556c9a`) was stopped out at `148.42` (entry `146.7`), which is consistent with the `stop` level of `148.41` (allowing for slippage).
+*   **R:R Analysis**: The bot is currently struggling with a profit factor of 0.83. The stop-hit rate remains high relative to the win rate, suggesting the `INTRADAY_STOP_ATR_MULT` or the confluence scoring logic may be too tight for the current volatility regime.
+
+### TRADE INTEGRITY
+*   **No issues found**: All recorded trades in the provided JSON have valid P&L calculations and consistent exit reasons.
+
+### MODIFIED FILE FINDINGS
+*   **No source files modified in last 24h**: No audit required for code changes.
+
+### P5 STATUS
+*   P5-C1: UNTOUCHED
+*   P5-C2: UNTOUCHED
+*   P5-H1: UNTOUCHED (Obsolete)
+*   P5-H2: UNTOUCHED
+*   P5-H3: UNTOUCHED
+*   P5-H4: UNTOUCHED
+*   P5-H5: FIXED
+*   P5-M1: UNTOUCHED
+*   P5-M2: UNTOUCHED
+*   P5-M3: UNTOUCHED
+*   P5-L1: UNTOUCHED
+*   P5-L2: UNTOUCHED
+*   P5-L3: UNTOUCHED
+
+### NEW BUGS FOUND
+*   **EXECUTION BUG | MEDIUM | execution/ownership_guard.py | Incorrect reattribution of intraday trades to protected tiers | The `ownership_guard` is misidentifying intraday `NVDA` trades as "protected" (swing/core) positions, causing the ledger to attempt to "heal" them as if they were core holdings. This creates the "impossible negative protected replay" log error.**
+*   **INFRASTRUCTURE | MEDIUM | data/market_data.py | Persistent data fetch failure for [DRAM] | The symbol [DRAM] is failing to retrieve daily data, causing a permanent "fail-closed" state for this symbol.**
+
+### FIX VALIDATION
+No prior fixes to validate.
+
+### RECOMMENDED ACTIONS
+1.  **Investigate `ownership_guard.py`**: Determine why intraday `NVDA` trades are being flagged as "protected" (swing/core) positions. This is likely causing the ledger sync warnings.
+2.  **Debug `data/market_data.py`**: Check if `DRAM` is correctly mapped in the symbol universe or if the daily data provider is returning nulls for this specific ticker.
+3.  **Review `ledger_sync`**: The "30 reducing admissions" warning suggests a backlog in the ledger reconciliation process. Increase the logging verbosity for `ledger_sync` to identify which specific trade IDs are failing to resolve.
+4.  **Monitor P&L**: With a profit factor of 0.83, consider reviewing the `INTRADAY_STOP_ATR_MULT` configuration to ensure it is not causing premature stop-outs during normal market noise.
+================================================================================
+BROKER GROUND TRUTH (2026-11-27, RTH 06:30-10:00 PT) — computed by code from Alpaca order + fill history. Bot cycle log: OK; cycle gaps > 15 min: none (times PT)
+  AAPL   COVERED                  owners=core exposed=210m no-broker-stop=0m [-] rejected_stop_orders=0
+  BRK.B  COVERED                  owners=other exposed=210m no-broker-stop=0m [-] rejected_stop_orders=0
+  GOOGL  COVERED                  owners=qhm exposed=210m no-broker-stop=0m [-] rejected_stop_orders=0
+  NVDA   COVERED                  owners=day exposed=36m no-broker-stop=0m [07:10-07:10] rejected_stop_orders=0
+  TSLA   COVERED                  owners=day exposed=142m no-broker-stop=0m [07:36-07:36, 09:58-09:58] rejected_stop_orders=0
+  V      COVERED                  owners=core exposed=210m no-broker-stop=0m [-] rejected_stop_orders=0
+  WMT    COVERED                  owners=core exposed=210m no-broker-stop=0m [-] rejected_stop_orders=0
